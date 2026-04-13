@@ -1,0 +1,150 @@
+import { and, eq, isNull, ne } from "drizzle-orm";
+
+import { getDb } from "../../db/client";
+import { users } from "../../db/schema";
+import { AppError } from "../../lib/errors";
+import type { RoleType, SessionUser } from "../../types/auth";
+import {
+  canCreateRole,
+  createManagedUser,
+  revokeAllUserSessions,
+} from "../auth/auth.service";
+
+function sanitizeUser(user: typeof users.$inferSelect) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    employeeId: user.employeeId,
+    roleType: user.roleType,
+    status: user.status,
+    accessPolicyId: user.accessPolicyId,
+    createdByUserId: user.createdByUserId,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+async function assertEmployeeIdAvailable(employeeId: string, userId: string) {
+  const existingUser = await getDb().query.users.findFirst({
+    where: and(
+      eq(users.employeeId, employeeId),
+      ne(users.id, userId),
+      isNull(users.deletedAt),
+    ),
+  });
+
+  if (existingUser) {
+    throw new AppError(409, "Employee ID is already in use.");
+  }
+}
+
+export async function listUsers() {
+  const result = await getDb().query.users.findMany({
+    where: isNull(users.deletedAt),
+    orderBy: (table, { desc }) => [desc(table.createdAt)],
+  });
+
+  return result.map(sanitizeUser);
+}
+
+export async function getUserById(id: string) {
+  const user = await getDb().query.users.findFirst({
+    where: and(eq(users.id, id), isNull(users.deletedAt)),
+  });
+
+  if (!user) {
+    throw new AppError(404, "User not found.");
+  }
+
+  return sanitizeUser(user);
+}
+
+export { createManagedUser as createUser };
+
+export async function updateUser(
+  actor: SessionUser,
+  userId: string,
+  input: {
+    name?: string;
+    employeeId?: string;
+    roleType?: RoleType;
+    status?: "active" | "inactive";
+    accessPolicyId?: string | null;
+    password?: string;
+  },
+) {
+  const existingUser = await getDb().query.users.findFirst({
+    where: and(eq(users.id, userId), isNull(users.deletedAt)),
+  });
+
+  if (!existingUser) {
+    throw new AppError(404, "User not found.");
+  }
+
+  if (existingUser.roleType === "super_admin" && actor.roleType !== "super_admin") {
+    throw new AppError(403, "Only super admins can manage super admins.");
+  }
+
+  if (input.roleType && !canCreateRole(actor.roleType, input.roleType)) {
+    throw new AppError(403, "You cannot assign this role.");
+  }
+
+  if (input.employeeId) {
+    await assertEmployeeIdAvailable(input.employeeId, userId);
+  }
+
+  const updateData: Partial<typeof users.$inferInsert> = {
+    name: input.name,
+    employeeId: input.employeeId,
+    roleType: input.roleType,
+    status: input.status,
+    accessPolicyId: input.accessPolicyId,
+    updatedAt: new Date(),
+  };
+
+  if (input.password) {
+    updateData.passwordHash = await Bun.password.hash(input.password);
+  }
+
+  const [updatedUser] = await getDb()
+    .update(users)
+    .set(updateData)
+    .where(eq(users.id, userId))
+    .returning();
+
+  if (input.password || input.status === "inactive") {
+    await revokeAllUserSessions(userId);
+  }
+
+  return sanitizeUser(updatedUser);
+}
+
+export async function deactivateUser(actor: SessionUser, userId: string) {
+  const existingUser = await getDb().query.users.findFirst({
+    where: and(eq(users.id, userId), isNull(users.deletedAt)),
+  });
+
+  if (!existingUser) {
+    throw new AppError(404, "User not found.");
+  }
+
+  if (existingUser.roleType === "super_admin" && actor.roleType !== "super_admin") {
+    throw new AppError(403, "Only super admins can deactivate super admins.");
+  }
+
+  const [updatedUser] = await getDb()
+    .update(users)
+    .set({
+      status: "inactive",
+      deletedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId))
+    .returning();
+
+  await revokeAllUserSessions(userId);
+
+  return sanitizeUser(updatedUser);
+}
