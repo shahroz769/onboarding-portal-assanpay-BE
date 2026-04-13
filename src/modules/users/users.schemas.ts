@@ -5,7 +5,7 @@ import { roleTypes } from "../../types/auth";
 export const updateUserSchema = z
   .object({
     name: z.string().trim().min(2).max(120).optional(),
-    employeeId: z.string().trim().min(2).max(64).optional(),
+    username: z.string().trim().min(2).max(64).optional(),
     roleType: z.enum(roleTypes).optional(),
     status: z.enum(["active", "inactive"]).optional(),
     accessPolicyId: z.uuid().nullable().optional(),

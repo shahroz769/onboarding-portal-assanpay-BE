@@ -10,7 +10,7 @@ const envSchema = z.object({
   COOKIE_DOMAIN: z.string().min(1).optional(),
   COOKIE_SECURE: z
     .enum(["true", "false"])
-    .optional()
+    .default("true")
     .transform((value) => value === "true"),
 });
 

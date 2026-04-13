@@ -26,7 +26,7 @@ function sanitizeUser(user: typeof users.$inferSelect) {
     id: user.id,
     name: user.name,
     email: user.email,
-    employeeId: user.employeeId,
+    username: user.username,
     roleType: user.roleType,
     status: user.status,
     accessPolicyId: user.accessPolicyId,
@@ -37,10 +37,10 @@ function sanitizeUser(user: typeof users.$inferSelect) {
   };
 }
 
-async function assertUniqueUser(input: { email: string; employeeId: string }) {
+async function assertUniqueUser(input: { email: string; username: string }) {
   const existingUser = await getDb().query.users.findFirst({
     where: and(
-      or(eq(users.email, input.email), eq(users.employeeId, input.employeeId)),
+      or(eq(users.email, input.email), eq(users.username, input.username)),
       isNull(users.deletedAt),
     ),
   });
@@ -53,7 +53,7 @@ async function assertUniqueUser(input: { email: string; employeeId: string }) {
     throw new AppError(409, "Email is already in use.");
   }
 
-  throw new AppError(409, "Employee ID is already in use.");
+  throw new AppError(409, "Username is already in use.");
 }
 
 async function issueSession(params: {
@@ -93,7 +93,7 @@ async function issueSession(params: {
 export async function registerInitialSuperAdmin(input: {
   name: string;
   email: string;
-  employeeId: string;
+  username: string;
   password: string;
 }) {
   const existingUser = await getDb().query.users.findFirst({
@@ -111,7 +111,7 @@ export async function registerInitialSuperAdmin(input: {
     .values({
       name: input.name,
       email: input.email,
-      employeeId: input.employeeId,
+      username: input.username,
       passwordHash,
       roleType: "super_admin",
       status: "active",
@@ -122,14 +122,14 @@ export async function registerInitialSuperAdmin(input: {
 }
 
 export async function login(input: {
-  email: string;
+  identifier: string;
   password: string;
   userAgent?: string;
   ipAddress?: string;
 }) {
   const user = await getDb().query.users.findFirst({
     where: and(
-      eq(users.email, input.email),
+      or(eq(users.email, input.identifier), eq(users.username, input.identifier)),
       eq(users.status, "active"),
       isNull(users.deletedAt),
     ),
@@ -268,7 +268,7 @@ export async function createManagedUser(
   input: {
     name: string;
     email: string;
-    employeeId: string;
+    username: string;
     password: string;
     roleType: RoleType;
     accessPolicyId?: string;
@@ -280,7 +280,7 @@ export async function createManagedUser(
 
   await assertUniqueUser({
     email: input.email,
-    employeeId: input.employeeId,
+    username: input.username,
   });
 
   const passwordHash = await Bun.password.hash(input.password);
@@ -290,7 +290,7 @@ export async function createManagedUser(
     .values({
       name: input.name,
       email: input.email,
-      employeeId: input.employeeId,
+      username: input.username,
       passwordHash,
       roleType: input.roleType,
       status: "active",

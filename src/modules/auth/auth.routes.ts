@@ -18,7 +18,7 @@ function getCookieOptions() {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: env.COOKIE_SECURE ?? true,
+    secure: env.COOKIE_SECURE,
     path: "/",
     domain: env.COOKIE_DOMAIN,
     maxAge: env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60,

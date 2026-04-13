@@ -10,7 +10,7 @@ import type { AppEnv } from "./types/auth";
 
 const app = new Hono<AppEnv>();
 
-app.use("*", errorHandler);
+app.onError(errorHandler);
 
 app.get("/", (c) => {
   return c.json({

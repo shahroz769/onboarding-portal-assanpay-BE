@@ -15,7 +15,7 @@ function sanitizeUser(user: typeof users.$inferSelect) {
     id: user.id,
     name: user.name,
     email: user.email,
-    employeeId: user.employeeId,
+    username: user.username,
     roleType: user.roleType,
     status: user.status,
     accessPolicyId: user.accessPolicyId,
@@ -26,17 +26,17 @@ function sanitizeUser(user: typeof users.$inferSelect) {
   };
 }
 
-async function assertEmployeeIdAvailable(employeeId: string, userId: string) {
+async function assertUsernameAvailable(username: string, userId: string) {
   const existingUser = await getDb().query.users.findFirst({
     where: and(
-      eq(users.employeeId, employeeId),
+      eq(users.username, username),
       ne(users.id, userId),
       isNull(users.deletedAt),
     ),
   });
 
   if (existingUser) {
-    throw new AppError(409, "Employee ID is already in use.");
+    throw new AppError(409, "Username is already in use.");
   }
 }
 
@@ -68,7 +68,7 @@ export async function updateUser(
   userId: string,
   input: {
     name?: string;
-    employeeId?: string;
+    username?: string;
     roleType?: RoleType;
     status?: "active" | "inactive";
     accessPolicyId?: string | null;
@@ -91,13 +91,13 @@ export async function updateUser(
     throw new AppError(403, "You cannot assign this role.");
   }
 
-  if (input.employeeId) {
-    await assertEmployeeIdAvailable(input.employeeId, userId);
+  if (input.username) {
+    await assertUsernameAvailable(input.username, userId);
   }
 
   const updateData: Partial<typeof users.$inferInsert> = {
     name: input.name,
-    employeeId: input.employeeId,
+    username: input.username,
     roleType: input.roleType,
     status: input.status,
     accessPolicyId: input.accessPolicyId,
