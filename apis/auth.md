@@ -61,7 +61,6 @@ Frontend note:
 
 Allowed `roleType` values:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 - `employee`
@@ -71,12 +70,12 @@ Allowed `status` values:
 - `active`
 - `inactive`
 
-## POST `/api/auth/register`
+## POST `/api/auth/register-admin`
 
 Purpose:
 
-- Registers the very first super admin
-- Works only once when there is no user in the system
+- Registers an `admin` user
+- Works only when `ALLOW_ADMIN_REGISTRATION=true`
 
 Auth:
 
@@ -86,9 +85,9 @@ Request body:
 
 ```json
 {
-  "name": "Super Admin",
+  "name": "Admin User",
   "email": "admin@example.com",
-  "username": "superadmin",
+  "username": "admin01",
   "password": "secret123"
 }
 ```
@@ -108,10 +107,10 @@ Success response:
 {
   "user": {
     "id": "uuid",
-    "name": "Super Admin",
+    "name": "Admin User",
     "email": "admin@example.com",
-    "username": "superadmin",
-    "roleType": "super_admin",
+    "username": "admin01",
+    "roleType": "admin",
     "status": "active",
     "accessPolicyId": null,
     "createdByUserId": null,
@@ -125,7 +124,9 @@ Success response:
 Possible errors:
 
 - `400` Invalid body
-- `409` Initial registration is already completed.
+- `403` Admin registration is disabled.
+- `409` Email is already in use.
+- `409` Username is already in use.
 
 ## POST `/api/auth/login`
 

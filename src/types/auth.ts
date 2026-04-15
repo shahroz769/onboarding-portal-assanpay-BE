@@ -1,5 +1,4 @@
 export const roleTypes = [
-  "super_admin",
   "admin",
   "supervisor",
   "employee",

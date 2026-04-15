@@ -395,9 +395,9 @@ Use a single `users` table, but separate platform authority from operational acc
 
 Rules:
 
-- Seed exactly one initial `super_admin`
-- Do not expose `create super_admin` in the UI after initial setup
-- Only a `super_admin` can create an `admin`
+- Allow `admin` registration only through an env-gated backend route
+- Do not expose unrestricted admin creation in the UI
+- `admin` can create `supervisor` and `employee`
 - `admin` can create `supervisor` and `employee`
 - `supervisor` can create `employee`
 - No public self-registration
@@ -428,7 +428,7 @@ Optional email is sent to the user with account details or login instructions
 
 Notes:
 
-- `super_admin` creation should be disabled after initial bootstrap
+- Admin registration should be controlled by env configuration
 - `admin` users should not be controlled only by queue policy; they also have platform-level permissions
 - `supervisor` and `employee` should use access policies for queue-based restrictions
 

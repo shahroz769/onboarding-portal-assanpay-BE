@@ -83,10 +83,6 @@ export async function updateUser(
     throw new AppError(404, "User not found.");
   }
 
-  if (existingUser.roleType === "super_admin" && actor.roleType !== "super_admin") {
-    throw new AppError(403, "Only super admins can manage super admins.");
-  }
-
   if (input.roleType && !canCreateRole(actor.roleType, input.roleType)) {
     throw new AppError(403, "You cannot assign this role.");
   }
@@ -128,10 +124,6 @@ export async function deactivateUser(actor: SessionUser, userId: string) {
 
   if (!existingUser) {
     throw new AppError(404, "User not found.");
-  }
-
-  if (existingUser.roleType === "super_admin" && actor.roleType !== "super_admin") {
-    throw new AppError(403, "Only super admins can deactivate super admins.");
   }
 
   const [updatedUser] = await getDb()

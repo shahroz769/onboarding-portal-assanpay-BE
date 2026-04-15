@@ -44,7 +44,6 @@ Common user response object:
 
 Allowed `roleType` values:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 - `employee`
@@ -57,7 +56,6 @@ Purpose:
 
 Allowed roles:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 
@@ -103,7 +101,6 @@ Purpose:
 
 Allowed roles:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 
@@ -148,13 +145,12 @@ Purpose:
 
 Allowed roles:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 
 Role creation rules:
 
-- `super_admin` can create `admin`, `supervisor`, `employee`
+- `admin` can create `supervisor`, `employee`
 - `admin` can create `supervisor`, `employee`
 - `supervisor` can create `employee`
 - `employee` cannot create users
@@ -178,7 +174,7 @@ Field rules:
 - `email`: valid email
 - `username`: string, min 2, max 64
 - `password`: string, min 8, max 128
-- `roleType`: `super_admin | admin | supervisor | employee`
+- `roleType`: `admin | supervisor | employee`
 - `accessPolicyId`: optional UUID
 
 Success response:
@@ -221,7 +217,6 @@ Purpose:
 
 Allowed roles:
 
-- `super_admin`
 - `admin`
 - `supervisor`
 
@@ -248,7 +243,7 @@ Allowed request fields:
 
 - `name`: string, min 2, max 120
 - `username`: string, min 2, max 64
-- `roleType`: `super_admin | admin | supervisor | employee`
+- `roleType`: `admin | supervisor | employee`
 - `status`: `active | inactive`
 - `accessPolicyId`: UUID, `null`, or omitted
 - `password`: string, min 8, max 128
@@ -281,7 +276,6 @@ Possible errors:
 - `401` Missing bearer token.
 - `401` Invalid access token.
 - `403` Insufficient permissions.
-- `403` Only super admins can manage super admins.
 - `403` You cannot assign this role.
 - `404` User not found.
 - `409` Username is already in use.
@@ -299,7 +293,6 @@ Purpose:
 
 Allowed roles:
 
-- `super_admin`
 - `admin`
 
 Path params:
@@ -333,7 +326,6 @@ Possible errors:
 - `401` Missing bearer token.
 - `401` Invalid access token.
 - `403` Insufficient permissions.
-- `403` Only super admins can deactivate super admins.
 - `404` User not found.
 
 Important behavior:

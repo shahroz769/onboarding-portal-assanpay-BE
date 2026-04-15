@@ -7,6 +7,10 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  ALLOW_ADMIN_REGISTRATION: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   COOKIE_DOMAIN: z.string().min(1).optional(),
   COOKIE_SECURE: z
     .enum(["true", "false"])

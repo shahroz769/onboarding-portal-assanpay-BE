@@ -9,7 +9,6 @@ import { hashToken } from "../../lib/security";
 import type { RoleType, SessionUser } from "../../types/auth";
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
-  super_admin: ["admin", "supervisor", "employee"],
   admin: ["supervisor", "employee"],
   supervisor: ["employee"],
   employee: [],
@@ -90,19 +89,20 @@ async function issueSession(params: {
   };
 }
 
-export async function registerInitialSuperAdmin(input: {
+export async function registerAdmin(input: {
   name: string;
   email: string;
   username: string;
   password: string;
 }) {
-  const existingUser = await getDb().query.users.findFirst({
-    where: isNull(users.deletedAt),
-  });
-
-  if (existingUser) {
-    throw new AppError(409, "Initial registration is already completed.");
+  if (!env.ALLOW_ADMIN_REGISTRATION) {
+    throw new AppError(403, "Admin registration is disabled.");
   }
+
+  await assertUniqueUser({
+    email: input.email,
+    username: input.username,
+  });
 
   const passwordHash = await Bun.password.hash(input.password);
 
@@ -113,7 +113,7 @@ export async function registerInitialSuperAdmin(input: {
       email: input.email,
       username: input.username,
       passwordHash,
-      roleType: "super_admin",
+      roleType: "admin",
       status: "active",
     })
     .returning();

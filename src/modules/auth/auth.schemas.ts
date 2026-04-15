@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { roleTypes } from "../../types/auth";
 
-export const registerSchema = z.object({
+export const registerAdminSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.email().transform((value) => value.toLowerCase()),
   username: z.string().trim().min(2).max(64),

@@ -18,14 +18,14 @@ export const userRoutes = new Hono<AppEnv>();
 
 userRoutes.use("*", requireAuth);
 
-userRoutes.get("/", requireRoles("super_admin", "admin", "supervisor"), async (c) => {
+userRoutes.get("/", requireRoles("admin", "supervisor"), async (c) => {
   const users = await listUsers();
   return c.json({ users });
 });
 
 userRoutes.get(
   "/:id",
-  requireRoles("super_admin", "admin", "supervisor"),
+  requireRoles("admin", "supervisor"),
   async (c) => {
     const user = await getUserById(c.req.param("id"));
     return c.json({ user });
@@ -34,7 +34,7 @@ userRoutes.get(
 
 userRoutes.post(
   "/",
-  requireRoles("super_admin", "admin", "supervisor"),
+  requireRoles("admin", "supervisor"),
   async (c) => {
     const input = await parseJsonBody(c.req.raw, createUserSchema);
     const user = await createUser(c.get("auth"), input);
@@ -44,7 +44,7 @@ userRoutes.post(
 
 userRoutes.patch(
   "/:id",
-  requireRoles("super_admin", "admin", "supervisor"),
+  requireRoles("admin", "supervisor"),
   async (c) => {
     const input = await parseJsonBody(c.req.raw, updateUserSchema);
     const user = await updateUser(c.get("auth"), c.req.param("id"), input);
@@ -54,7 +54,7 @@ userRoutes.patch(
 
 userRoutes.delete(
   "/:id",
-  requireRoles("super_admin", "admin"),
+  requireRoles("admin"),
   async (c) => {
     const user = await deactivateUser(c.get("auth"), c.req.param("id"));
     return c.json({ user });
