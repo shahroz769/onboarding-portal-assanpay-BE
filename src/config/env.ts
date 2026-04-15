@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const defaultCookieSecure = Bun.env.NODE_ENV === "production" ? "true" : "false";
+
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url(),
@@ -14,8 +16,9 @@ const envSchema = z.object({
   COOKIE_DOMAIN: z.string().min(1).optional(),
   COOKIE_SECURE: z
     .enum(["true", "false"])
-    .default("true")
+    .default(defaultCookieSecure)
     .transform((value) => value === "true"),
+  CORS_ORIGIN: z.string().min(1).default("http://localhost:5173"),
 });
 
 export const env = envSchema.parse(Bun.env);

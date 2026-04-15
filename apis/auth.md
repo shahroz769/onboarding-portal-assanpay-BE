@@ -36,6 +36,7 @@ Refresh cookie details:
 - `HttpOnly`: `true`
 - `SameSite`: `lax`
 - `Secure`: depends on backend env config
+  Defaults to `false` outside production so localhost over plain HTTP can persist the cookie.
 
 Frontend note:
 
