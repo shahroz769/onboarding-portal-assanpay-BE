@@ -5,7 +5,7 @@ import type { AppEnv, RoleType } from "../types/auth";
 
 export function requireRoles(...roles: RoleType[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const auth = c.get("auth");
+    const auth = c.var.auth;
 
     if (!roles.includes(auth.roleType)) {
       throw new AppError(403, "Insufficient permissions.");

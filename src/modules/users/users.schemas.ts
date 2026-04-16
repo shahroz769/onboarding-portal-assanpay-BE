@@ -2,6 +2,10 @@ import { z } from "zod";
 
 import { roleTypes } from "../../types/auth";
 
+export const userIdParamSchema = z.object({
+  id: z.uuid(),
+});
+
 export const updateUserSchema = z
   .object({
     name: z.string().trim().min(2).max(120).optional(),

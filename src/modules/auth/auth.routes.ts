@@ -1,8 +1,9 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { Hono } from "hono";
+import { csrf } from "hono/csrf";
 
 import { env } from "../../config/env";
-import { parseJsonBody } from "../../lib/http";
+import { zodValidator } from "../../lib/validators";
 import type { AppEnv } from "../../types/auth";
 import { loginSchema, registerAdminSchema } from "./auth.schemas";
 import {
@@ -37,19 +38,22 @@ function getRequestDebugMeta(c: Parameters<typeof getCookie>[0]) {
 
 export const authRoutes = new Hono<AppEnv>();
 
-authRoutes.post("/register-admin", async (c) => {
+authRoutes.use("/refresh", csrf({ origin: env.CORS_ORIGIN }));
+authRoutes.use("/logout", csrf({ origin: env.CORS_ORIGIN }));
+
+authRoutes.post("/register-admin", zodValidator("json", registerAdminSchema), async (c) => {
   if (!env.ALLOW_ADMIN_REGISTRATION) {
     return c.json({ error: "Admin registration is disabled." }, 403);
   }
 
-  const input = await parseJsonBody(c.req.raw, registerAdminSchema);
+  const input = c.req.valid("json");
   const user = await registerAdmin(input);
 
   return c.json({ user }, 201);
 });
 
-authRoutes.post("/login", async (c) => {
-  const input = await parseJsonBody(c.req.raw, loginSchema);
+authRoutes.post("/login", zodValidator("json", loginSchema), async (c) => {
+  const input = c.req.valid("json");
   const session = await login({
     ...input,
     userAgent: c.req.header("user-agent"),

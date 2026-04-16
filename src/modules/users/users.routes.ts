@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 
-import { parseJsonBody } from "../../lib/http";
+import { zodValidator } from "../../lib/validators";
 import { requireAuth } from "../../middleware/auth";
 import { requireRoles } from "../../middleware/rbac";
 import type { AppEnv } from "../../types/auth";
 import { createUserSchema } from "../auth/auth.schemas";
-import { updateUserSchema } from "./users.schemas";
+import { updateUserSchema, userIdParamSchema } from "./users.schemas";
 import {
   createUser,
   deactivateUser,
@@ -25,38 +25,46 @@ userRoutes.get("/", requireRoles("admin", "supervisor"), async (c) => {
 
 userRoutes.get(
   "/:id",
+  zodValidator("param", userIdParamSchema),
   requireRoles("admin", "supervisor"),
   async (c) => {
-    const user = await getUserById(c.req.param("id"));
+    const { id } = c.req.valid("param");
+    const user = await getUserById(id);
     return c.json({ user });
   },
 );
 
 userRoutes.post(
   "/",
+  zodValidator("json", createUserSchema),
   requireRoles("admin", "supervisor"),
   async (c) => {
-    const input = await parseJsonBody(c.req.raw, createUserSchema);
-    const user = await createUser(c.get("auth"), input);
+    const input = c.req.valid("json");
+    const user = await createUser(c.var.auth, input);
     return c.json({ user }, 201);
   },
 );
 
 userRoutes.patch(
   "/:id",
+  zodValidator("param", userIdParamSchema),
+  zodValidator("json", updateUserSchema),
   requireRoles("admin", "supervisor"),
   async (c) => {
-    const input = await parseJsonBody(c.req.raw, updateUserSchema);
-    const user = await updateUser(c.get("auth"), c.req.param("id"), input);
+    const { id } = c.req.valid("param");
+    const input = c.req.valid("json");
+    const user = await updateUser(c.var.auth, id, input);
     return c.json({ user });
   },
 );
 
 userRoutes.delete(
   "/:id",
+  zodValidator("param", userIdParamSchema),
   requireRoles("admin"),
   async (c) => {
-    const user = await deactivateUser(c.get("auth"), c.req.param("id"));
+    const { id } = c.req.valid("param");
+    const user = await deactivateUser(c.var.auth, id);
     return c.json({ user });
   },
 );
