@@ -1,5 +1,8 @@
+import { and, eq, isNull } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
 
+import { getDb } from "../db/client";
+import { users } from "../db/schema";
 import { verifyAccessToken } from "../lib/auth";
 import { AppError } from "../lib/errors";
 import type { AppEnv } from "../types/auth";
@@ -20,6 +23,19 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   const session = await verifyAccessToken(token).catch(() => {
     throw new AppError(401, "Invalid access token.");
   });
+
+  const user = await getDb().query.users.findFirst({
+    where: and(
+      eq(users.id, session.userId),
+      eq(users.status, "active"),
+      eq(users.sessionVersion, session.sessionVersion),
+      isNull(users.deletedAt),
+    ),
+  });
+
+  if (!user) {
+    throw new AppError(401, "Access token is expired or revoked.");
+  }
 
   c.set("auth", session);
 

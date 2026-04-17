@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
 
 import { env } from "../../config/env";
 import { getDb } from "../../db/client";
@@ -80,6 +80,7 @@ async function issueSession(params: {
     sub: params.user.id,
     email: params.user.email,
     roleType: params.user.roleType,
+    sessionVersion: params.user.sessionVersion,
   });
 
   return {
@@ -170,48 +171,49 @@ export async function refreshSession(input: {
   });
 
   const hashedToken = await hashToken(input.refreshToken);
-
-  const tokenRecord = await getDb().query.refreshTokens.findFirst({
-    where: and(
-      eq(refreshTokens.id, payload.sessionId),
-      eq(refreshTokens.tokenHash, hashedToken),
-      eq(refreshTokens.status, "active"),
-      gt(refreshTokens.expiresAt, new Date()),
-    ),
-  });
-
-  if (!tokenRecord) {
-    throw new AppError(401, "Refresh token is expired or revoked.");
-  }
-
-  const user = await getDb().query.users.findFirst({
-    where: and(
-      eq(users.id, payload.userId),
-      eq(users.status, "active"),
-      isNull(users.deletedAt),
-    ),
-  });
-
-  if (!user) {
-    throw new AppError(401, "User is not available.");
-  }
-
   const nextSessionId = crypto.randomUUID();
   const nextRefreshToken = await signRefreshToken({
-    sub: user.id,
+    sub: payload.userId,
     sessionId: nextSessionId,
   });
   const nextRefreshTokenHash = await hashToken(nextRefreshToken);
 
-  await getDb().transaction(async (tx) => {
-    await tx
+  return getDb().transaction(async (tx) => {
+    const [rotatedToken] = await tx
       .update(refreshTokens)
       .set({
         status: "rotated",
         revokedAt: new Date(),
         replacedByTokenId: nextSessionId,
       })
-      .where(eq(refreshTokens.id, tokenRecord.id));
+      .where(
+        and(
+          eq(refreshTokens.id, payload.sessionId),
+          eq(refreshTokens.userId, payload.userId),
+          eq(refreshTokens.tokenHash, hashedToken),
+          eq(refreshTokens.status, "active"),
+          gt(refreshTokens.expiresAt, new Date()),
+        ),
+      )
+      .returning({
+        id: refreshTokens.id,
+      });
+
+    if (!rotatedToken) {
+      throw new AppError(401, "Refresh token is expired or revoked.");
+    }
+
+    const user = await tx.query.users.findFirst({
+      where: and(
+        eq(users.id, payload.userId),
+        eq(users.status, "active"),
+        isNull(users.deletedAt),
+      ),
+    });
+
+    if (!user) {
+      throw new AppError(401, "User is not available.");
+    }
 
     await tx.insert(refreshTokens).values({
       id: nextSessionId,
@@ -221,19 +223,20 @@ export async function refreshSession(input: {
       userAgent: input.userAgent,
       ipAddress: input.ipAddress,
     });
-  });
 
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    email: user.email,
-    roleType: user.roleType,
-  });
+    const accessToken = await signAccessToken({
+      sub: user.id,
+      email: user.email,
+      roleType: user.roleType,
+      sessionVersion: user.sessionVersion,
+    });
 
-  return {
-    accessToken,
-    refreshToken: nextRefreshToken,
-    user: sanitizeUser(user),
-  };
+    return {
+      accessToken,
+      refreshToken: nextRefreshToken,
+      user: sanitizeUser(user),
+    };
+  });
 }
 
 export async function logout(refreshToken: string) {
@@ -303,11 +306,21 @@ export async function createManagedUser(
 }
 
 export async function revokeAllUserSessions(userId: string) {
-  await getDb()
-    .update(refreshTokens)
-    .set({
-      status: "revoked",
-      revokedAt: new Date(),
-    })
-    .where(eq(refreshTokens.userId, userId));
+  await getDb().transaction(async (tx) => {
+    await tx
+      .update(refreshTokens)
+      .set({
+        status: "revoked",
+        revokedAt: new Date(),
+      })
+      .where(eq(refreshTokens.userId, userId));
+
+    await tx
+      .update(users)
+      .set({
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+  });
 }

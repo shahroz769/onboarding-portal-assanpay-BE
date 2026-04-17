@@ -10,6 +10,7 @@ export type SessionUser = {
   userId: string;
   email: string;
   roleType: RoleType;
+  sessionVersion: number;
 };
 
 export type AppVariables = {

@@ -18,10 +18,12 @@ export async function signAccessToken(payload: {
   sub: string;
   roleType: RoleType;
   email: string;
+  sessionVersion: number;
 }) {
   return new SignJWT({
     roleType: payload.roleType,
     email: payload.email,
+    sessionVersion: payload.sessionVersion,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
@@ -46,11 +48,17 @@ export async function signRefreshToken(payload: {
 
 export async function verifyAccessToken(token: string): Promise<SessionUser> {
   const { payload } = await jwtVerify(token, accessSecret);
+  const sessionVersion = Number(payload.sessionVersion);
+
+  if (!Number.isInteger(sessionVersion) || sessionVersion < 0) {
+    throw new Error("Invalid access token session version.");
+  }
 
   return {
     userId: String(payload.sub),
     email: String(payload.email),
     roleType: payload.roleType as RoleType,
+    sessionVersion,
   };
 }
 

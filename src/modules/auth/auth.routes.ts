@@ -26,16 +26,6 @@ function getCookieOptions() {
   };
 }
 
-function getRequestDebugMeta(c: Parameters<typeof getCookie>[0]) {
-  return {
-    origin: c.req.header("origin") ?? null,
-    referer: c.req.header("referer") ?? null,
-    host: c.req.header("host") ?? null,
-    cookieHeader: c.req.header("cookie") ?? null,
-    userAgent: c.req.header("user-agent") ?? null,
-  };
-}
-
 export const authRoutes = new Hono<AppEnv>();
 
 authRoutes.use("/refresh", csrf({ origin: env.CORS_ORIGIN }));
@@ -61,14 +51,6 @@ authRoutes.post("/login", zodValidator("json", loginSchema), async (c) => {
   });
 
   const cookieOptions = getCookieOptions();
-  console.info("[auth.login] issuing refresh cookie", {
-    ...getRequestDebugMeta(c),
-    cookieName: REFRESH_COOKIE_NAME,
-    cookieOptions,
-    refreshTokenLength: session.refreshToken.length,
-    userId: session.user.id,
-  });
-
   setCookie(c, REFRESH_COOKIE_NAME, session.refreshToken, cookieOptions);
 
   return c.json({
@@ -78,17 +60,9 @@ authRoutes.post("/login", zodValidator("json", loginSchema), async (c) => {
 });
 
 authRoutes.post("/refresh", async (c) => {
-  console.info("[auth.refresh] incoming request", {
-    ...getRequestDebugMeta(c),
-    parsedRefreshCookiePresent: Boolean(getCookie(c, REFRESH_COOKIE_NAME)),
-  });
-
   const refreshToken = getCookie(c, REFRESH_COOKIE_NAME);
 
   if (!refreshToken) {
-    console.warn("[auth.refresh] missing refresh cookie", {
-      ...getRequestDebugMeta(c),
-    });
     return c.json({ error: "Missing refresh token." }, 401);
   }
 
@@ -99,14 +73,6 @@ authRoutes.post("/refresh", async (c) => {
   });
 
   const cookieOptions = getCookieOptions();
-  console.info("[auth.refresh] rotating refresh cookie", {
-    ...getRequestDebugMeta(c),
-    cookieName: REFRESH_COOKIE_NAME,
-    cookieOptions,
-    refreshTokenLength: session.refreshToken.length,
-    userId: session.user.id,
-  });
-
   setCookie(c, REFRESH_COOKIE_NAME, session.refreshToken, cookieOptions);
 
   return c.json({
@@ -121,13 +87,6 @@ authRoutes.post("/logout", async (c) => {
   if (refreshToken) {
     await logout(refreshToken);
   }
-
-  console.info("[auth.logout] clearing refresh cookie", {
-    ...getRequestDebugMeta(c),
-    parsedRefreshCookiePresent: Boolean(refreshToken),
-    cookieName: REFRESH_COOKIE_NAME,
-    cookieOptions: getCookieOptions(),
-  });
 
   deleteCookie(c, REFRESH_COOKIE_NAME, getCookieOptions());
 

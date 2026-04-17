@@ -112,6 +112,7 @@ export const users = pgTable(
     passwordHash: text("password_hash").notNull(),
     roleType: roleTypeEnum("role_type").notNull(),
     status: userStatusEnum("status").default("active").notNull(),
+    sessionVersion: integer("session_version").default(0).notNull(),
     accessPolicyId: uuid("access_policy_id").references(() => accessPolicies.id, {
       onDelete: "set null",
     }),

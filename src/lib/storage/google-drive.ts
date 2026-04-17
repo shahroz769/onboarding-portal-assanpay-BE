@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-
 import { importPKCS8, SignJWT } from "jose";
 
 import { env } from "../../config/env";
@@ -9,7 +6,7 @@ import { AppError } from "../errors";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 const GOOGLE_DRIVE_UPLOAD_URL =
-  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,webContentLink,parents";
+  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,parents";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
 type GoogleAccessToken = {
@@ -59,7 +56,8 @@ let credentialsCache: GoogleServiceAccountCredentials | null = null;
 export class GoogleDriveStorageProvider implements FileStorageProvider {
   async createMerchantFolder(folderName: string) {
     const accessToken = await getGoogleAccessToken();
-    const response = await fetch(GOOGLE_DRIVE_FILES_URL, {
+    const parentFolderId = getRequiredEnv("GOOGLE_DRIVE_PARENT_FOLDER_ID");
+    const response = await fetch(`${GOOGLE_DRIVE_FILES_URL}?supportsAllDrives=true`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -68,12 +66,19 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
       body: JSON.stringify({
         name: folderName,
         mimeType: "application/vnd.google-apps.folder",
-        parents: [getRequiredEnv("GOOGLE_DRIVE_PARENT_FOLDER_ID")],
+        parents: [parentFolderId],
       }),
     });
 
     if (!response.ok) {
-      throw await toStorageError(response, "Failed to create merchant folder in Google Drive.");
+      throw await toStorageError(
+        response,
+        "Failed to create merchant folder in Google Drive.",
+        {
+          operation: "create-folder",
+          fileId: parentFolderId,
+        },
+      );
     }
 
     const data = (await response.json()) as { id: string };
@@ -106,7 +111,10 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     });
 
     if (!response.ok) {
-      throw await toStorageError(response, `Failed to upload "${input.fileName}" to Google Drive.`);
+      throw await toStorageError(response, `Failed to upload "${input.fileName}" to Google Drive.`, {
+        operation: "upload-file",
+        fileId: folderId,
+      });
     }
 
     const data = (await response.json()) as GoogleDriveFileResponse;
@@ -124,7 +132,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
 
   async deleteFile(fileId: string) {
     const accessToken = await getGoogleAccessToken();
-    const response = await fetch(`${GOOGLE_DRIVE_FILES_URL}/${fileId}`, {
+    const response = await fetch(`${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true`, {
       method: "DELETE",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -186,10 +194,52 @@ async function getGoogleAccessToken() {
   return tokenCache.accessToken;
 }
 
-async function toStorageError(response: Response, fallbackMessage: string) {
-  const payload = await response.text().catch(() => "");
-  console.error("[google-drive]", response.status, payload);
+async function toStorageError(
+  response: Response,
+  fallbackMessage: string,
+  context: {
+    operation?: "create-folder" | "upload-file";
+    fileId?: string;
+  } = {},
+) {
+  const payloadText = await response.text().catch(() => "");
+  console.error("[google-drive]", response.status, payloadText);
+
+  if (response.status === 404) {
+    const payload = parseGoogleDriveErrorPayload(payloadText);
+    const isMissingDriveFile =
+      payload?.error?.errors?.some((error) => error.reason === "notFound") ?? false;
+
+    if (isMissingDriveFile && context.operation === "create-folder" && context.fileId) {
+      return new AppError(
+        502,
+        `Google Drive parent folder "${context.fileId}" was not found or is not accessible to the configured service account. Share the folder with the service account email or use a shared-drive folder ID.`,
+      );
+    }
+
+    if (isMissingDriveFile && context.operation === "upload-file" && context.fileId) {
+      return new AppError(
+        502,
+        `Google Drive folder "${context.fileId}" was not found or is not accessible to the configured service account. Ensure the folder still exists and the service account can access it.`,
+      );
+    }
+  }
+
   return new AppError(response.status >= 500 ? 502 : 500, fallbackMessage);
+}
+
+function parseGoogleDriveErrorPayload(payload: string) {
+  try {
+    return JSON.parse(payload) as {
+      error?: {
+        errors?: Array<{
+          reason?: string;
+        }>;
+      };
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function getGoogleDriveCredentials() {
@@ -197,65 +247,19 @@ async function getGoogleDriveCredentials() {
     return credentialsCache;
   }
 
-  if (env.GOOGLE_DRIVE_CLIENT_EMAIL && env.GOOGLE_DRIVE_PRIVATE_KEY) {
-    credentialsCache = {
-      client_email: env.GOOGLE_DRIVE_CLIENT_EMAIL,
-      private_key: env.GOOGLE_DRIVE_PRIVATE_KEY,
-    };
-
-    return credentialsCache;
-  }
-
-  const credentialsPath = env.GOOGLE_DRIVE_CREDENTIALS_PATH
-    ? resolve(process.cwd(), env.GOOGLE_DRIVE_CREDENTIALS_PATH)
-    : resolve(process.cwd(), "credentials.json");
-  const rawCredentials = await readFile(credentialsPath, "utf8").catch((error) => {
-    console.error("[google-drive.credentials]", error);
+  if (!env.GOOGLE_DRIVE_CLIENT_EMAIL || !env.GOOGLE_DRIVE_PRIVATE_KEY) {
     throw new AppError(
       500,
-      "Google Drive credentials are not configured in env and the credentials file could not be found.",
-    );
-  });
-
-  let parsedCredentials: unknown;
-
-  try {
-    parsedCredentials = JSON.parse(rawCredentials);
-  } catch (error) {
-    console.error("[google-drive.credentials]", error);
-    throw new AppError(500, "Google Drive credentials file contains invalid JSON.");
-  }
-
-  const credentials = validateCredentials(parsedCredentials);
-  credentialsCache = credentials;
-  return credentials;
-}
-
-function validateCredentials(credentials: unknown): GoogleServiceAccountCredentials {
-  if (!credentials || typeof credentials !== "object") {
-    throw new AppError(500, "Google Drive credentials file is malformed.");
-  }
-
-  const clientEmail =
-    "client_email" in credentials && typeof credentials.client_email === "string"
-      ? credentials.client_email
-      : null;
-  const privateKey =
-    "private_key" in credentials && typeof credentials.private_key === "string"
-      ? credentials.private_key
-      : null;
-
-  if (!clientEmail || !privateKey) {
-    throw new AppError(
-      500,
-      "Google Drive credentials file must include client_email and private_key.",
+      "Google Drive credentials are not configured. Set GOOGLE_DRIVE_CLIENT_EMAIL and GOOGLE_DRIVE_PRIVATE_KEY.",
     );
   }
 
-  return {
-    client_email: clientEmail,
-    private_key: privateKey,
+  credentialsCache = {
+    client_email: env.GOOGLE_DRIVE_CLIENT_EMAIL,
+    private_key: env.GOOGLE_DRIVE_PRIVATE_KEY,
   };
+
+  return credentialsCache;
 }
 
 function getRequiredEnv(
