@@ -6,6 +6,7 @@ import { env } from "./config/env";
 import { getDb } from "./db/client";
 import { errorHandler } from "./middleware/error-handler";
 import { authRoutes } from "./modules/auth/auth.routes";
+import { merchantFormRoutes } from "./modules/merchants/form.routes";
 import { userRoutes } from "./modules/users/users.routes";
 import type { AppEnv } from "./types/auth";
 
@@ -42,6 +43,7 @@ app.get("/health/db", async (c) => {
 });
 
 app.route("/api/auth", authRoutes);
+app.route("/api/public", merchantFormRoutes);
 app.route("/api/users", userRoutes);
 
 export default {

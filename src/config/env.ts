@@ -19,6 +19,9 @@ const envSchema = z.object({
     .default(defaultCookieSecure)
     .transform((value) => value === "true"),
   CORS_ORIGIN: z.string().min(1).default("http://localhost:5173"),
+  GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
+  GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
+  GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse(Bun.env);
