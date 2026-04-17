@@ -110,7 +110,12 @@ export async function updateUser(
     .where(eq(users.id, userId))
     .returning();
 
-  if (input.password || input.status === "inactive") {
+  if (
+    input.password ||
+    input.status === "inactive" ||
+    input.roleType ||
+    input.accessPolicyId !== undefined
+  ) {
     await revokeAllUserSessions(userId);
   }
 
