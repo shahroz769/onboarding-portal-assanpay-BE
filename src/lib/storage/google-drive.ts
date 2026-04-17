@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import { importPKCS8, SignJWT } from "jose";
 
 import { env } from "../../config/env";
@@ -12,6 +15,11 @@ const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 type GoogleAccessToken = {
   accessToken: string;
   expiresAt: number;
+};
+
+type GoogleServiceAccountCredentials = {
+  client_email: string;
+  private_key: string;
 };
 
 type GoogleDriveFileResponse = {
@@ -46,6 +54,7 @@ export interface FileStorageProvider {
 }
 
 let tokenCache: GoogleAccessToken | null = null;
+let credentialsCache: GoogleServiceAccountCredentials | null = null;
 
 export class GoogleDriveStorageProvider implements FileStorageProvider {
   async createMerchantFolder(folderName: string) {
@@ -133,8 +142,9 @@ async function getGoogleAccessToken() {
     return tokenCache.accessToken;
   }
 
-  const clientEmail = getRequiredEnv("GOOGLE_DRIVE_CLIENT_EMAIL");
-  const privateKey = getRequiredEnv("GOOGLE_DRIVE_PRIVATE_KEY").replace(/\\n/g, "\n");
+  const credentials = await getGoogleDriveCredentials();
+  const clientEmail = credentials.client_email;
+  const privateKey = credentials.private_key.replace(/\\n/g, "\n");
   const nowInSeconds = Math.floor(Date.now() / 1000);
   const key = await importPKCS8(privateKey, "RS256");
   const assertion = await new SignJWT({
@@ -182,11 +192,74 @@ async function toStorageError(response: Response, fallbackMessage: string) {
   return new AppError(response.status >= 500 ? 502 : 500, fallbackMessage);
 }
 
+async function getGoogleDriveCredentials() {
+  if (credentialsCache) {
+    return credentialsCache;
+  }
+
+  if (env.GOOGLE_DRIVE_CLIENT_EMAIL && env.GOOGLE_DRIVE_PRIVATE_KEY) {
+    credentialsCache = {
+      client_email: env.GOOGLE_DRIVE_CLIENT_EMAIL,
+      private_key: env.GOOGLE_DRIVE_PRIVATE_KEY,
+    };
+
+    return credentialsCache;
+  }
+
+  const credentialsPath = env.GOOGLE_DRIVE_CREDENTIALS_PATH
+    ? resolve(process.cwd(), env.GOOGLE_DRIVE_CREDENTIALS_PATH)
+    : resolve(process.cwd(), "credentials.json");
+  const rawCredentials = await readFile(credentialsPath, "utf8").catch((error) => {
+    console.error("[google-drive.credentials]", error);
+    throw new AppError(
+      500,
+      "Google Drive credentials are not configured in env and the credentials file could not be found.",
+    );
+  });
+
+  let parsedCredentials: unknown;
+
+  try {
+    parsedCredentials = JSON.parse(rawCredentials);
+  } catch (error) {
+    console.error("[google-drive.credentials]", error);
+    throw new AppError(500, "Google Drive credentials file contains invalid JSON.");
+  }
+
+  const credentials = validateCredentials(parsedCredentials);
+  credentialsCache = credentials;
+  return credentials;
+}
+
+function validateCredentials(credentials: unknown): GoogleServiceAccountCredentials {
+  if (!credentials || typeof credentials !== "object") {
+    throw new AppError(500, "Google Drive credentials file is malformed.");
+  }
+
+  const clientEmail =
+    "client_email" in credentials && typeof credentials.client_email === "string"
+      ? credentials.client_email
+      : null;
+  const privateKey =
+    "private_key" in credentials && typeof credentials.private_key === "string"
+      ? credentials.private_key
+      : null;
+
+  if (!clientEmail || !privateKey) {
+    throw new AppError(
+      500,
+      "Google Drive credentials file must include client_email and private_key.",
+    );
+  }
+
+  return {
+    client_email: clientEmail,
+    private_key: privateKey,
+  };
+}
+
 function getRequiredEnv(
-  key:
-    | "GOOGLE_DRIVE_CLIENT_EMAIL"
-    | "GOOGLE_DRIVE_PRIVATE_KEY"
-    | "GOOGLE_DRIVE_PARENT_FOLDER_ID",
+  key: "GOOGLE_DRIVE_PARENT_FOLDER_ID",
 ) {
   const value = env[key];
 
