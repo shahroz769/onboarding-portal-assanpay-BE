@@ -303,57 +303,12 @@ export async function listMerchants(query: ListMerchantsQuery) {
 
   const where = and(...conditions);
 
-  // Cursor pagination: fetch items after the cursor
-  if (query.cursor) {
-    const cursorRow = await db.query.merchants.findFirst({
-      where: eq(merchants.id, query.cursor),
-      columns: {
-        id: true,
-        merchantNumber: true,
-        businessName: true,
-        onboardingStage: true,
-        status: true,
-        priority: true,
-        createdAt: true,
-        businessScope: true,
-      },
-    });
-
-    if (cursorRow) {
-      // Mirror the same sort expression used in ORDER BY below
-      const sortCol =
-        query.sortBy === "businessName"
-          ? sql`lower(${merchants.businessName})`
-          : sortColumnMap[query.sortBy] ?? merchants.createdAt;
-
-      // Apply the same transformation to the cursor value
-      const cursorSortValue: unknown =
-        query.sortBy === "businessName"
-          ? cursorRow.businessName.toLowerCase()
-          : cursorRow[query.sortBy];
-
-      if (query.sortOrder === "desc") {
-        conditions.push(
-          or(
-            lt(sortCol, cursorSortValue),
-            and(eq(sortCol, cursorSortValue), lt(merchants.id, cursorRow.id)),
-          )!,
-        );
-      } else {
-        conditions.push(
-          or(
-            gt(sortCol, cursorSortValue),
-            and(eq(sortCol, cursorSortValue), gt(merchants.id, cursorRow.id)),
-          )!,
-        );
-      }
-    }
-  }
-
   const orderFn = query.sortOrder === "desc" ? desc : asc;
   const sortCol = query.sortBy === "businessName"
     ? sql`lower(${merchants.businessName})`
     : sortColumnMap[query.sortBy] ?? merchants.createdAt;
+
+  const offset = (query.page - 1) * query.perPage;
 
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -371,23 +326,25 @@ export async function listMerchants(query: ListMerchantsQuery) {
         liveAt: merchants.liveAt,
       })
       .from(merchants)
-      .where(and(...conditions))
+      .where(where)
       .orderBy(orderFn(sortCol), orderFn(merchants.id))
-      .limit(query.limit + 1),
+      .limit(query.perPage)
+      .offset(offset),
     db
       .select({ count: count() })
       .from(merchants)
       .where(where),
   ]);
 
-  const hasMore = rows.length > query.limit;
-  const items = hasMore ? rows.slice(0, query.limit) : rows;
-  const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+  const totalCount = Number(totalRow?.count ?? 0);
+  const totalPages = Math.ceil(totalCount / query.perPage);
 
   return {
-    merchants: items,
-    nextCursor,
-    totalCount: totalRow?.count ?? 0,
+    merchants: rows,
+    page: query.page,
+    perPage: query.perPage,
+    totalCount,
+    totalPages,
   };
 }
 
