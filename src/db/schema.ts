@@ -7,6 +7,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  serial,
   text,
   timestamp,
   uuid,
@@ -66,6 +67,13 @@ export const documentStatusEnum = pgEnum("document_status", [
   "pending",
   "approved",
   "rejected",
+]);
+
+export const priorityEnum = pgEnum("priority", ["normal", "high"]);
+
+export const businessScopeEnum = pgEnum("business_scope", [
+  "local",
+  "international",
 ]);
 
 export const merchantDocumentTypeEnum = pgEnum("merchant_document_type", [
@@ -180,6 +188,7 @@ export const merchants = pgTable(
   "merchants",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    merchantNumber: serial("merchant_number").notNull().unique(),
     submitterEmail: varchar("submitter_email", { length: 255 }).notNull(),
     ownerFullName: varchar("owner_full_name", { length: 160 }).notNull(),
     ownerPhone: varchar("owner_phone", { length: 32 }).notNull(),
@@ -210,6 +219,11 @@ export const merchants = pgTable(
     onboardingStage: merchantStatusEnum("onboarding_stage")
       .default("form_submitted")
       .notNull(),
+    priority: priorityEnum("priority").default("normal").notNull(),
+    priorityNote: varchar("priority_note", { length: 500 }),
+    businessScope: businessScopeEnum("business_scope").default("local").notNull(),
+    currency: varchar("currency", { length: 8 }).default("PKR").notNull(),
+    liveAt: timestamp("live_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -220,6 +234,8 @@ export const merchants = pgTable(
     merchantsBusinessEmailIdx: index("merchants_business_email_idx").on(table.businessEmail),
     merchantsBusinessNameIdx: index("merchants_business_name_idx").on(table.businessName),
     merchantsStatusIdx: index("merchants_status_idx").on(table.status),
+    merchantsNumberIdx: index("merchants_number_idx").on(table.merchantNumber),
+    merchantsPriorityIdx: index("merchants_priority_idx").on(table.priority),
   }),
 );
 

@@ -1,12 +1,25 @@
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or } from "drizzle-orm";
+
 import { getDb } from "../../db/client";
 import { merchantDocuments, merchants } from "../../db/schema";
 import {
   GoogleDriveStorageProvider,
   type FileStorageProvider,
 } from "../../lib/storage/google-drive";
+import { AppError } from "../../lib/errors";
 import type {
+  BusinessScopeValue,
+  ListMerchantsQuery,
   MerchantDocumentType,
+  MerchantStatusValue,
   MerchantFormSubmission,
+  PriorityValue,
+  UpdatePriorityInput,
+} from "./merchants.schemas";
+import {
+  businessScopeValues,
+  merchantStatusValues,
+  priorityValues,
 } from "./merchants.schemas";
 
 type UploadedDocumentRecord = {
@@ -19,6 +32,20 @@ type UploadedDocumentRecord = {
   googleDriveDownloadLink: string | null;
   googleDriveFolderId: string;
 };
+
+const merchantStatusValueSet = new Set<string>(merchantStatusValues);
+const priorityValueSet = new Set<string>(priorityValues);
+const businessScopeValueSet = new Set<string>(businessScopeValues);
+
+function parseCsvValues<TValue extends string>(
+  rawValue: string,
+  allowedValues: ReadonlySet<string>,
+) {
+  return rawValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value): value is TValue => value.length > 0 && allowedValues.has(value));
+}
 
 function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
   return {
@@ -79,10 +106,11 @@ export async function createMerchantSubmission(
   try {
     const folder = await storage.createMerchantFolder(buildFolderName(merchantId, input.businessName));
     folderId = folder.folderId;
+    const uploadFolderId = folderId;
 
     const uploadedDocuments = await Promise.all(
       input.documents.map(async (document) => {
-        const upload = await storage.uploadFile(folderId, {
+        const upload = await storage.uploadFile(uploadFolderId, {
           fileName: buildDocumentFileName(document.documentType, document.file.name),
           mimeType: document.mimeType,
           file: document.file,
@@ -192,4 +220,228 @@ function buildDocumentFileName(documentType: MerchantDocumentType, originalName:
     : "";
 
   return `${documentType}${extension}`;
+}
+
+// ─── List / Update / Delete ─────────────────────────────────────────────────
+
+const sortColumnMap = {
+  merchantNumber: merchants.merchantNumber,
+  businessName: merchants.businessName,
+  onboardingStage: merchants.onboardingStage,
+  status: merchants.status,
+  priority: merchants.priority,
+  createdAt: merchants.createdAt,
+  businessScope: merchants.businessScope,
+} as const;
+
+export async function listMerchants(query: ListMerchantsQuery) {
+  const db = getDb();
+  const conditions = [isNull(merchants.deletedAt)];
+
+  if (query.search) {
+    const term = `%${query.search}%`;
+    const numericSearch = Number(query.search);
+    const searchConditions = [
+      ilike(merchants.businessName, term),
+      ilike(merchants.submitterEmail, term),
+    ];
+    if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
+      searchConditions.push(eq(merchants.merchantNumber, numericSearch));
+    }
+    conditions.push(or(...searchConditions)!);
+  }
+
+  if (query.onboardingStage) {
+    const stages = parseCsvValues<MerchantStatusValue>(
+      query.onboardingStage,
+      merchantStatusValueSet,
+    );
+    if (stages.length > 0) {
+      conditions.push(inArray(merchants.onboardingStage, stages));
+    }
+  }
+
+  if (query.priority) {
+    const priorities = parseCsvValues<PriorityValue>(query.priority, priorityValueSet);
+    if (priorities.length > 0) {
+      conditions.push(inArray(merchants.priority, priorities));
+    }
+  }
+
+  if (query.currency) {
+    const currencies = query.currency.split(",").filter(Boolean);
+    if (currencies.length > 0) {
+      conditions.push(
+        inArray(merchants.currency, currencies as [string, ...string[]]),
+      );
+    }
+  }
+
+  if (query.businessScope) {
+    const scopes = parseCsvValues<BusinessScopeValue>(
+      query.businessScope,
+      businessScopeValueSet,
+    );
+    if (scopes.length > 0) {
+      conditions.push(inArray(merchants.businessScope, scopes));
+    }
+  }
+
+  if (query.createdAtFrom) {
+    const fromDate = new Date(query.createdAtFrom);
+    if (!Number.isNaN(fromDate.getTime())) {
+      conditions.push(gt(merchants.createdAt, fromDate));
+    }
+  }
+
+  if (query.createdAtTo) {
+    const toDate = new Date(query.createdAtTo);
+    if (!Number.isNaN(toDate.getTime())) {
+      conditions.push(lt(merchants.createdAt, toDate));
+    }
+  }
+
+  const where = and(...conditions);
+
+  // Cursor pagination: fetch items after the cursor
+  if (query.cursor) {
+    const cursorRow = await db.query.merchants.findFirst({
+      where: eq(merchants.id, query.cursor),
+      columns: { createdAt: true, id: true },
+    });
+
+    if (cursorRow) {
+      const sortCol = sortColumnMap[query.sortBy] ?? merchants.createdAt;
+      const cursorSortValue = query.sortBy === "createdAt"
+        ? cursorRow.createdAt
+        : cursorRow.createdAt; // fallback for cursor ordering
+
+      if (query.sortOrder === "desc") {
+        conditions.push(
+          or(
+            lt(sortCol, cursorSortValue),
+            and(eq(sortCol, cursorSortValue), lt(merchants.id, cursorRow.id)),
+          )!,
+        );
+      } else {
+        conditions.push(
+          or(
+            gt(sortCol, cursorSortValue),
+            and(eq(sortCol, cursorSortValue), gt(merchants.id, cursorRow.id)),
+          )!,
+        );
+      }
+    }
+  }
+
+  const orderFn = query.sortOrder === "desc" ? desc : asc;
+  const sortCol = sortColumnMap[query.sortBy] ?? merchants.createdAt;
+
+  const [rows, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: merchants.id,
+        merchantNumber: merchants.merchantNumber,
+        businessName: merchants.businessName,
+        onboardingStage: merchants.onboardingStage,
+        status: merchants.status,
+        priority: merchants.priority,
+        priorityNote: merchants.priorityNote,
+        createdAt: merchants.createdAt,
+        currency: merchants.currency,
+        businessScope: merchants.businessScope,
+        liveAt: merchants.liveAt,
+      })
+      .from(merchants)
+      .where(and(...conditions))
+      .orderBy(orderFn(sortCol), orderFn(merchants.id))
+      .limit(query.limit + 1),
+    db
+      .select({ count: count() })
+      .from(merchants)
+      .where(where),
+  ]);
+
+  const hasMore = rows.length > query.limit;
+  const items = hasMore ? rows.slice(0, query.limit) : rows;
+  const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+
+  return {
+    merchants: items,
+    nextCursor,
+    totalCount: totalRow?.count ?? 0,
+  };
+}
+
+export async function updateMerchantPriority(
+  merchantId: string,
+  input: UpdatePriorityInput,
+) {
+  const db = getDb();
+
+  const [updated] = await db
+    .update(merchants)
+    .set({
+      priority: input.priority,
+      priorityNote: input.note,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+    .returning({
+      id: merchants.id,
+      priority: merchants.priority,
+      priorityNote: merchants.priorityNote,
+    });
+
+  if (!updated) {
+    throw new AppError(404, "Merchant not found.");
+  }
+
+  return updated;
+}
+
+export async function softDeleteMerchant(merchantId: string) {
+  const db = getDb();
+
+  const [deleted] = await db
+    .update(merchants)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+    .returning({ id: merchants.id });
+
+  if (!deleted) {
+    throw new AppError(404, "Merchant not found.");
+  }
+
+  return deleted;
+}
+
+export async function bulkSoftDeleteMerchants(ids: string[]) {
+  const db = getDb();
+
+  const result = await db
+    .update(merchants)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+    .returning({ id: merchants.id });
+
+  return { deletedCount: result.length };
+}
+
+export async function bulkUpdatePriority(
+  ids: string[],
+  priority: UpdatePriorityInput["priority"],
+) {
+  const db = getDb();
+
+  const result = await db
+    .update(merchants)
+    .set({
+      priority,
+      updatedAt: new Date(),
+    })
+    .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+    .returning({ id: merchants.id });
+
+  return { updatedCount: result.length };
 }

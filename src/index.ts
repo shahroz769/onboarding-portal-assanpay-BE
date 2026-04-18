@@ -8,6 +8,7 @@ import { refreshTokens } from "./db/schema";
 import { errorHandler } from "./middleware/error-handler";
 import { authRoutes } from "./modules/auth/auth.routes";
 import { merchantFormRoutes } from "./modules/merchants/form.routes";
+import { merchantRoutes } from "./modules/merchants/merchants.routes";
 import { userRoutes } from "./modules/users/users.routes";
 import type { AppEnv } from "./types/auth";
 
@@ -45,6 +46,7 @@ app.get("/health/db", async (c) => {
 
 app.route("/api/auth", authRoutes);
 app.route("/api/public", merchantFormRoutes);
+app.route("/api/merchants", merchantRoutes);
 app.route("/api/users", userRoutes);
 
 async function purgeExpiredRefreshTokens() {

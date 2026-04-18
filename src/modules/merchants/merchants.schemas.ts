@@ -405,3 +405,65 @@ function sanitizeText(value: string) {
 function toLower(value: string) {
   return value.toLowerCase();
 }
+
+// ─── List / Update / Delete Schemas ─────────────────────────────────────────
+
+export const merchantStatusValues = [
+  "form_submitted",
+  "documents_review",
+  "sub_merchant",
+  "agreement",
+  "testing",
+  "live",
+  "suspended",
+] as const;
+
+export const priorityValues = ["normal", "high"] as const;
+export const businessScopeValues = ["local", "international"] as const;
+export type MerchantStatusValue = (typeof merchantStatusValues)[number];
+export type PriorityValue = (typeof priorityValues)[number];
+export type BusinessScopeValue = (typeof businessScopeValues)[number];
+
+export const sortableColumns = [
+  "merchantNumber",
+  "businessName",
+  "onboardingStage",
+  "status",
+  "priority",
+  "createdAt",
+  "businessScope",
+] as const;
+
+export const listMerchantsQuerySchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
+  onboardingStage: z.string().optional(),
+  priority: z.string().optional(),
+  currency: z.string().optional(),
+  businessScope: z.string().optional(),
+  createdAtFrom: z.string().optional(),
+  createdAtTo: z.string().optional(),
+  sortBy: z.enum(sortableColumns).default("createdAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+});
+
+export type ListMerchantsQuery = z.infer<typeof listMerchantsQuerySchema>;
+
+export const updatePrioritySchema = z.object({
+  priority: z.enum(priorityValues),
+  note: z.string().trim().max(500).optional().transform((v) => v || null),
+});
+
+export type UpdatePriorityInput = z.infer<typeof updatePrioritySchema>;
+
+export const bulkIdsSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+});
+export type BulkIdsInput = z.infer<typeof bulkIdsSchema>;
+
+export const bulkPrioritySchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+  priority: z.enum(priorityValues),
+});
+export type BulkPriorityInput = z.infer<typeof bulkPrioritySchema>;
