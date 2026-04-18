@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
 import { merchantDocuments, merchants } from "../../db/schema";
@@ -307,14 +307,30 @@ export async function listMerchants(query: ListMerchantsQuery) {
   if (query.cursor) {
     const cursorRow = await db.query.merchants.findFirst({
       where: eq(merchants.id, query.cursor),
-      columns: { createdAt: true, id: true },
+      columns: {
+        id: true,
+        merchantNumber: true,
+        businessName: true,
+        onboardingStage: true,
+        status: true,
+        priority: true,
+        createdAt: true,
+        businessScope: true,
+      },
     });
 
     if (cursorRow) {
-      const sortCol = sortColumnMap[query.sortBy] ?? merchants.createdAt;
-      const cursorSortValue = query.sortBy === "createdAt"
-        ? cursorRow.createdAt
-        : cursorRow.createdAt; // fallback for cursor ordering
+      // Mirror the same sort expression used in ORDER BY below
+      const sortCol =
+        query.sortBy === "businessName"
+          ? sql`lower(${merchants.businessName})`
+          : sortColumnMap[query.sortBy] ?? merchants.createdAt;
+
+      // Apply the same transformation to the cursor value
+      const cursorSortValue: unknown =
+        query.sortBy === "businessName"
+          ? cursorRow.businessName.toLowerCase()
+          : cursorRow[query.sortBy];
 
       if (query.sortOrder === "desc") {
         conditions.push(
@@ -335,7 +351,9 @@ export async function listMerchants(query: ListMerchantsQuery) {
   }
 
   const orderFn = query.sortOrder === "desc" ? desc : asc;
-  const sortCol = sortColumnMap[query.sortBy] ?? merchants.createdAt;
+  const sortCol = query.sortBy === "businessName"
+    ? sql`lower(${merchants.businessName})`
+    : sortColumnMap[query.sortBy] ?? merchants.createdAt;
 
   const [rows, [totalRow]] = await Promise.all([
     db
