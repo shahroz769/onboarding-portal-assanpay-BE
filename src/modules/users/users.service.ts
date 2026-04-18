@@ -1,7 +1,7 @@
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
-import { users } from "../../db/schema";
+import { refreshTokens, users } from "../../db/schema";
 import { AppError } from "../../lib/errors";
 import type { RoleType, SessionUser } from "../../types/auth";
 import {
@@ -104,25 +104,51 @@ export async function updateUser(
     updateData.passwordHash = await Bun.password.hash(input.password);
   }
 
+  const needsSessionRevocation =
+    input.password ||
+    input.status === "inactive" ||
+    input.roleType ||
+    input.accessPolicyId !== undefined;
+
+  if (needsSessionRevocation) {
+    return getDb().transaction(async (tx) => {
+      const [updatedUser] = await tx
+        .update(users)
+        .set(updateData)
+        .where(eq(users.id, userId))
+        .returning();
+
+      await tx
+        .update(refreshTokens)
+        .set({ status: "revoked", revokedAt: new Date() })
+        .where(eq(refreshTokens.userId, userId));
+
+      await tx
+        .update(users)
+        .set({
+          sessionVersion: sql`${users.sessionVersion} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+
+      return sanitizeUser(updatedUser);
+    });
+  }
+
   const [updatedUser] = await getDb()
     .update(users)
     .set(updateData)
     .where(eq(users.id, userId))
     .returning();
 
-  if (
-    input.password ||
-    input.status === "inactive" ||
-    input.roleType ||
-    input.accessPolicyId !== undefined
-  ) {
-    await revokeAllUserSessions(userId);
-  }
-
   return sanitizeUser(updatedUser);
 }
 
 export async function deactivateUser(actor: SessionUser, userId: string) {
+  if (actor.userId === userId) {
+    throw new AppError(400, "You cannot delete your own account.");
+  }
+
   const existingUser = await getDb().query.users.findFirst({
     where: and(eq(users.id, userId), isNull(users.deletedAt)),
   });
@@ -131,17 +157,30 @@ export async function deactivateUser(actor: SessionUser, userId: string) {
     throw new AppError(404, "User not found.");
   }
 
-  const [updatedUser] = await getDb()
-    .update(users)
-    .set({
-      status: "inactive",
-      deletedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(users.id, userId))
-    .returning();
+  return getDb().transaction(async (tx) => {
+    const [updatedUser] = await tx
+      .update(users)
+      .set({
+        status: "inactive",
+        deletedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+      .returning();
 
-  await revokeAllUserSessions(userId);
+    await tx
+      .update(refreshTokens)
+      .set({ status: "revoked", revokedAt: new Date() })
+      .where(eq(refreshTokens.userId, userId));
 
-  return sanitizeUser(updatedUser);
+    await tx
+      .update(users)
+      .set({
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+
+    return sanitizeUser(updatedUser);
+  });
 }

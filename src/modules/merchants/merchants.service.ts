@@ -80,26 +80,26 @@ export async function createMerchantSubmission(
     const folder = await storage.createMerchantFolder(buildFolderName(merchantId, input.businessName));
     folderId = folder.folderId;
 
-    const uploadedDocuments: UploadedDocumentRecord[] = [];
+    const uploadedDocuments = await Promise.all(
+      input.documents.map(async (document) => {
+        const upload = await storage.uploadFile(folderId, {
+          fileName: buildDocumentFileName(document.documentType, document.file.name),
+          mimeType: document.mimeType,
+          file: document.file,
+        });
 
-    for (const document of input.documents) {
-      const upload = await storage.uploadFile(folderId, {
-        fileName: buildDocumentFileName(document.documentType, document.file.name),
-        mimeType: document.mimeType,
-        file: document.file,
-      });
-
-      uploadedDocuments.push({
-        documentType: document.documentType,
-        originalName: document.file.name,
-        mimeType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        googleDriveFileId: upload.fileId,
-        googleDriveWebViewLink: upload.webViewLink,
-        googleDriveDownloadLink: upload.downloadLink,
-        googleDriveFolderId: upload.folderId,
-      });
-    }
+        return {
+          documentType: document.documentType,
+          originalName: document.file.name,
+          mimeType: upload.mimeType,
+          sizeBytes: upload.sizeBytes,
+          googleDriveFileId: upload.fileId,
+          googleDriveWebViewLink: upload.webViewLink,
+          googleDriveDownloadLink: upload.downloadLink,
+          googleDriveFolderId: upload.folderId,
+        } satisfies UploadedDocumentRecord;
+      }),
+    );
 
     const result = await getDb().transaction(async (tx) => {
       const [createdMerchant] = await tx

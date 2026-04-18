@@ -1,6 +1,7 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { Hono } from "hono";
 import { csrf } from "hono/csrf";
+import { rateLimiter } from "hono-rate-limiter";
 
 import { env } from "../../config/env";
 import { zodValidator } from "../../lib/validators";
@@ -26,10 +27,23 @@ function getCookieOptions() {
   };
 }
 
+const authRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: "draft-6",
+  keyGenerator: (c) =>
+    c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown",
+  handler: (c) => c.json({ error: "Too many attempts. Please try again later." }, 429),
+});
+
 export const authRoutes = new Hono<AppEnv>();
 
+authRoutes.use("/login", csrf({ origin: env.CORS_ORIGIN }));
 authRoutes.use("/refresh", csrf({ origin: env.CORS_ORIGIN }));
 authRoutes.use("/logout", csrf({ origin: env.CORS_ORIGIN }));
+
+authRoutes.use("/login", authRateLimiter);
+authRoutes.use("/register-admin", authRateLimiter);
 
 authRoutes.post("/register-admin", zodValidator("json", registerAdminSchema), async (c) => {
   if (!env.ALLOW_ADMIN_REGISTRATION) {

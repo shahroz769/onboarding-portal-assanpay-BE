@@ -1,9 +1,10 @@
-import { sql } from "drizzle-orm";
+import { lt, or, eq, and, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { env } from "./config/env";
 import { getDb } from "./db/client";
+import { refreshTokens } from "./db/schema";
 import { errorHandler } from "./middleware/error-handler";
 import { authRoutes } from "./modules/auth/auth.routes";
 import { merchantFormRoutes } from "./modules/merchants/form.routes";
@@ -45,6 +46,34 @@ app.get("/health/db", async (c) => {
 app.route("/api/auth", authRoutes);
 app.route("/api/public", merchantFormRoutes);
 app.route("/api/users", userRoutes);
+
+async function purgeExpiredRefreshTokens() {
+  try {
+    const result = await getDb()
+      .delete(refreshTokens)
+      .where(
+        or(
+          lt(refreshTokens.expiresAt, new Date()),
+          and(
+            eq(refreshTokens.status, "revoked"),
+            lt(refreshTokens.revokedAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+          ),
+          and(
+            eq(refreshTokens.status, "rotated"),
+            lt(refreshTokens.revokedAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+          ),
+        ),
+      );
+
+    console.log(`[cleanup] Purged expired/revoked refresh tokens.`);
+  } catch (error) {
+    console.error("[cleanup] Failed to purge refresh tokens:", error);
+  }
+}
+
+// Run cleanup immediately on startup, then every 6 hours
+purgeExpiredRefreshTokens();
+setInterval(purgeExpiredRefreshTokens, 6 * 60 * 60 * 1000);
 
 export default {
   port: env.APP_PORT,

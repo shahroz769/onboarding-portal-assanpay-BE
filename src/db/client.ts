@@ -21,7 +21,7 @@ function getDatabaseUrl() {
 export function getQueryClient() {
   if (!client) {
     client = postgres(getDatabaseUrl(), {
-      max: 1,
+      max: 10,
     });
   }
 

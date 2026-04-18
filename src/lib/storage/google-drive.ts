@@ -52,6 +52,7 @@ export interface FileStorageProvider {
 
 let tokenCache: GoogleAccessToken | null = null;
 let credentialsCache: GoogleServiceAccountCredentials | null = null;
+let tokenPromise: Promise<string> | null = null;
 
 export class GoogleDriveStorageProvider implements FileStorageProvider {
   async createMerchantFolder(folderName: string) {
@@ -150,48 +151,60 @@ async function getGoogleAccessToken() {
     return tokenCache.accessToken;
   }
 
-  const credentials = await getGoogleDriveCredentials();
-  const clientEmail = credentials.client_email;
-  const privateKey = credentials.private_key.replace(/\\n/g, "\n");
-  const nowInSeconds = Math.floor(Date.now() / 1000);
-  const key = await importPKCS8(privateKey, "RS256");
-  const assertion = await new SignJWT({
-    scope: GOOGLE_DRIVE_SCOPE,
-  })
-    .setProtectedHeader({ alg: "RS256", typ: "JWT" })
-    .setIssuer(clientEmail)
-    .setSubject(clientEmail)
-    .setAudience(GOOGLE_TOKEN_URL)
-    .setIssuedAt(nowInSeconds)
-    .setExpirationTime(nowInSeconds + 3600)
-    .sign(key);
-
-  const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
-    }),
-  });
-
-  if (!tokenResponse.ok) {
-    throw await toStorageError(tokenResponse, "Failed to authenticate with Google Drive.");
+  if (tokenPromise) {
+    return tokenPromise;
   }
 
-  const tokenPayload = (await tokenResponse.json()) as {
-    access_token: string;
-    expires_in: number;
-  };
+  tokenPromise = (async () => {
+    const credentials = await getGoogleDriveCredentials();
+    const clientEmail = credentials.client_email;
+    const privateKey = credentials.private_key.replace(/\\n/g, "\n");
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    const key = await importPKCS8(privateKey, "RS256");
+    const assertion = await new SignJWT({
+      scope: GOOGLE_DRIVE_SCOPE,
+    })
+      .setProtectedHeader({ alg: "RS256", typ: "JWT" })
+      .setIssuer(clientEmail)
+      .setSubject(clientEmail)
+      .setAudience(GOOGLE_TOKEN_URL)
+      .setIssuedAt(nowInSeconds)
+      .setExpirationTime(nowInSeconds + 3600)
+      .sign(key);
 
-  tokenCache = {
-    accessToken: tokenPayload.access_token,
-    expiresAt: Date.now() + tokenPayload.expires_in * 1000,
-  };
+    const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }),
+    });
 
-  return tokenCache.accessToken;
+    if (!tokenResponse.ok) {
+      throw await toStorageError(tokenResponse, "Failed to authenticate with Google Drive.");
+    }
+
+    const tokenPayload = (await tokenResponse.json()) as {
+      access_token: string;
+      expires_in: number;
+    };
+
+    tokenCache = {
+      accessToken: tokenPayload.access_token,
+      expiresAt: Date.now() + tokenPayload.expires_in * 1000,
+    };
+
+    return tokenCache.accessToken;
+  })();
+
+  try {
+    return await tokenPromise;
+  } finally {
+    tokenPromise = null;
+  }
 }
 
 async function toStorageError(
