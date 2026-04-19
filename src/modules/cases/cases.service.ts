@@ -10,11 +10,17 @@ import {
   lt,
   or,
   sql,
-} from "drizzle-orm";
+} from 'drizzle-orm'
 
-import { getDb } from "../../db/client";
-import { cases, merchants, queues, queueCaseSequences, users } from "../../db/schema";
-import { AppError } from "../../lib/errors";
+import { getDb } from '../../db/client'
+import {
+  cases,
+  merchants,
+  queues,
+  queueCaseSequences,
+  users,
+} from '../../db/schema'
+import { AppError } from '../../lib/errors'
 import {
   caseStatusValues,
   isValidStatusTransition,
@@ -22,34 +28,36 @@ import {
   type CreateCaseInput,
   type ListCasesQuery,
   type UpdateCaseStatusInput,
-} from "./cases.schemas";
+} from './cases.schemas'
 
-const caseStatusValueSet = new Set<string>(caseStatusValues);
+const caseStatusValueSet = new Set<string>(caseStatusValues)
 
 function parseCsvValues<TValue extends string>(
   rawValue: string,
   allowedValues: ReadonlySet<string>,
 ) {
   return rawValue
-    .split(",")
+    .split(',')
     .map((value) => value.trim())
-    .filter((value): value is TValue => value.length > 0 && allowedValues.has(value));
+    .filter(
+      (value): value is TValue => value.length > 0 && allowedValues.has(value),
+    )
 }
 
 // ─── Case Number Generation ─────────────────────────────────────────────────
 
 async function generateCaseNumber(
-  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0],
   queueId: string,
 ): Promise<string> {
   // Get queue prefix
   const queue = await tx.query.queues.findFirst({
     where: eq(queues.id, queueId),
     columns: { prefix: true },
-  });
+  })
 
   if (!queue) {
-    throw new AppError(404, "Queue not found.");
+    throw new AppError(404, 'Queue not found.')
   }
 
   // Atomically increment the sequence counter
@@ -59,43 +67,46 @@ async function generateCaseNumber(
       lastNumber: sql`${queueCaseSequences.lastNumber} + 1`,
     })
     .where(eq(queueCaseSequences.queueId, queueId))
-    .returning({ lastNumber: queueCaseSequences.lastNumber });
+    .returning({ lastNumber: queueCaseSequences.lastNumber })
 
   if (!updated) {
-    throw new AppError(500, "Failed to generate case number. Queue sequence not found.");
+    throw new AppError(
+      500,
+      'Failed to generate case number. Queue sequence not found.',
+    )
   }
 
-  const paddedNumber = String(updated.lastNumber).padStart(9, "0");
-  return `${queue.prefix}-${paddedNumber}`;
+  const paddedNumber = String(updated.lastNumber).padStart(9, '0')
+  return `${queue.prefix}-${paddedNumber}`
 }
 
 // ─── Create Case ────────────────────────────────────────────────────────────
 
 export async function createCase(input: CreateCaseInput) {
-  const db = getDb();
+  const db = getDb()
 
   return db.transaction(async (tx) => {
     // Verify merchant exists
     const merchant = await tx.query.merchants.findFirst({
       where: eq(merchants.id, input.merchantId),
       columns: { id: true, businessName: true, priority: true },
-    });
+    })
 
     if (!merchant) {
-      throw new AppError(404, "Merchant not found.");
+      throw new AppError(404, 'Merchant not found.')
     }
 
     // Verify queue exists
     const queue = await tx.query.queues.findFirst({
       where: eq(queues.id, input.queueId),
       columns: { id: true, name: true },
-    });
+    })
 
     if (!queue) {
-      throw new AppError(404, "Queue not found.");
+      throw new AppError(404, 'Queue not found.')
     }
 
-    const caseNumber = await generateCaseNumber(tx, input.queueId);
+    const caseNumber = await generateCaseNumber(tx, input.queueId)
 
     const [created] = await tx
       .insert(cases)
@@ -104,14 +115,14 @@ export async function createCase(input: CreateCaseInput) {
         queueId: input.queueId,
         merchantId: input.merchantId,
         ownerId: null,
-        status: "new",
+        status: 'new',
         priority: merchant.priority,
         updatedAt: new Date(),
       })
-      .returning();
+      .returning()
 
     if (!created) {
-      throw new AppError(500, "Failed to create case.");
+      throw new AppError(500, 'Failed to create case.')
     }
 
     return {
@@ -128,59 +139,62 @@ export async function createCase(input: CreateCaseInput) {
       closedAt: created.closedAt,
       createdAt: created.createdAt,
       updatedAt: created.updatedAt,
-    };
-  });
+    }
+  })
 }
 
 // ─── List Cases ─────────────────────────────────────────────────────────────
 
 export async function listCases(query: ListCasesQuery) {
-  const db = getDb();
-  const conditions = [];
+  const db = getDb()
+  const conditions = []
 
   if (query.search) {
-    const term = `%${query.search}%`;
+    const term = `%${query.search}%`
     conditions.push(
-      or(
-        ilike(cases.caseNumber, term),
-        ilike(merchants.businessName, term),
-      )!,
-    );
+      or(ilike(cases.caseNumber, term), ilike(merchants.businessName, term))!,
+    )
   }
 
   if (query.queueId) {
-    conditions.push(eq(cases.queueId, query.queueId));
+    conditions.push(eq(cases.queueId, query.queueId))
   }
 
   if (query.ownerId) {
-    const ownerIds = query.ownerId.split(",").map((id) => id.trim()).filter(Boolean);
+    const ownerIds = query.ownerId
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
     if (ownerIds.length > 0) {
-      conditions.push(inArray(cases.ownerId, ownerIds));
+      conditions.push(inArray(cases.ownerId, ownerIds))
     }
   }
 
   if (query.status) {
-    const statuses = parseCsvValues<CaseStatusValue>(query.status, caseStatusValueSet);
+    const statuses = parseCsvValues<CaseStatusValue>(
+      query.status,
+      caseStatusValueSet,
+    )
     if (statuses.length > 0) {
-      conditions.push(inArray(cases.status, statuses));
+      conditions.push(inArray(cases.status, statuses))
     }
   }
 
   if (query.createdAtFrom) {
-    const fromDate = new Date(query.createdAtFrom);
+    const fromDate = new Date(query.createdAtFrom)
     if (!Number.isNaN(fromDate.getTime())) {
-      conditions.push(gt(cases.createdAt, fromDate));
+      conditions.push(gt(cases.createdAt, fromDate))
     }
   }
 
   if (query.createdAtTo) {
-    const toDate = new Date(query.createdAtTo);
+    const toDate = new Date(query.createdAtTo)
     if (!Number.isNaN(toDate.getTime())) {
-      conditions.push(lt(cases.createdAt, toDate));
+      conditions.push(lt(cases.createdAt, toDate))
     }
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = conditions.length > 0 ? and(...conditions) : undefined
 
   const sortColumnMap = {
     caseNumber: cases.caseNumber,
@@ -189,12 +203,12 @@ export async function listCases(query: ListCasesQuery) {
     closedAt: cases.closedAt,
     updatedAt: cases.updatedAt,
     merchantName: sql`lower(${merchants.businessName})`,
-  } as const;
+  } as const
 
-  const orderFn = query.sortOrder === "desc" ? desc : asc;
-  const sortCol = sortColumnMap[query.sortBy] ?? cases.createdAt;
+  const orderFn = query.sortOrder === 'desc' ? desc : asc
+  const sortCol = sortColumnMap[query.sortBy] ?? cases.createdAt
 
-  const offset = (query.page - 1) * query.perPage;
+  const offset = (query.page - 1) * query.perPage
 
   const [rows, [totalRow]] = await Promise.all([
     db
@@ -228,10 +242,10 @@ export async function listCases(query: ListCasesQuery) {
       .innerJoin(queues, eq(cases.queueId, queues.id))
       .leftJoin(users, eq(cases.ownerId, users.id))
       .where(where),
-  ]);
+  ])
 
-  const totalCount = Number(totalRow?.count ?? 0);
-  const totalPages = Math.ceil(totalCount / query.perPage);
+  const totalCount = Number(totalRow?.count ?? 0)
+  const totalPages = Math.ceil(totalCount / query.perPage)
 
   return {
     cases: rows,
@@ -239,13 +253,13 @@ export async function listCases(query: ListCasesQuery) {
     perPage: query.perPage,
     totalCount,
     totalPages,
-  };
+  }
 }
 
 // ─── List Case Owners ───────────────────────────────────────────────────────
 
 export async function listCaseOwners() {
-  const db = getDb();
+  const db = getDb()
 
   const rows = await db
     .selectDistinct({
@@ -253,37 +267,51 @@ export async function listCaseOwners() {
       name: users.name,
     })
     .from(cases)
-    .innerJoin(users, eq(cases.ownerId, users.id));
+    .innerJoin(users, eq(cases.ownerId, users.id))
 
-  return rows;
+  return rows
 }
 
 // ─── Bulk Assign Cases ──────────────────────────────────────────────────────
 
-export async function bulkAssignCases(caseIds: string[], ownerId: string | null) {
-  const db = getDb();
+export async function bulkAssignCases(
+  caseIds: string[],
+  ownerId: string | null,
+) {
+  const db = getDb()
+  const uniqueCaseIds = Array.from(new Set(caseIds))
 
   // Verify owner exists if provided
   if (ownerId) {
     const owner = await db.query.users.findFirst({
       where: eq(users.id, ownerId),
       columns: { id: true },
-    });
+    })
 
     if (!owner) {
-      throw new AppError(404, "User not found.");
+      throw new AppError(404, 'User not found.')
     }
   }
 
-  await db
+  const existingCases = await db
+    .select({ id: cases.id })
+    .from(cases)
+    .where(inArray(cases.id, uniqueCaseIds))
+
+  if (existingCases.length !== uniqueCaseIds.length) {
+    throw new AppError(404, 'One or more cases were not found.')
+  }
+
+  const updatedCases = await db
     .update(cases)
     .set({
       ownerId,
       updatedAt: new Date(),
     })
-    .where(inArray(cases.id, caseIds));
+    .where(inArray(cases.id, uniqueCaseIds))
+    .returning({ id: cases.id })
 
-  return { updated: caseIds.length };
+  return { updated: updatedCases.length }
 }
 
 // ─── Update Case Status ─────────────────────────────────────────────────────
@@ -292,39 +320,39 @@ export async function updateCaseStatus(
   caseId: string,
   input: UpdateCaseStatusInput,
 ) {
-  const db = getDb();
+  const db = getDb()
 
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
     columns: { id: true, status: true },
-  });
+  })
 
   if (!existing) {
-    throw new AppError(404, "Case not found.");
+    throw new AppError(404, 'Case not found.')
   }
 
-  const currentStatus = existing.status as CaseStatusValue;
+  const currentStatus = existing.status as CaseStatusValue
 
   if (!isValidStatusTransition(currentStatus, input.status)) {
     throw new AppError(
       400,
       `Invalid status transition from "${currentStatus}" to "${input.status}".`,
-    );
+    )
   }
 
   const updateData: Record<string, unknown> = {
     status: input.status,
     updatedAt: new Date(),
-  };
+  }
 
   // Auto-set closedAt when transitioning to closed
-  if (input.status === "closed") {
-    updateData.closedAt = new Date();
+  if (input.status === 'closed') {
+    updateData.closedAt = new Date()
   }
 
   // Clear closedAt when re-opening from closed
-  if (currentStatus === "closed" && input.status !== "closed") {
-    updateData.closedAt = null;
+  if (currentStatus === 'closed' && input.status !== 'closed') {
+    updateData.closedAt = null
   }
 
   const [updated] = await db
@@ -336,28 +364,28 @@ export async function updateCaseStatus(
       status: cases.status,
       closedAt: cases.closedAt,
       updatedAt: cases.updatedAt,
-    });
+    })
 
   if (!updated) {
-    throw new AppError(500, "Failed to update case status.");
+    throw new AppError(500, 'Failed to update case status.')
   }
 
-  return updated;
+  return updated
 }
 
 // ─── Assign Case ────────────────────────────────────────────────────────────
 
 export async function assignCase(caseId: string, ownerId: string | null) {
-  const db = getDb();
+  const db = getDb()
 
   // Verify case exists
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
     columns: { id: true },
-  });
+  })
 
   if (!existing) {
-    throw new AppError(404, "Case not found.");
+    throw new AppError(404, 'Case not found.')
   }
 
   // Verify owner exists if provided
@@ -365,10 +393,10 @@ export async function assignCase(caseId: string, ownerId: string | null) {
     const owner = await db.query.users.findFirst({
       where: eq(users.id, ownerId),
       columns: { id: true },
-    });
+    })
 
     if (!owner) {
-      throw new AppError(404, "User not found.");
+      throw new AppError(404, 'User not found.')
     }
   }
 
@@ -383,55 +411,59 @@ export async function assignCase(caseId: string, ownerId: string | null) {
       id: cases.id,
       ownerId: cases.ownerId,
       updatedAt: cases.updatedAt,
-    });
+    })
 
   if (!updated) {
-    throw new AppError(500, "Failed to assign case.");
+    throw new AppError(500, 'Failed to assign case.')
   }
 
-  return updated;
+  return updated
 }
 
 // ─── Update Case Priority ────────────────────────────────────────────────────
 
 export async function updateCasePriority(
   caseId: string,
-  priority: "normal" | "high",
+  priority: 'normal' | 'high',
 ) {
-  const db = getDb();
+  const db = getDb()
 
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
     columns: { id: true },
-  });
+  })
 
   if (!existing) {
-    throw new AppError(404, "Case not found.");
+    throw new AppError(404, 'Case not found.')
   }
 
   const [updated] = await db
     .update(cases)
     .set({ priority, updatedAt: new Date() })
     .where(eq(cases.id, caseId))
-    .returning({ id: cases.id, priority: cases.priority, updatedAt: cases.updatedAt });
+    .returning({
+      id: cases.id,
+      priority: cases.priority,
+      updatedAt: cases.updatedAt,
+    })
 
   if (!updated) {
-    throw new AppError(500, "Failed to update case priority.");
+    throw new AppError(500, 'Failed to update case priority.')
   }
 
-  return updated;
+  return updated
 }
 
 // ─── Cascade Merchant Priority to Cases ──────────────────────────────────────
 
 export async function cascadeMerchantPriority(
   merchantId: string,
-  priority: "normal" | "high",
+  priority: 'normal' | 'high',
 ) {
-  const db = getDb();
+  const db = getDb()
 
   await db
     .update(cases)
     .set({ priority, updatedAt: new Date() })
-    .where(eq(cases.merchantId, merchantId));
+    .where(eq(cases.merchantId, merchantId))
 }
