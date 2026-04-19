@@ -1,12 +1,13 @@
 import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
-import { merchantDocuments, merchants } from "../../db/schema";
+import { cases, merchantDocuments, merchants, queues, queueCaseSequences } from "../../db/schema";
 import {
   GoogleDriveStorageProvider,
   type FileStorageProvider,
 } from "../../lib/storage/google-drive";
 import { AppError } from "../../lib/errors";
+import { cascadeMerchantPriority } from "../cases/cases.service";
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -183,9 +184,42 @@ export async function createMerchantSubmission(
             .returning()
         : [];
 
+      // Auto-create Documents Review case
+      const docReviewQueue = await tx.query.queues.findFirst({
+        where: eq(queues.slug, "documents-review"),
+        columns: { id: true, prefix: true },
+      });
+
+      let createdCase = null;
+      if (docReviewQueue) {
+        const [seqRow] = await tx
+          .update(queueCaseSequences)
+          .set({
+            lastNumber: sql`${queueCaseSequences.lastNumber} + 1`,
+          })
+          .where(eq(queueCaseSequences.queueId, docReviewQueue.id))
+          .returning({ lastNumber: queueCaseSequences.lastNumber });
+
+        if (seqRow) {
+          const caseNumber = `${docReviewQueue.prefix}-${String(seqRow.lastNumber).padStart(9, "0")}`;
+          [createdCase] = await tx
+            .insert(cases)
+            .values({
+              caseNumber,
+              queueId: docReviewQueue.id,
+              merchantId,
+              ownerId: null,
+              status: "new",
+              updatedAt: new Date(),
+            })
+            .returning();
+        }
+      }
+
       return {
         merchant: createdMerchant,
         documents: createdDocuments,
+        case: createdCase,
       };
     });
 
@@ -372,6 +406,9 @@ export async function updateMerchantPriority(
     throw new AppError(404, "Merchant not found.");
   }
 
+  // Cascade priority to all cases for this merchant
+  await cascadeMerchantPriority(merchantId, input.priority);
+
   return updated;
 }
 
@@ -417,6 +454,9 @@ export async function bulkUpdatePriority(
     })
     .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
     .returning({ id: merchants.id });
+
+  // Cascade priority to all cases for each merchant
+  await Promise.all(ids.map((id) => cascadeMerchantPriority(id, priority)));
 
   return { updatedCount: result.length };
 }

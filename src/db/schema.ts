@@ -136,10 +136,19 @@ export const users = pgTable(
   }),
 );
 
+export const caseStatusEnum = pgEnum("case_status", [
+  "new",
+  "working",
+  "pending",
+  "qc",
+  "closed",
+]);
+
 export const queues = pgTable("queues", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: varchar("name", { length: 120 }).notNull().unique(),
   slug: varchar("slug", { length: 120 }).notNull().unique(),
+  prefix: varchar("prefix", { length: 4 }).notNull().unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -266,9 +275,47 @@ export const merchantDocuments = pgTable(
   }),
 );
 
+export const queueCaseSequences = pgTable("queue_case_sequences", {
+  queueId: uuid("queue_id")
+    .primaryKey()
+    .references(() => queues.id, { onDelete: "cascade" }),
+  lastNumber: integer("last_number").default(0).notNull(),
+});
+
+export const cases = pgTable(
+  "cases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseNumber: varchar("case_number", { length: 20 }).notNull().unique(),
+    queueId: uuid("queue_id")
+      .notNull()
+      .references(() => queues.id, { onDelete: "restrict" }),
+    merchantId: uuid("merchant_id")
+      .notNull()
+      .references(() => merchants.id, { onDelete: "cascade" }),
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    status: caseStatusEnum("status").default("new").notNull(),
+    priority: priorityEnum("priority").default("normal").notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    casesQueueIdIdx: index("cases_queue_id_idx").on(table.queueId),
+    casesMerchantIdIdx: index("cases_merchant_id_idx").on(table.merchantId),
+    casesStatusIdx: index("cases_status_idx").on(table.status),
+    casesCaseNumberIdx: index("cases_case_number_idx").on(table.caseNumber),
+    casesOwnerIdIdx: index("cases_owner_id_idx").on(table.ownerId),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Merchant = typeof merchants.$inferSelect;
 export type NewMerchant = typeof merchants.$inferInsert;
 export type MerchantDocument = typeof merchantDocuments.$inferSelect;
 export type NewMerchantDocument = typeof merchantDocuments.$inferInsert;
+export type Case = typeof cases.$inferSelect;
+export type NewCase = typeof cases.$inferInsert;
+export type Queue = typeof queues.$inferSelect;
+export type NewQueue = typeof queues.$inferInsert;
