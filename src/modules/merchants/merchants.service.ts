@@ -1,13 +1,20 @@
 import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
-import { cases, merchantDocuments, merchants, queues, queueCaseSequences } from "../../db/schema";
+import {
+  cases,
+  merchantDocuments,
+  merchants,
+  queues,
+  queueCaseSequences,
+} from "../../db/schema";
 import {
   GoogleDriveStorageProvider,
   type FileStorageProvider,
 } from "../../lib/storage/google-drive";
 import { AppError } from "../../lib/errors";
 import { cascadeMerchantPriority } from "../cases/cases.service";
+import { ensureQueueStages } from "../queues/queue-stage-defaults";
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -192,6 +199,17 @@ export async function createMerchantSubmission(
 
       let createdCase = null;
       if (docReviewQueue) {
+        const stages = await ensureQueueStages(tx, {
+          id: docReviewQueue.id,
+          name: "Documents Review",
+          qcEnabled: false,
+        });
+        const initialStage = stages[0];
+
+        if (!initialStage) {
+          throw new AppError(500, "No initial stage configured for documents review queue.");
+        }
+
         const [seqRow] = await tx
           .update(queueCaseSequences)
           .set({
@@ -209,6 +227,7 @@ export async function createMerchantSubmission(
               queueId: docReviewQueue.id,
               merchantId,
               ownerId: null,
+              currentStageId: initialStage.id,
               status: "new",
               updatedAt: new Date(),
             })

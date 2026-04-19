@@ -1,1 +1,0 @@
-ALTER TABLE "cases" ADD COLUMN "priority" "priority" DEFAULT 'normal' NOT NULL;

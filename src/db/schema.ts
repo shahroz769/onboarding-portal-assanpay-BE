@@ -3,6 +3,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -10,6 +11,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -141,6 +143,7 @@ export const caseStatusEnum = pgEnum("case_status", [
   "working",
   "pending",
   "qc",
+  "error",
   "closed",
 ]);
 
@@ -149,8 +152,43 @@ export const queues = pgTable("queues", {
   name: varchar("name", { length: 120 }).notNull().unique(),
   slug: varchar("slug", { length: 120 }).notNull().unique(),
   prefix: varchar("prefix", { length: 4 }).notNull().unique(),
+  qcEnabled: boolean("qc_enabled").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const stageCategoryEnum = pgEnum("stage_category", [
+  "new",
+  "in_progress",
+  "qc",
+  "error",
+  "closed",
+]);
+
+export const queueStages = pgTable(
+  "queue_stages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    queueId: uuid("queue_id")
+      .notNull()
+      .references(() => queues.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    slug: varchar("slug", { length: 120 }).notNull(),
+    order: integer("order").notNull(),
+    category: stageCategoryEnum("category").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    queueStagesQueueIdIdx: index("queue_stages_queue_id_idx").on(table.queueId),
+    queueStagesQueueSlugUniq: uniqueIndex("queue_stages_queue_slug_uniq").on(
+      table.queueId,
+      table.slug,
+    ),
+    queueStagesQueueOrderUniq: uniqueIndex("queue_stages_queue_order_uniq").on(
+      table.queueId,
+      table.order,
+    ),
+  }),
+);
 
 export const policyQueues = pgTable(
   "policy_queues",
@@ -282,6 +320,11 @@ export const queueCaseSequences = pgTable("queue_case_sequences", {
   lastNumber: integer("last_number").default(0).notNull(),
 });
 
+export const caseCloseOutcomeEnum = pgEnum("case_close_outcome", [
+  "successful",
+  "unsuccessful",
+]);
+
 export const cases = pgTable(
   "cases",
   {
@@ -294,8 +337,13 @@ export const cases = pgTable(
       .notNull()
       .references(() => merchants.id, { onDelete: "cascade" }),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    currentStageId: uuid("current_stage_id").references(() => queueStages.id, {
+      onDelete: "set null",
+    }),
     status: caseStatusEnum("status").default("new").notNull(),
     priority: priorityEnum("priority").default("normal").notNull(),
+    closeOutcome: caseCloseOutcomeEnum("close_outcome"),
+    closeReason: text("close_reason"),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -306,6 +354,82 @@ export const cases = pgTable(
     casesStatusIdx: index("cases_status_idx").on(table.status),
     casesCaseNumberIdx: index("cases_case_number_idx").on(table.caseNumber),
     casesOwnerIdIdx: index("cases_owner_id_idx").on(table.ownerId),
+    casesCurrentStageIdIdx: index("cases_current_stage_id_idx").on(table.currentStageId),
+  }),
+);
+
+export const fieldReviewStatusEnum = pgEnum("field_review_status", [
+  "pending",
+  "approved",
+  "rejected",
+]);
+
+export const caseFieldReviews = pgTable(
+  "case_field_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseId: uuid("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    fieldName: varchar("field_name", { length: 120 }).notNull(),
+    status: fieldReviewStatusEnum("status").default("pending").notNull(),
+    remarks: text("remarks"),
+    reviewedBy: uuid("reviewed_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    caseFieldReviewsCaseIdIdx: index("case_field_reviews_case_id_idx").on(table.caseId),
+    caseFieldReviewsReviewedByIdx: index("case_field_reviews_reviewed_by_idx").on(
+      table.reviewedBy,
+    ),
+    caseFieldReviewsCaseFieldUniq: uniqueIndex("case_field_reviews_case_field_uniq").on(
+      table.caseId,
+      table.fieldName,
+    ),
+  }),
+);
+
+export const caseComments = pgTable(
+  "case_comments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseId: uuid("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    content: text("content").notNull(),
+    parentId: uuid("parent_id"),
+    mentions: text("mentions").array(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    caseCommentsCaseIdIdx: index("case_comments_case_id_idx").on(table.caseId),
+    caseCommentsAuthorIdIdx: index("case_comments_author_id_idx").on(table.authorId),
+    caseCommentsParentIdIdx: index("case_comments_parent_id_idx").on(table.parentId),
+  }),
+);
+
+export const caseHistory = pgTable(
+  "case_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseId: uuid("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    action: varchar("action", { length: 64 }).notNull(),
+    details: jsonb("details"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    caseHistoryCaseIdIdx: index("case_history_case_id_idx").on(table.caseId),
+    caseHistoryCreatedAtIdx: index("case_history_created_at_idx").on(table.createdAt),
   }),
 );
 
@@ -319,3 +443,11 @@ export type Case = typeof cases.$inferSelect;
 export type NewCase = typeof cases.$inferInsert;
 export type Queue = typeof queues.$inferSelect;
 export type NewQueue = typeof queues.$inferInsert;
+export type QueueStage = typeof queueStages.$inferSelect;
+export type NewQueueStage = typeof queueStages.$inferInsert;
+export type CaseFieldReview = typeof caseFieldReviews.$inferSelect;
+export type NewCaseFieldReview = typeof caseFieldReviews.$inferInsert;
+export type CaseComment = typeof caseComments.$inferSelect;
+export type NewCaseComment = typeof caseComments.$inferInsert;
+export type CaseHistory = typeof caseHistory.$inferSelect;
+export type NewCaseHistory = typeof caseHistory.$inferInsert;

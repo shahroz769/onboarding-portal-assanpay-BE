@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const caseStatusValues = ["new", "working", "pending", "qc", "closed"] as const;
+export const caseStatusValues = ["new", "working", "pending", "qc", "error", "closed"] as const;
 export type CaseStatusValue = (typeof caseStatusValues)[number];
 
 // Ordered index for transition validation
@@ -9,7 +9,8 @@ const statusOrder: Record<CaseStatusValue, number> = {
   working: 1,
   pending: 2,
   qc: 3,
-  closed: 4,
+  error: 4,
+  closed: 5,
 };
 
 /**
@@ -94,3 +95,74 @@ export const listCasesQuerySchema = z.object({
 });
 
 export type ListCasesQuery = z.infer<typeof listCasesQuerySchema>;
+
+// ─── Stage-based Schemas ────────────────────────────────────────────────────
+
+export const stageCategoryValues = ["new", "in_progress", "qc", "error", "closed"] as const;
+export type StageCategoryValue = (typeof stageCategoryValues)[number];
+
+/**
+ * Maps stage category to the legacy status column for backward compat.
+ */
+export function categoryToStatus(category: StageCategoryValue): CaseStatusValue {
+  switch (category) {
+    case "new":
+      return "new";
+    case "in_progress":
+      return "working";
+    case "qc":
+      return "qc";
+    case "error":
+      return "error";
+    case "closed":
+      return "closed";
+  }
+}
+
+// ─── Field Review Schemas ───────────────────────────────────────────────────
+
+export const fieldReviewStatusValues = ["pending", "approved", "rejected"] as const;
+export type FieldReviewStatusValue = (typeof fieldReviewStatusValues)[number];
+
+export const fieldReviewItemSchema = z.object({
+  fieldName: z.string().min(1).max(120),
+  status: z.enum(fieldReviewStatusValues),
+  remarks: z.string().max(2000).optional(),
+});
+
+export const saveFieldReviewsSchema = z
+  .object({
+    reviews: z.array(fieldReviewItemSchema).min(1).max(200),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      data.reviews.every(
+        (r) => r.status !== "rejected" || (r.remarks && r.remarks.trim().length > 0),
+      ),
+    { message: "Remarks are required for rejected fields." },
+  );
+
+export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>;
+
+// ─── Close Unsuccessful Schema ──────────────────────────────────────────────
+
+export const closeUnsuccessfulSchema = z
+  .object({
+    reason: z.string().min(1).max(2000),
+  })
+  .strict();
+
+export type CloseUnsuccessfulInput = z.infer<typeof closeUnsuccessfulSchema>;
+
+// ─── Comment Schemas ────────────────────────────────────────────────────────
+
+export const createCommentSchema = z
+  .object({
+    content: z.string().min(1).max(5000),
+    parentId: z.string().uuid().optional(),
+    mentions: z.array(z.string().uuid()).max(20).optional(),
+  })
+  .strict();
+
+export type CreateCommentInput = z.infer<typeof createCommentSchema>;

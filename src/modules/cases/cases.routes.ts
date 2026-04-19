@@ -7,23 +7,37 @@ import type { AppEnv } from "../../types/auth";
 import {
   assignCaseSchema,
   bulkAssignCaseSchema,
+  closeUnsuccessfulSchema,
   createCaseSchema,
+  createCommentSchema,
   listCasesQuerySchema,
+  saveFieldReviewsSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
   type AssignCaseInput,
   type BulkAssignCaseInput,
+  type CloseUnsuccessfulInput,
   type CreateCaseInput,
+  type CreateCommentInput,
   type ListCasesQuery,
+  type SaveFieldReviewsInput,
   type UpdateCasePriorityInput,
   type UpdateCaseStatusInput,
 } from "./cases.schemas";
 import {
+  advanceStage,
   assignCase,
   bulkAssignCases,
+  closeUnsuccessful,
   createCase,
+  createCaseComment,
+  getCaseDetail,
+  listCaseComments,
+  listCaseHistory,
   listCaseOwners,
   listCases,
+  saveFieldReviews,
+  takeOwnership,
   updateCasePriority,
   updateCaseStatus,
 } from "./cases.service";
@@ -68,8 +82,9 @@ caseRoutes.post(
   requireRoles("admin", "supervisor"),
   zodValidator("json", bulkAssignCaseSchema),
   async (c) => {
+    const auth = c.get("auth");
     const input = c.req.valid("json" as never) as BulkAssignCaseInput;
-    const result = await bulkAssignCases(input.ids, input.ownerId);
+    const result = await bulkAssignCases(input.ids, input.ownerId, auth.userId);
     return c.json(result);
   },
 );
@@ -93,9 +108,10 @@ caseRoutes.patch(
   requireRoles("admin", "supervisor"),
   zodValidator("json", assignCaseSchema),
   async (c) => {
+    const auth = c.get("auth");
     const id = c.req.param("id");
     const input = c.req.valid("json" as never) as AssignCaseInput;
-    const result = await assignCase(id, input.ownerId);
+    const result = await assignCase(id, input.ownerId, auth.userId);
     return c.json(result);
   },
 );
@@ -112,3 +128,79 @@ caseRoutes.patch(
     return c.json(result);
   },
 );
+
+// GET /api/cases/:id — Get case detail (all authenticated)
+caseRoutes.get("/:id", async (c) => {
+  const id = c.req.param("id");
+  const result = await getCaseDetail(id);
+  return c.json(result);
+});
+
+// PATCH /api/cases/:id/take-ownership — Take ownership of a case
+caseRoutes.patch("/:id/take-ownership", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const result = await takeOwnership(id, auth.userId);
+  return c.json(result);
+});
+
+// PATCH /api/cases/:id/advance-stage — Advance case to next stage
+caseRoutes.patch("/:id/advance-stage", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const result = await advanceStage(id, auth.userId);
+  return c.json(result);
+});
+
+// PUT /api/cases/:id/field-reviews — Save field reviews
+caseRoutes.put(
+  "/:id/field-reviews",
+  zodValidator("json", saveFieldReviewsSchema),
+  async (c) => {
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const input = c.req.valid("json" as never) as SaveFieldReviewsInput;
+    const result = await saveFieldReviews(id, auth.userId, input);
+    return c.json(result);
+  },
+);
+
+// PATCH /api/cases/:id/close-unsuccessful — Close case as unsuccessful
+caseRoutes.patch(
+  "/:id/close-unsuccessful",
+  zodValidator("json", closeUnsuccessfulSchema),
+  async (c) => {
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const input = c.req.valid("json" as never) as CloseUnsuccessfulInput;
+    const result = await closeUnsuccessful(id, auth.userId, input);
+    return c.json(result);
+  },
+);
+
+// GET /api/cases/:id/comments — List comments for a case
+caseRoutes.get("/:id/comments", async (c) => {
+  const id = c.req.param("id");
+  const result = await listCaseComments(id);
+  return c.json(result);
+});
+
+// POST /api/cases/:id/comments — Create a comment on a case
+caseRoutes.post(
+  "/:id/comments",
+  zodValidator("json", createCommentSchema),
+  async (c) => {
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const input = c.req.valid("json" as never) as CreateCommentInput;
+    const result = await createCaseComment(id, auth.userId, input);
+    return c.json(result, 201);
+  },
+);
+
+// GET /api/cases/:id/history — Get case history timeline
+caseRoutes.get("/:id/history", async (c) => {
+  const id = c.req.param("id");
+  const result = await listCaseHistory(id);
+  return c.json(result);
+});

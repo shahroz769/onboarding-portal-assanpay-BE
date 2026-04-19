@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { queues, queueCaseSequences } from "../../db/schema";
 import { AppError } from "../../lib/errors";
+import { ensureQueueStages } from "./queue-stage-defaults";
 import type { CreateQueueInput } from "./queues.schemas";
 
 export async function listQueues() {
@@ -42,6 +43,12 @@ export async function createQueue(input: CreateQueueInput) {
     await tx.insert(queueCaseSequences).values({
       queueId: created.id,
       lastNumber: 0,
+    });
+
+    await ensureQueueStages(tx, {
+      id: created.id,
+      name: created.name,
+      qcEnabled: created.qcEnabled,
     });
 
     return {
