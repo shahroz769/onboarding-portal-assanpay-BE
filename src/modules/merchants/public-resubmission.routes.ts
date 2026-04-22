@@ -55,7 +55,6 @@ resubmissionRoutes.post("/:token", async (c) => {
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
-      driveFolderId: merchants.googleDriveFolderId,
     })
     .from(cases)
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
@@ -163,9 +162,7 @@ resubmissionRoutes.post("/:token", async (c) => {
   for (const [fieldName, file] of submittedFiles.entries()) {
     const docId = getDocumentIdFromFieldName(fieldName)!;
     const existing = existingDocsById.get(docId)!;
-    const folderId =
-      existing.googleDriveFolderId ?? caseRow.driveFolderId;
-    const uploaded = await storage.uploadFile(folderId, {
+    const uploaded = await storage.uploadFile(existing.googleDriveFolderId, {
       fileName: file.name,
       mimeType: file.type || "application/octet-stream",
       file,
@@ -254,11 +251,16 @@ resubmissionRoutes.post("/:token", async (c) => {
         .where(eq(merchantDocuments.id, info.docId));
     }
 
-    // 3. Stamp resubmittedAt on the matching field reviews
+    // 3. Mark the matching field reviews as pending again while preserving
+    // the original review timestamp so the UI can show the "Updated" tag.
     if (resubmittedFieldIds.length > 0) {
       await tx
         .update(caseFieldReviews)
-        .set({ resubmittedAt: now })
+        .set({
+          status: "pending",
+          remarks: null,
+          resubmittedAt: now,
+        })
         .where(inArray(caseFieldReviews.id, resubmittedFieldIds));
     }
 

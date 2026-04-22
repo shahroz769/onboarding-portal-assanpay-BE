@@ -28,6 +28,7 @@ const envSchema = z.object({
     .min(1)
     .default("Onboarding Portal <onboarding@resend.dev>"),
   EMAIL_REPLY_TO: z.string().email().optional(),
+  EMAIL_TEST_TO: z.string().email().optional(),
   PUBLIC_APP_URL: z.string().url().default("http://localhost:5173"),
   RESUBMISSION_TOKEN_TTL_DAYS: z.coerce
     .number()

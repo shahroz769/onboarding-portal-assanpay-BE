@@ -1360,13 +1360,15 @@ export async function sendForResubmission(
   const rejectedFieldNames = rejectedReviews.map((r) => r.fieldName)
   const rejectedFieldLabels = rejections.map((rejection) => rejection.label)
 
-  // 4. Resolve awaiting_client stage (must exist)
-  const awaitingStage = await db.query.queueStages.findFirst({
-    where: and(
-      eq(queueStages.queueId, row.queueId),
-      eq(queueStages.slug, 'awaiting_client'),
-    ),
+  // 4. Ensure queue stages are fully seeded, then resolve awaiting_client
+  const stages = await ensureQueueStages(db, {
+    id: row.queueId,
+    name: row.queueSlug === 'documents-review' ? 'Documents Review' : row.queueSlug,
+    slug: row.queueSlug,
+    qcEnabled: false,
   })
+  const awaitingStage =
+    stages.find((stage) => stage.slug === 'awaiting_client') ?? null
 
   if (!awaitingStage) {
     throw new AppError(

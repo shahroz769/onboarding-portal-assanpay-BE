@@ -148,6 +148,26 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
   return baseStages;
 }
 
+function hasStageEquivalent(
+  queue: QueueStageSeedInput,
+  existingStages: QueueStage[],
+  stageSlug: string,
+) {
+  if (existingStages.some((stage) => stage.slug === stageSlug)) {
+    return true;
+  }
+
+  if (
+    queue.slug === "documents-review" &&
+    stageSlug === "working" &&
+    existingStages.some((stage) => stage.slug === "in-review")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function ensureQueueStages(
   db: QueueStageDb,
   queue: QueueStageSeedInput,
@@ -158,19 +178,41 @@ export async function ensureQueueStages(
     .where(eq(queueStages.queueId, queue.id))
     .orderBy(asc(queueStages.order));
 
-  if (existingStages.length > 0) {
-    return existingStages;
+  const defaultStages = createDefaultQueueStageDefinitions(queue);
+
+  if (existingStages.length === 0) {
+    return db
+      .insert(queueStages)
+      .values(
+        defaultStages.map((stage) => ({
+          queueId: queue.id,
+          ...stage,
+        })),
+      )
+      .returning();
   }
 
-  return db
-    .insert(queueStages)
-    .values(
-      createDefaultQueueStageDefinitions(queue).map((stage) => ({
+  const existingSlugs = new Set(existingStages.map((stage) => stage.slug));
+  const missingStages = defaultStages.filter(
+    (stage) =>
+      !existingSlugs.has(stage.slug) &&
+      !hasStageEquivalent(queue, existingStages, stage.slug),
+  );
+
+  if (missingStages.length > 0) {
+    await db.insert(queueStages).values(
+      missingStages.map((stage) => ({
         queueId: queue.id,
         ...stage,
       })),
-    )
-    .returning();
+    );
+  }
+
+  return db
+    .select()
+    .from(queueStages)
+    .where(eq(queueStages.queueId, queue.id))
+    .orderBy(asc(queueStages.order));
 }
 
 export function getStageCategoryFromStatus(

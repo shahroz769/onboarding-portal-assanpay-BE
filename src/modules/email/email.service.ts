@@ -35,18 +35,29 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   const db = getDb();
   const fromAddress = input.from ?? env.EMAIL_FROM;
   const replyTo = input.replyTo ?? env.EMAIL_REPLY_TO;
+  const testRecipientOverride =
+    Bun.env.NODE_ENV !== "production" ? env.EMAIL_TEST_TO : undefined;
+  const toAddress = testRecipientOverride ?? input.to;
 
   // 1. Pre-create the log row in `queued` state
   const [logRow] = await db
     .insert(emailLog)
     .values({
-      toEmail: input.to,
+      toEmail: toAddress,
       subject: input.subject,
       template: input.template,
       caseId: input.caseId ?? null,
       merchantId: input.merchantId ?? null,
       status: "queued",
-      metadata: (input.metadata ?? null) as Record<string, unknown> | null,
+      metadata: (
+        testRecipientOverride
+          ? {
+              ...(input.metadata ?? {}),
+              originalTo: input.to,
+              overriddenTo: testRecipientOverride,
+            }
+          : (input.metadata ?? null)
+      ) as Record<string, unknown> | null,
     })
     .returning({ id: emailLog.id });
 
@@ -75,7 +86,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     const result = await getResendClient().emails.send(
       {
         from: fromAddress,
-        to: input.to,
+        to: toAddress,
         subject: input.subject,
         html,
         ...(replyTo ? { replyTo } : {}),

@@ -43,6 +43,13 @@
       "when": 1776809666467,
       "tag": "0005_overjoyed_quasimodo",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776888255200,
+      "tag": "0006_glossy_khan",
+      "breakpoints": true
     }
   ]
 }
