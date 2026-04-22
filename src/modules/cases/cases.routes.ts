@@ -40,6 +40,7 @@ import {
   takeOwnership,
   updateCasePriority,
   updateCaseStatus,
+  sendForResubmission,
 } from "./cases.service";
 
 export const caseRoutes = new Hono<AppEnv>();
@@ -177,6 +178,14 @@ caseRoutes.patch(
     return c.json(result);
   },
 );
+
+// POST /api/cases/:id/send-for-resubmission — Email client + move to awaiting_client
+caseRoutes.post("/:id/send-for-resubmission", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const result = await sendForResubmission(id, auth.userId);
+  return c.json(result);
+});
 
 // GET /api/cases/:id/comments — List comments for a case
 caseRoutes.get("/:id/comments", async (c) => {

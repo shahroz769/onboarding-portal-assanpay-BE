@@ -22,6 +22,18 @@ const envSchema = z.object({
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z
+    .string()
+    .min(1)
+    .default("Onboarding Portal <onboarding@resend.dev>"),
+  EMAIL_REPLY_TO: z.string().email().optional(),
+  PUBLIC_APP_URL: z.string().url().default("http://localhost:5173"),
+  RESUBMISSION_TOKEN_TTL_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7),
 });
 
 export const env = envSchema.parse(Bun.env);

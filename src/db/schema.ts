@@ -145,6 +145,7 @@ export const caseStatusEnum = pgEnum("case_status", [
   "qc",
   "error",
   "closed",
+  "awaiting_client",
 ]);
 
 export const queues = pgTable("queues", {
@@ -379,6 +380,7 @@ export const caseFieldReviews = pgTable(
       .references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    resubmittedAt: timestamp("resubmitted_at", { withTimezone: true }),
   },
   (table) => ({
     caseFieldReviewsCaseIdIdx: index("case_field_reviews_case_id_idx").on(table.caseId),
@@ -439,7 +441,67 @@ export const notificationTypeEnum = pgEnum("notification_type", [
   "comment_mention",
   "comment_reply",
   "comment_thread",
+  "case_resubmitted",
 ]);
+
+export const emailLogStatusEnum = pgEnum("email_log_status", [
+  "queued",
+  "sent",
+  "failed",
+]);
+
+export const caseResubmissionTokens = pgTable(
+  "case_resubmission_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseId: uuid("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    token: varchar("token", { length: 86 }).notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseResubmissionTokensCaseIdIdx: index(
+      "case_resubmission_tokens_case_id_idx",
+    ).on(table.caseId),
+  }),
+);
+
+export const emailLog = pgTable(
+  "email_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    toEmail: varchar("to_email", { length: 255 }).notNull(),
+    subject: varchar("subject", { length: 500 }).notNull(),
+    template: varchar("template", { length: 120 }).notNull(),
+    caseId: uuid("case_id").references(() => cases.id, { onDelete: "set null" }),
+    merchantId: uuid("merchant_id").references(() => merchants.id, {
+      onDelete: "set null",
+    }),
+    resendId: varchar("resend_id", { length: 255 }),
+    status: emailLogStatusEnum("status").default("queued").notNull(),
+    errorMsg: text("error_msg"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    emailLogCaseIdIdx: index("email_log_case_id_idx").on(table.caseId),
+    emailLogStatusIdx: index("email_log_status_idx").on(table.status),
+    emailLogCreatedAtIdx: index("email_log_created_at_idx").on(table.createdAt),
+  }),
+);
 
 export const notifications = pgTable(
   "notifications",
@@ -492,3 +554,7 @@ export type CaseHistory = typeof caseHistory.$inferSelect;
 export type NewCaseHistory = typeof caseHistory.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
+export type CaseResubmissionToken = typeof caseResubmissionTokens.$inferSelect;
+export type NewCaseResubmissionToken = typeof caseResubmissionTokens.$inferInsert;
+export type EmailLog = typeof emailLog.$inferSelect;
+export type NewEmailLog = typeof emailLog.$inferInsert;

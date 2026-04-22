@@ -6,6 +6,7 @@ export const notificationTypeValues = [
   "comment_mention",
   "comment_reply",
   "comment_thread",
+  "case_resubmitted",
 ] as const;
 
 export type NotificationType = (typeof notificationTypeValues)[number];

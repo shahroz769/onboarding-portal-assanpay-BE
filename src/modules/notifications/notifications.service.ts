@@ -363,3 +363,43 @@ export async function notifyOnComment(input: CommentNotifyInput) {
 
   await createBulkNotifications(rows);
 }
+
+// ─── Resubmission Notification ──────────────────────────────────────────────
+
+type ResubmissionNotifyInput = {
+  caseId: string;
+  caseNumber: string;
+  ownerId: string;
+  clientName: string | null;
+  fieldCount: number;
+};
+
+/**
+ * Notify the case owner that the client has submitted updated details.
+ * Best-effort: callers should wrap with try/catch to avoid breaking primary flow.
+ */
+export async function notifyOnResubmission(input: ResubmissionNotifyInput) {
+  const copy = buildNotificationCopy({
+    type: "case_resubmitted",
+    caseNumber: input.caseNumber,
+    clientName: input.clientName,
+    fieldCount: input.fieldCount,
+  });
+
+  await createBulkNotifications([
+    {
+      userId: input.ownerId,
+      actorId: null,
+      type: "case_resubmitted",
+      caseId: input.caseId,
+      commentId: null,
+      title: copy.title,
+      body: copy.body,
+      metadata: {
+        caseNumber: input.caseNumber,
+        clientName: input.clientName,
+        fieldCount: input.fieldCount,
+      },
+    },
+  ]);
+}

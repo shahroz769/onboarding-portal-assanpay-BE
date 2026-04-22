@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-export const caseStatusValues = ["new", "working", "pending", "qc", "error", "closed"] as const;
+export const caseStatusValues = [
+  "new",
+  "working",
+  "pending",
+  "qc",
+  "error",
+  "closed",
+  "awaiting_client",
+] as const;
 export type CaseStatusValue = (typeof caseStatusValues)[number];
 
 // Ordered index for transition validation
@@ -11,25 +19,31 @@ const statusOrder: Record<CaseStatusValue, number> = {
   qc: 3,
   error: 4,
   closed: 5,
+  awaiting_client: 6,
 };
 
 /**
  * Validates that a status transition is allowed.
  * Forward transitions: any forward step is allowed.
  * Backward transitions: only one step back is allowed.
+ * Special case: working <-> awaiting_client is always allowed (resubmission loop).
  */
 export function isValidStatusTransition(
   current: CaseStatusValue,
   next: CaseStatusValue,
 ): boolean {
   if (current === next) return false;
+
+  if (current === "working" && next === "awaiting_client") return true;
+  if (current === "awaiting_client" && next === "working") return true;
+
   const currentIdx = statusOrder[current];
   const nextIdx = statusOrder[next];
 
   // Forward: any jump forward is allowed
   if (nextIdx > currentIdx) return true;
 
-  // Backward: only one step back
+  // Backward: only one step back is allowed
   if (currentIdx - nextIdx === 1) return true;
 
   return false;
@@ -117,9 +131,7 @@ export function categoryToStatus(category: StageCategoryValue): CaseStatusValue 
     case "closed":
       return "closed";
   }
-}
-
-// ─── Field Review Schemas ───────────────────────────────────────────────────
+}// ─── Field Review Schemas ───────────────────────────────────────────────────
 
 export const fieldReviewStatusValues = ["pending", "approved", "rejected"] as const;
 export type FieldReviewStatusValue = (typeof fieldReviewStatusValues)[number];
@@ -166,3 +178,16 @@ export const createCommentSchema = z
   .strict();
 
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
+
+// ─── Resubmission Schemas ───────────────────────────────────────────────────
+
+export const sendForResubmissionResponseSchema = z.object({
+  status: z.enum(["sent", "failed"]),
+  tokenExpiresAt: z.string().nullable(),
+  emailLogId: z.string().uuid(),
+  error: z.string().optional(),
+});
+
+export type SendForResubmissionResponse = z.infer<
+  typeof sendForResubmissionResponseSchema
+>;

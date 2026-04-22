@@ -18,6 +18,7 @@ import {
   caseComments,
   caseFieldReviews,
   caseHistory,
+  caseResubmissionTokens,
   cases,
   merchantDocuments,
   merchants,
@@ -27,6 +28,7 @@ import {
   users,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { env } from '../../config/env'
 import {
   ensureQueueStages,
   getStatusForStage,
@@ -36,6 +38,15 @@ import {
   notifyAssignment,
   notifyOnComment,
 } from '../notifications/notifications.service'
+import { sendEmail } from '../email/email.service'
+import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
+import {
+  DOCUMENT_TYPE_LABELS,
+  MERCHANT_FIELD_LABELS,
+  getDocumentIdFromFieldName,
+  isDocumentFieldName,
+} from './field-labels'
+import { issueToken } from './case-resubmission-tokens.service'
 import {
   caseStatusValues,
   isValidStatusTransition,
@@ -117,7 +128,7 @@ export async function createCase(input: CreateCaseInput) {
     // Verify queue exists
     const queue = await tx.query.queues.findFirst({
       where: eq(queues.id, input.queueId),
-      columns: { id: true, name: true, qcEnabled: true },
+      columns: { id: true, name: true, slug: true, qcEnabled: true },
     })
 
     if (!queue) {
@@ -127,6 +138,7 @@ export async function createCase(input: CreateCaseInput) {
     const stages = await ensureQueueStages(tx, {
       id: queue.id,
       name: queue.name,
+      slug: queue.slug,
       qcEnabled: queue.qcEnabled ?? false,
     })
     const initialStage = stages[0]
@@ -672,6 +684,7 @@ export async function getCaseDetail(caseId: string) {
         reviewedBy: caseFieldReviews.reviewedBy,
         reviewedByName: users.name,
         updatedAt: caseFieldReviews.updatedAt,
+        resubmittedAt: caseFieldReviews.resubmittedAt,
       })
       .from(caseFieldReviews)
       .leftJoin(users, eq(caseFieldReviews.reviewedBy, users.id))
@@ -688,6 +701,7 @@ export async function getCaseDetail(caseId: string) {
       : await ensureQueueStages(db, {
           id: queue.id,
           name: queue.name,
+          slug: queue.slug,
           qcEnabled: queue.qcEnabled,
         })
 
@@ -1214,4 +1228,379 @@ export async function listCaseHistory(caseId: string) {
     .orderBy(desc(caseHistory.createdAt))
 
   return history
+}
+
+// ─── Send For Resubmission ──────────────────────────────────────────────────
+
+type SendForResubmissionResult = {
+  status: 'sent' | 'failed'
+  tokenExpiresAt: string | null
+  emailLogId: string
+  error?: string
+}
+
+function getRejectionLabel(
+  fieldName: string,
+  documentTypeById: Map<string, string>,
+): string {
+  if (isDocumentFieldName(fieldName)) {
+    const docId = getDocumentIdFromFieldName(fieldName)
+    const docType = docId ? documentTypeById.get(docId) : null
+    if (docType && docType in DOCUMENT_TYPE_LABELS) {
+      return DOCUMENT_TYPE_LABELS[docType as keyof typeof DOCUMENT_TYPE_LABELS]
+    }
+    return 'Uploaded document'
+  }
+  return MERCHANT_FIELD_LABELS[fieldName] ?? fieldName
+}
+
+function formatExpiryDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long',
+    timeZone: 'UTC',
+  }).format(date)
+}
+
+export async function sendForResubmission(
+  caseId: string,
+  userId: string,
+): Promise<SendForResubmissionResult> {
+  const db = getDb()
+
+  // 1. Load case with queue/merchant info
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      currentStageId: cases.currentStageId,
+      status: cases.status,
+      queueId: cases.queueId,
+      queueSlug: queues.slug,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      merchantOwnerName: merchants.ownerFullName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (row.queueSlug !== 'documents-review') {
+    throw new AppError(
+      400,
+      'Resubmission is only available for documents-review cases.',
+    )
+  }
+
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can send for resubmission.')
+  }
+
+  if (row.status !== 'working') {
+    throw new AppError(
+      400,
+      'The case must be in the working stage to send for resubmission.',
+    )
+  }
+
+  if (!row.merchantSubmitterEmail) {
+    throw new AppError(400, 'No submitter email is on file for this merchant.')
+  }
+
+  // 2. Load rejected field reviews
+  const rejectedReviews = await db
+    .select({
+      fieldName: caseFieldReviews.fieldName,
+      remarks: caseFieldReviews.remarks,
+    })
+    .from(caseFieldReviews)
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        eq(caseFieldReviews.status, 'rejected'),
+      ),
+    )
+
+  if (rejectedReviews.length === 0) {
+    throw new AppError(
+      400,
+      'There are no rejected fields to send for resubmission.',
+    )
+  }
+
+  // 3. Resolve labels (load document types for any doc_<id> fieldNames)
+  const docIds = rejectedReviews
+    .map((r) => getDocumentIdFromFieldName(r.fieldName))
+    .filter((id): id is string => id !== null)
+  const documentTypeById = new Map<string, string>()
+  if (docIds.length > 0) {
+    const docs = await db
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+      })
+      .from(merchantDocuments)
+      .where(inArray(merchantDocuments.id, docIds))
+    for (const d of docs) {
+      documentTypeById.set(d.id, d.documentType)
+    }
+  }
+
+  const rejections = rejectedReviews.map((review) => ({
+    label: getRejectionLabel(review.fieldName, documentTypeById),
+    remarks: review.remarks,
+  }))
+  const rejectedFieldNames = rejectedReviews.map((r) => r.fieldName)
+  const rejectedFieldLabels = rejections.map((rejection) => rejection.label)
+
+  // 4. Resolve awaiting_client stage (must exist)
+  const awaitingStage = await db.query.queueStages.findFirst({
+    where: and(
+      eq(queueStages.queueId, row.queueId),
+      eq(queueStages.slug, 'awaiting_client'),
+    ),
+  })
+
+  if (!awaitingStage) {
+    throw new AppError(
+      500,
+      'No awaiting_client stage configured for this queue.',
+    )
+  }
+
+  // 5. Issue token
+  const issued = await issueToken(caseId, userId)
+
+  // 6. Record queued history (best-effort outside transaction)
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'resubmission_email_queued',
+    details: {
+      tokenId: issued.tokenId,
+      expiresAt: issued.expiresAt.toISOString(),
+      rejectedFields: rejectedFieldNames,
+      rejectedFieldLabels,
+      recipient: row.merchantSubmitterEmail,
+    },
+  })
+
+  // 7. Send the email
+  const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
+  const emailResult = await sendEmail({
+    to: row.merchantSubmitterEmail,
+    subject: `Action required for case ${row.caseNumber}`,
+    template: 'document-resubmission',
+    react: DocumentResubmissionEmail({
+      caseNumber: row.caseNumber,
+      merchantName: row.merchantName,
+      ownerName: row.merchantOwnerName,
+      rejections,
+      resubmissionUrl,
+      expiresAt: formatExpiryDate(issued.expiresAt),
+    }),
+    caseId,
+    merchantId: row.merchantId,
+    idempotencyKey: `resubmit/${caseId}/${issued.tokenId}`,
+    metadata: {
+      tokenId: issued.tokenId,
+      rejectedFields: rejectedFieldNames,
+    },
+  })
+
+  // 8a. Email failed — invalidate the token, leave case in working
+  if (emailResult.status === 'failed') {
+    await db
+      .update(caseResubmissionTokens)
+      .set({ consumedAt: new Date() })
+      .where(eq(caseResubmissionTokens.id, issued.tokenId))
+
+    await db.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'resubmission_email_failed',
+      details: {
+        tokenId: issued.tokenId,
+        emailLogId: emailResult.emailLogId,
+        error: emailResult.error ?? null,
+      },
+    })
+
+    return {
+      status: 'failed',
+      tokenExpiresAt: null,
+      emailLogId: emailResult.emailLogId,
+      error: emailResult.error,
+    }
+  }
+
+  // 8b. Email sent — move case to awaiting_client
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    await tx
+      .update(cases)
+      .set({
+        status: 'awaiting_client',
+        currentStageId: awaitingStage.id,
+        updatedAt: now,
+      })
+      .where(eq(cases.id, caseId))
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'resubmission_email_sent',
+      details: {
+        tokenId: issued.tokenId,
+        expiresAt: issued.expiresAt.toISOString(),
+        rejectedFields: rejectedFieldNames,
+        rejectedFieldLabels,
+        emailLogId: emailResult.emailLogId,
+        recipient: row.merchantSubmitterEmail,
+      },
+    })
+  })
+
+  return {
+    status: 'sent',
+    tokenExpiresAt: issued.expiresAt.toISOString(),
+    emailLogId: emailResult.emailLogId,
+  }
+}
+
+// ─── Apply Resubmission (called from public route) ──────────────────────────
+
+export type ResubmissionContext = {
+  caseId: string
+  caseNumber: string
+  expiresAt: string
+  merchantName: string
+  merchantId: string
+  ownerId: string | null
+  merchantOwnerName: string
+  rejections: Array<{
+    fieldName: string
+    label: string
+    remarks: string | null
+    isDocument: boolean
+    currentValue?: string
+    currentDocumentName?: string
+    documentType?: string
+  }>
+}
+
+export async function getResubmissionContext(
+  caseId: string,
+  expiresAt: Date,
+): Promise<ResubmissionContext> {
+  const db = getDb()
+
+  const [caseRow] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      merchantId: cases.merchantId,
+    })
+    .from(cases)
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  const merchant = await db.query.merchants.findFirst({
+    where: eq(merchants.id, caseRow.merchantId),
+  })
+
+  if (!merchant) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  const rejectedReviews = await db
+    .select({
+      fieldName: caseFieldReviews.fieldName,
+      remarks: caseFieldReviews.remarks,
+    })
+    .from(caseFieldReviews)
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        eq(caseFieldReviews.status, 'rejected'),
+      ),
+    )
+
+  const docIds = rejectedReviews
+    .map((r) => getDocumentIdFromFieldName(r.fieldName))
+    .filter((id): id is string => id !== null)
+  const docsById = new Map<
+    string,
+    { documentType: string; originalName: string }
+  >()
+  if (docIds.length > 0) {
+    const docs = await db
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+        originalName: merchantDocuments.originalName,
+      })
+      .from(merchantDocuments)
+      .where(inArray(merchantDocuments.id, docIds))
+    for (const d of docs) {
+      docsById.set(d.id, {
+        documentType: d.documentType,
+        originalName: d.originalName,
+      })
+    }
+  }
+
+  const merchantData = merchant as Record<string, unknown>
+
+  const rejections = rejectedReviews.map((review) => {
+    if (isDocumentFieldName(review.fieldName)) {
+      const docId = getDocumentIdFromFieldName(review.fieldName)
+      const doc = docId ? docsById.get(docId) : null
+      const label = doc
+        ? (DOCUMENT_TYPE_LABELS[doc.documentType as keyof typeof DOCUMENT_TYPE_LABELS] ??
+          doc.documentType)
+        : 'Uploaded document'
+      return {
+        fieldName: review.fieldName,
+        label,
+        remarks: review.remarks,
+        isDocument: true,
+        currentDocumentName: doc?.originalName,
+        documentType: doc?.documentType,
+      }
+    }
+
+    const value = merchantData[review.fieldName]
+    return {
+      fieldName: review.fieldName,
+      label:
+        MERCHANT_FIELD_LABELS[review.fieldName] ?? review.fieldName,
+      remarks: review.remarks,
+      isDocument: false,
+      currentValue: value == null ? '' : String(value),
+    }
+  })
+
+  return {
+    caseId: caseRow.id,
+    caseNumber: caseRow.caseNumber,
+    expiresAt: expiresAt.toISOString(),
+    merchantName: merchant.businessName,
+    merchantId: merchant.id,
+    ownerId: caseRow.ownerId,
+    merchantOwnerName: merchant.ownerFullName,
+    rejections,
+  }
 }

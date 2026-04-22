@@ -48,6 +48,7 @@ export async function createQueue(input: CreateQueueInput) {
     await ensureQueueStages(tx, {
       id: created.id,
       name: created.name,
+      slug: created.slug,
       qcEnabled: created.qcEnabled,
     });
 

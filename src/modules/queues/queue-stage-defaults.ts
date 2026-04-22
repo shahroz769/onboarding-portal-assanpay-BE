@@ -11,6 +11,7 @@ type QueueStageDb = {
 type QueueStageSeedInput = {
   id: string;
   name: string;
+  slug: string;
   qcEnabled: boolean;
 };
 
@@ -25,6 +26,14 @@ const defaultStageNames = {
 function getStatusForStage(stage: Pick<QueueStage, "category" | "slug" | "name">): CaseStatusValue {
   const normalizedSlug = stage.slug.trim().toLowerCase();
   const normalizedName = stage.name.trim().toLowerCase();
+
+  if (
+    normalizedSlug === "awaiting_client" ||
+    normalizedSlug === "awaiting-client" ||
+    normalizedName === "awaiting client"
+  ) {
+    return "awaiting_client";
+  }
 
   if (normalizedSlug === "pending" || normalizedName === "pending") {
     return "pending";
@@ -60,6 +69,43 @@ function stageMatchesStatus(
 }
 
 function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
+  if (queue.slug === "documents-review") {
+    return [
+      {
+        name: defaultStageNames.new,
+        slug: "new",
+        order: 1,
+        category: "new",
+      },
+      {
+        name: defaultStageNames.in_progress,
+        slug: "working",
+        order: 2,
+        category: "in_progress",
+      },
+      {
+        name: "Awaiting Client",
+        slug: "awaiting_client",
+        order: 3,
+        category: "in_progress",
+      },
+      {
+        name: defaultStageNames.error,
+        slug: "error",
+        order: 4,
+        category: "error",
+      },
+      {
+        name: defaultStageNames.closed,
+        slug: "closed",
+        order: 5,
+        category: "closed",
+      },
+    ] satisfies Array<
+      Pick<NewQueueStage, "name" | "slug" | "order" | "category">
+    >;
+  }
+
   const baseStages: Array<Pick<NewQueueStage, "name" | "slug" | "order" | "category">> = [
     {
       name: defaultStageNames.new,
@@ -135,6 +181,7 @@ export function getStageCategoryFromStatus(
       return "new";
     case "working":
     case "pending":
+    case "awaiting_client":
       return "in_progress";
     case "qc":
       return "qc";

@@ -29,7 +29,14 @@ type CommentCopy = {
   snippet: string;
 };
 
-export type NotificationCopy = CaseAssignedCopy | CommentCopy;
+type CaseResubmittedCopy = {
+  type: Extract<NotificationType, "case_resubmitted">;
+  caseNumber: string;
+  clientName: string | null;
+  fieldCount: number;
+};
+
+export type NotificationCopy = CaseAssignedCopy | CommentCopy | CaseResubmittedCopy;
 
 export function buildNotificationCopy(input: NotificationCopy): {
   title: string;
@@ -60,6 +67,11 @@ export function buildNotificationCopy(input: NotificationCopy): {
       return {
         title: `New comment on ${input.caseNumber}`,
         body: `${input.actorName}: ${input.snippet}`,
+      };
+    case "case_resubmitted":
+      return {
+        title: `Case ${input.caseNumber} — client submitted updated details`,
+        body: `${input.clientName ?? "The client"} resubmitted ${input.fieldCount} field${input.fieldCount === 1 ? "" : "s"} for your review.`,
       };
   }
 }

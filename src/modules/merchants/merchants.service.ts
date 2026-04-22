@@ -202,6 +202,7 @@ export async function createMerchantSubmission(
         const stages = await ensureQueueStages(tx, {
           id: docReviewQueue.id,
           name: "Documents Review",
+          slug: "documents-review",
           qcEnabled: false,
         });
         const initialStage = stages[0];
