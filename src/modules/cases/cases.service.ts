@@ -33,6 +33,10 @@ import {
   resolveStageForCase,
 } from '../queues/queue-stage-defaults'
 import {
+  notifyAssignment,
+  notifyOnComment,
+} from '../notifications/notifications.service'
+import {
   caseStatusValues,
   isValidStatusTransition,
   type CaseStatusValue,
@@ -356,6 +360,45 @@ export async function bulkAssignCases(
 
   if (historyEntries.length > 0) {
     await db.insert(caseHistory).values(historyEntries)
+
+    // Notifications (best-effort) for each affected case
+    try {
+      const actor = await db.query.users.findFirst({
+        where: eq(users.id, actorId),
+        columns: { name: true },
+      })
+      const affectedIds = historyEntries.map((h) => h.caseId)
+      const metas = await db
+        .select({
+          id: cases.id,
+          caseNumber: cases.caseNumber,
+          queueName: queues.name,
+        })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(inArray(cases.id, affectedIds))
+      const metaById = new Map(metas.map((m) => [m.id, m]))
+      const previousById = new Map(
+        existingCases.map((c) => [c.id, c.ownerId ?? null]),
+      )
+      await Promise.all(
+        affectedIds.map((cid) => {
+          const meta = metaById.get(cid)
+          if (!meta) return Promise.resolve()
+          return notifyAssignment({
+            caseId: cid,
+            caseNumber: meta.caseNumber,
+            queueName: meta.queueName,
+            actorId,
+            actorName: actor?.name ?? 'Someone',
+            newOwnerId: ownerId,
+            previousOwnerId: previousById.get(cid) ?? null,
+          })
+        }),
+      )
+    } catch (error) {
+      console.error('[notifications] bulkAssignCases notify failed', error)
+    }
   }
 
   return { updated: updatedCases.length }
@@ -489,6 +532,33 @@ export async function assignCase(
         toOwner: nextOwner?.name ?? 'Unassigned',
       },
     })
+
+    // Notifications (best-effort)
+    try {
+      const meta = await db
+        .select({ caseNumber: cases.caseNumber, queueName: queues.name })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(eq(cases.id, caseId))
+        .limit(1)
+      const actor = await db.query.users.findFirst({
+        where: eq(users.id, actorId),
+        columns: { name: true },
+      })
+      if (meta[0]) {
+        await notifyAssignment({
+          caseId,
+          caseNumber: meta[0].caseNumber,
+          queueName: meta[0].queueName,
+          actorId,
+          actorName: actor?.name ?? 'Someone',
+          newOwnerId: ownerId,
+          previousOwnerId: existingCase.ownerId ?? null,
+        })
+      }
+    } catch (error) {
+      console.error('[notifications] assignCase notify failed', error)
+    }
   }
 
   return updated
@@ -1088,6 +1158,22 @@ export async function createCaseComment(
       mentions: input.mentions ?? null,
     })
     .returning()
+
+  // Notifications (best-effort)
+  if (created) {
+    try {
+      await notifyOnComment({
+        caseId,
+        commentId: created.id,
+        parentCommentId: input.parentId ?? null,
+        authorId: userId,
+        mentions: input.mentions ?? [],
+        content: input.content,
+      })
+    } catch (error) {
+      console.error('[notifications] createCaseComment notify failed', error)
+    }
+  }
 
   return created
 }

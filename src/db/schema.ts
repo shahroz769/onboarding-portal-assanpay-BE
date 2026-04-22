@@ -433,6 +433,45 @@ export const caseHistory = pgTable(
   }),
 );
 
+export const notificationTypeEnum = pgEnum("notification_type", [
+  "case_assigned",
+  "case_unassigned",
+  "comment_mention",
+  "comment_reply",
+  "comment_thread",
+]);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    type: notificationTypeEnum("type").notNull(),
+    caseId: uuid("case_id").references(() => cases.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id").references(() => caseComments.id, {
+      onDelete: "cascade",
+    }),
+    title: varchar("title", { length: 255 }).notNull(),
+    body: text("body").notNull(),
+    metadata: jsonb("metadata"),
+    isRead: boolean("is_read").default(false).notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    notificationsUserIdIdx: index("notifications_user_id_idx").on(table.userId),
+    notificationsUserUnreadIdx: index("notifications_user_unread_idx").on(
+      table.userId,
+      table.isRead,
+      table.createdAt,
+    ),
+    notificationsCreatedAtIdx: index("notifications_created_at_idx").on(table.createdAt),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Merchant = typeof merchants.$inferSelect;
@@ -451,3 +490,5 @@ export type CaseComment = typeof caseComments.$inferSelect;
 export type NewCaseComment = typeof caseComments.$inferInsert;
 export type CaseHistory = typeof caseHistory.$inferSelect;
 export type NewCaseHistory = typeof caseHistory.$inferInsert;
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;

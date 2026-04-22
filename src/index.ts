@@ -10,6 +10,7 @@ import { authRoutes } from "./modules/auth/auth.routes";
 import { caseRoutes } from "./modules/cases/cases.routes";
 import { merchantFormRoutes } from "./modules/merchants/form.routes";
 import { merchantRoutes } from "./modules/merchants/merchants.routes";
+import { notificationRoutes } from "./modules/notifications/notifications.routes";
 import { queueRoutes } from "./modules/queues/queues.routes";
 import { userRoutes } from "./modules/users/users.routes";
 import type { AppEnv } from "./types/auth";
@@ -52,6 +53,7 @@ app.route("/api/merchants", merchantRoutes);
 app.route("/api/users", userRoutes);
 app.route("/api/queues", queueRoutes);
 app.route("/api/cases", caseRoutes);
+app.route("/api/notifications", notificationRoutes);
 
 async function purgeExpiredRefreshTokens() {
   try {
