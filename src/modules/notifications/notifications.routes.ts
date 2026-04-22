@@ -11,10 +11,8 @@ import {
   markRead,
 } from "./notifications.service";
 import { subscribe } from "./notifications.events";
-import {
-  listNotificationsQuerySchema,
-  type ListNotificationsQuery,
-} from "./notifications.schemas";
+import { listNotificationsQuerySchema } from "./notifications.schemas";
+import type { ListNotificationsQuery } from "./notifications.schemas";
 
 export const notificationRoutes = new Hono<AppEnv>();
 
@@ -59,31 +57,46 @@ notificationRoutes.get("/stream", (c) => {
   const auth = c.get("auth");
 
   return streamSSE(c, async (stream) => {
-    let queue: Array<unknown> = [];
+    const queue: Array<unknown> = [];
     let resolveNext: (() => void) | null = null;
+    let cleanedUp = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+    const wake = () => {
+      if (!resolveNext) return;
+      const resolve = resolveNext;
+      resolveNext = null;
+      resolve();
+    };
 
     const enqueue = (event: unknown) => {
       queue.push(event);
-      if (resolveNext) {
-        const r = resolveNext;
-        resolveNext = null;
-        r();
-      }
+      wake();
     };
 
     const unsubscribe = subscribe(auth.userId, (event) => {
       enqueue({ event: "notification", data: JSON.stringify(event) });
     });
 
-    stream.onAbort(() => {
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
       unsubscribe();
+      wake();
+    };
+
+    stream.onAbort(() => {
+      cleanup();
     });
 
     // Ready event
     await stream.writeSSE({ event: "ready", data: "ok" });
 
     // Heartbeat every 25s
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       enqueue({ event: "ping", data: String(Date.now()) });
     }, 25_000);
 
@@ -101,8 +114,7 @@ notificationRoutes.get("/stream", (c) => {
         await stream.writeSSE(next);
       }
     } finally {
-      clearInterval(heartbeat);
-      unsubscribe();
+      cleanup();
     }
   });
 });
