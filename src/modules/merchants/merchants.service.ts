@@ -110,11 +110,17 @@ export async function createMerchantSubmission(
 ) {
   const merchantId = crypto.randomUUID();
   let folderId: string | null = null;
+  let submissionFolderId: string | null = null;
 
   try {
     const folder = await storage.createMerchantFolder(buildFolderName(merchantId, input.businessName));
     folderId = folder.folderId;
-    const uploadFolderId = folderId;
+    const submissionFolder = await storage.createFolder(
+      folderId,
+      getSubmissionFolderName(1),
+    );
+    submissionFolderId = submissionFolder.folderId;
+    const uploadFolderId = submissionFolderId;
 
     const uploadedDocuments = await Promise.all(
       input.documents.map(async (document) => {
@@ -248,6 +254,12 @@ export async function createMerchantSubmission(
       documents: result.documents.map(sanitizeDocumentRecord),
     };
   } catch (error) {
+    if (submissionFolderId) {
+      await storage.deleteFile(submissionFolderId).catch((cleanupError) => {
+        console.error("[merchant-submission.cleanup]", cleanupError);
+      });
+    }
+
     if (folderId) {
       await storage.deleteFile(folderId).catch((cleanupError) => {
         console.error("[merchant-submission.cleanup]", cleanupError);
@@ -274,6 +286,19 @@ function buildDocumentFileName(documentType: MerchantDocumentType, originalName:
     : "";
 
   return `${documentType}${extension}`;
+}
+
+function getSubmissionFolderName(index: number) {
+  switch (index) {
+    case 1:
+      return "First Submission";
+    case 2:
+      return "Second Submission";
+    case 3:
+      return "Third Submission";
+    default:
+      return `Submission ${index}`;
+  }
 }
 
 // ─── List / Update / Delete ─────────────────────────────────────────────────

@@ -90,15 +90,9 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
         category: "in_progress",
       },
       {
-        name: defaultStageNames.error,
-        slug: "error",
-        order: 4,
-        category: "error",
-      },
-      {
         name: defaultStageNames.closed,
         slug: "closed",
-        order: 5,
+        order: 4,
         category: "closed",
       },
     ] satisfies Array<
@@ -106,46 +100,9 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
     >;
   }
 
-  const baseStages: Array<Pick<NewQueueStage, "name" | "slug" | "order" | "category">> = [
-    {
-      name: defaultStageNames.new,
-      slug: "new",
-      order: 1,
-      category: "new",
-    },
-    {
-      name: defaultStageNames.in_progress,
-      slug: "working",
-      order: 2,
-      category: "in_progress",
-    },
-    {
-      name: "Pending",
-      slug: "pending",
-      order: 3,
-      category: "in_progress",
-    },
-    {
-      name: defaultStageNames.qc,
-      slug: "qc",
-      order: 4,
-      category: "qc",
-    },
-    {
-    name: defaultStageNames.error,
-    slug: "error",
-      order: 5,
-    category: "error",
-    },
-    {
-    name: defaultStageNames.closed,
-    slug: "closed",
-      order: 6,
-    category: "closed",
-    },
-  ];
-
-  return baseStages;
+  return [] satisfies Array<
+    Pick<NewQueueStage, "name" | "slug" | "order" | "category">
+  >;
 }
 
 function hasStageEquivalent(
@@ -178,9 +135,11 @@ export async function ensureQueueStages(
     .where(eq(queueStages.queueId, queue.id))
     .orderBy(asc(queueStages.order));
 
-  const defaultStages = createDefaultQueueStageDefinitions(queue);
+  const defaultStages: Array<
+    Pick<NewQueueStage, "name" | "slug" | "order" | "category">
+  > = createDefaultQueueStageDefinitions(queue);
 
-  if (existingStages.length === 0) {
+  if (existingStages.length === 0 && defaultStages.length > 0) {
     return db
       .insert(queueStages)
       .values(
@@ -192,9 +151,17 @@ export async function ensureQueueStages(
       .returning();
   }
 
-  const existingSlugs = new Set(existingStages.map((stage) => stage.slug));
+  if (existingStages.length === 0) {
+    return [];
+  }
+
+  const existingSlugs = new Set(
+    existingStages.map((stage: QueueStage) => stage.slug),
+  );
   const missingStages = defaultStages.filter(
-    (stage) =>
+    (
+      stage: Pick<NewQueueStage, "name" | "slug" | "order" | "category">,
+    ) =>
       !existingSlugs.has(stage.slug) &&
       !hasStageEquivalent(queue, existingStages, stage.slug),
   );
@@ -264,3 +231,21 @@ export function resolveStageForCase(params: {
 }
 
 export { getStatusForStage };
+
+export function getVisibleStagesForQueue(
+  queueSlug: string,
+  stages: QueueStage[],
+) {
+  if (queueSlug !== "documents-review") {
+    return stages;
+  }
+
+  const allowedStageSlugs = new Set([
+    "new",
+    "working",
+    "awaiting_client",
+    "closed",
+  ]);
+
+  return stages.filter((stage) => allowedStageSlugs.has(stage.slug));
+}

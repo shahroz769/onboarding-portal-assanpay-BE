@@ -31,6 +31,7 @@ import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
 import {
   ensureQueueStages,
+  getVisibleStagesForQueue,
   getStatusForStage,
   resolveStageForCase,
 } from '../queues/queue-stage-defaults'
@@ -40,6 +41,7 @@ import {
 } from '../notifications/notifications.service'
 import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
+import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
@@ -695,7 +697,7 @@ export async function getCaseDetail(caseId: string) {
     throw new AppError(500, 'Case data integrity error.')
   }
 
-  const stages =
+  const seededStages =
     stagesResult.length > 0
       ? stagesResult
       : await ensureQueueStages(db, {
@@ -705,9 +707,11 @@ export async function getCaseDetail(caseId: string) {
           qcEnabled: queue.qcEnabled,
         })
 
+  const stages = getVisibleStagesForQueue(queue.slug, seededStages)
+
   const currentStage =
     resolveStageForCase({
-      stages,
+      stages: stages.length > 0 ? stages : seededStages,
       currentStageId: caseData.currentStageId,
       status: caseData.status as CaseStatusValue,
     }) ?? null
@@ -793,13 +797,21 @@ export async function takeOwnership(caseId: string, userId: string) {
   }
 
   // Find next stage (first in_progress stage)
-  const nextStage = await db.query.queueStages.findFirst({
-    where: and(
-      eq(queueStages.queueId, caseData.queueId),
-      gt(queueStages.order, currentStage.order),
-    ),
-    orderBy: asc(queueStages.order),
-  })
+  const nextStage =
+    currentStage.slug === 'new'
+      ? await db.query.queueStages.findFirst({
+          where: and(
+            eq(queueStages.queueId, caseData.queueId),
+            eq(queueStages.slug, 'working'),
+          ),
+        })
+      : await db.query.queueStages.findFirst({
+          where: and(
+            eq(queueStages.queueId, caseData.queueId),
+            gt(queueStages.order, currentStage.order),
+          ),
+          orderBy: asc(queueStages.order),
+        })
 
   if (!nextStage) {
     throw new AppError(500, 'No next stage configured for this queue.')
@@ -845,6 +857,7 @@ export async function advanceStage(caseId: string, userId: string) {
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      status: cases.status,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -872,38 +885,57 @@ export async function advanceStage(caseId: string, userId: string) {
     throw new AppError(400, 'Case can only be advanced from an in-progress stage.')
   }
 
-  // Get queue for qcEnabled check
   const queue = await db.query.queues.findFirst({
     where: eq(queues.id, caseData.queueId),
-    columns: { qcEnabled: true },
+    columns: { qcEnabled: true, slug: true },
   })
 
-  // Find next stage by order
-  const nextStage = await db.query.queueStages.findFirst({
-    where: and(
-      eq(queueStages.queueId, caseData.queueId),
-      gt(queueStages.order, currentStage.order),
-    ),
-    orderBy: asc(queueStages.order),
-  })
+  let targetStage = null
 
-  if (!nextStage) {
-    throw new AppError(500, 'No next stage configured.')
-  }
+  if (queue?.slug === 'documents-review') {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'Documents-review cases can only be closed successfully from working.',
+      )
+    }
 
-  // If next stage is QC and qcEnabled is false, skip to the closed stage
-  let targetStage = nextStage
-  if (nextStage.category === 'qc' && !queue?.qcEnabled) {
-    const closedStage = await db.query.queueStages.findFirst({
+    targetStage = await db.query.queueStages.findFirst({
       where: and(
         eq(queueStages.queueId, caseData.queueId),
         eq(queueStages.category, 'closed'),
       ),
     })
-    if (!closedStage) {
+
+    if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-    targetStage = closedStage
+  } else {
+    const nextStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        gt(queueStages.order, currentStage.order),
+      ),
+      orderBy: asc(queueStages.order),
+    })
+
+    if (!nextStage) {
+      throw new AppError(500, 'No next stage configured.')
+    }
+
+    targetStage = nextStage
+    if (nextStage.category === 'qc' && !queue?.qcEnabled) {
+      const closedStage = await db.query.queueStages.findFirst({
+        where: and(
+          eq(queueStages.queueId, caseData.queueId),
+          eq(queueStages.category, 'closed'),
+        ),
+      })
+      if (!closedStage) {
+        throw new AppError(500, 'No closed stage configured.')
+      }
+      targetStage = closedStage
+    }
   }
 
   const newStatus = getStatusForStage(targetStage)
@@ -918,6 +950,7 @@ export async function advanceStage(caseId: string, userId: string) {
   // If advancing to closed, mark successful
   if (targetStage.category === 'closed') {
     updateData.closeOutcome = 'successful'
+    updateData.closeReason = null
     updateData.closedAt = now
   }
 
@@ -1034,6 +1067,7 @@ export async function closeUnsuccessful(
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      status: cases.status,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -1049,6 +1083,11 @@ export async function closeUnsuccessful(
     throw new AppError(403, 'Only the case owner can close the case.')
   }
 
+  const queue = await db.query.queues.findFirst({
+    where: eq(queues.id, caseData.queueId),
+    columns: { slug: true },
+  })
+
   // Verify not already closed
   if (caseData.currentStageId) {
     const currentStage = await db.query.queueStages.findFirst({
@@ -1059,24 +1098,23 @@ export async function closeUnsuccessful(
     }
   }
 
-  // Find error stage for this queue
-  const errorStage = await db.query.queueStages.findFirst({
+  const closedStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseData.queueId),
-      eq(queueStages.category, 'error'),
+      eq(queueStages.category, 'closed'),
     ),
   })
 
-  if (!errorStage) {
-    throw new AppError(500, 'No error stage configured for this queue.')
+  if (!closedStage) {
+    throw new AppError(500, 'No closed stage configured for this queue.')
   }
 
   const now = new Date()
   const [updated] = await db
     .update(cases)
     .set({
-      currentStageId: errorStage.id,
-      status: 'error',
+      currentStageId: closedStage.id,
+      status: queue?.slug === 'documents-review' ? 'closed' : 'error',
       closeOutcome: 'unsuccessful',
       closeReason: input.reason,
       closedAt: now,
@@ -1492,8 +1530,10 @@ export type ResubmissionContext = {
     label: string
     remarks: string | null
     isDocument: boolean
+    isRequired?: boolean
     currentValue?: string
     currentDocumentName?: string
+    currentDocumentUrl?: string
     documentType?: string
   }>
 }
@@ -1545,7 +1585,7 @@ export async function getResubmissionContext(
     .filter((id): id is string => id !== null)
   const docsById = new Map<
     string,
-    { documentType: string; originalName: string }
+    { documentType: string; originalName: string; currentDocumentUrl?: string }
   >()
   if (docIds.length > 0) {
     const docs = await db
@@ -1553,6 +1593,7 @@ export async function getResubmissionContext(
         id: merchantDocuments.id,
         documentType: merchantDocuments.documentType,
         originalName: merchantDocuments.originalName,
+        currentDocumentUrl: merchantDocuments.googleDriveWebViewLink,
       })
       .from(merchantDocuments)
       .where(inArray(merchantDocuments.id, docIds))
@@ -1560,11 +1601,13 @@ export async function getResubmissionContext(
       docsById.set(d.id, {
         documentType: d.documentType,
         originalName: d.originalName,
+        currentDocumentUrl: d.currentDocumentUrl,
       })
     }
   }
 
   const merchantData = merchant as Record<string, unknown>
+  const requiredDocumentTypes = new Set(getRequiredDocumentTypes(merchant.merchantType))
 
   const rejections = rejectedReviews.map((review) => {
     if (isDocumentFieldName(review.fieldName)) {
@@ -1579,8 +1622,10 @@ export async function getResubmissionContext(
         label,
         remarks: review.remarks,
         isDocument: true,
+        isRequired: doc ? requiredDocumentTypes.has(doc.documentType as any) : false,
         currentDocumentName: doc?.originalName,
         documentType: doc?.documentType,
+        currentDocumentUrl: doc?.currentDocumentUrl,
       }
     }
 

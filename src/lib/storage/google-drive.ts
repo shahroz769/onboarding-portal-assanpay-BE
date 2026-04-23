@@ -46,6 +46,10 @@ export type StorageUploadResult = {
 
 export interface FileStorageProvider {
   createMerchantFolder(folderName: string): Promise<{ folderId: string }>;
+  createFolder(
+    parentFolderId: string,
+    folderName: string,
+  ): Promise<{ folderId: string }>;
   uploadFile(folderId: string, input: StorageUploadInput): Promise<StorageUploadResult>;
   deleteFile(fileId: string): Promise<void>;
 }
@@ -56,8 +60,12 @@ let tokenPromise: Promise<string> | null = null;
 
 export class GoogleDriveStorageProvider implements FileStorageProvider {
   async createMerchantFolder(folderName: string) {
-    const accessToken = await getGoogleAccessToken();
     const parentFolderId = getRequiredEnv("GOOGLE_DRIVE_PARENT_FOLDER_ID");
+    return this.createFolder(parentFolderId, folderName);
+  }
+
+  async createFolder(parentFolderId: string, folderName: string) {
+    const accessToken = await getGoogleAccessToken();
     const response = await fetch(`${GOOGLE_DRIVE_FILES_URL}?supportsAllDrives=true`, {
       method: "POST",
       headers: {
@@ -74,7 +82,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     if (!response.ok) {
       throw await toStorageError(
         response,
-        "Failed to create merchant folder in Google Drive.",
+        "Failed to create folder in Google Drive.",
         {
           operation: "create-folder",
           fileId: parentFolderId,
@@ -143,6 +151,25 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     if (!response.ok && response.status !== 404) {
       throw await toStorageError(response, `Failed to delete Google Drive file "${fileId}".`);
     }
+  }
+
+  async getFileMetadata(fileId: string) {
+    const accessToken = await getGoogleAccessToken();
+    const response = await fetch(
+      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=id,name,parents,mimeType,webViewLink,webContentLink`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw await toStorageError(response, `Failed to read Google Drive metadata for "${fileId}".`);
+    }
+
+    return (await response.json()) as GoogleDriveFileResponse;
   }
 }
 

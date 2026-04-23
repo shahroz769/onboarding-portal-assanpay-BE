@@ -185,7 +185,7 @@ const sanitizedStringSchema = z
 
 const trimmedStringSchema = z.string().trim().min(1, "This field is required.");
 
-const scalarMerchantSchema = z
+export const scalarMerchantSchema = z
   .object({
     email: z.string().trim().email("Submitter email must be a valid email.").transform(toLower),
     ownerFullName: sanitizedStringSchema,
@@ -231,7 +231,34 @@ const scalarMerchantSchema = z
   })
   .strict();
 
+export const storedMerchantScalarSchema = z
+  .object({
+    submitterEmail: scalarMerchantSchema.shape.email,
+    ownerFullName: scalarMerchantSchema.shape.ownerFullName,
+    ownerPhone: scalarMerchantSchema.shape.ownerPhone,
+    businessName: scalarMerchantSchema.shape.businessName,
+    businessPhone: scalarMerchantSchema.shape.businessPhone,
+    businessEmail: scalarMerchantSchema.shape.businessEmail,
+    businessAddress: scalarMerchantSchema.shape.businessAddress,
+    businessWebsite: scalarMerchantSchema.shape.businessWebsite,
+    websiteCms: scalarMerchantSchema.shape.websiteCms,
+    businessDescription: scalarMerchantSchema.shape.businessDescription,
+    businessRegistrationDate: scalarMerchantSchema.shape.businessRegistrationDate,
+    businessNature: scalarMerchantSchema.shape.businessNature,
+    merchantType: scalarMerchantSchema.shape.merchantType,
+    estimatedMonthlyTransactions: scalarMerchantSchema.shape.estimatedMonthlyTransactions,
+    estimatedMonthlyVolume: scalarMerchantSchema.shape.estimatedMonthlyVolume,
+    accountTitle: scalarMerchantSchema.shape.accountTitle,
+    bankName: scalarMerchantSchema.shape.bankName,
+    branchName: scalarMerchantSchema.shape.branchName,
+    accountNumberIban: scalarMerchantSchema.shape.accountNumberIban,
+    swiftCode: scalarMerchantSchema.shape.swiftCode,
+    nextOfKinRelation: scalarMerchantSchema.shape.nextOfKinRelation,
+  })
+  .strict();
+
 export type MerchantFormValues = z.infer<typeof scalarMerchantSchema>;
+export type StoredMerchantScalarValues = z.infer<typeof storedMerchantScalarSchema>;
 
 export type UploadedMerchantDocument = {
   documentType: MerchantDocumentType;
@@ -332,6 +359,12 @@ export function parseMerchantFormData(formData: FormData): MerchantFormSubmissio
   };
 }
 
+export function validateStoredMerchantScalarValues(
+  values: Record<string, unknown>,
+) {
+  return storedMerchantScalarSchema.parse(values);
+}
+
 export function getRequiredDocumentTypes(merchantType: MerchantType) {
   return [
     ...baseDocumentTypes,
@@ -369,7 +402,7 @@ function assertRequiredDocuments(
   }
 }
 
-function normalizeMimeType(file: File) {
+export function normalizeMimeType(file: File) {
   if (allowedFileMimeTypes.includes(file.type as (typeof allowedFileMimeTypes)[number])) {
     return file.type as (typeof allowedFileMimeTypes)[number];
   }
