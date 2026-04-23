@@ -661,7 +661,14 @@ export async function getCaseDetail(caseId: string) {
   const caseData = caseRow[0]
 
   // Fetch all related data in parallel
-  const [queue, stagesResult, merchant, documents, fieldReviews] = await Promise.all([
+  const [
+    queue,
+    stagesResult,
+    merchant,
+    documents,
+    fieldReviews,
+    latestResubmissionEntry,
+  ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
     }),
@@ -691,6 +698,20 @@ export async function getCaseDetail(caseId: string) {
       .from(caseFieldReviews)
       .leftJoin(users, eq(caseFieldReviews.reviewedBy, users.id))
       .where(eq(caseFieldReviews.caseId, caseId)),
+    db
+      .select({
+        createdAt: caseHistory.createdAt,
+      })
+      .from(caseHistory)
+      .where(
+        and(
+          eq(caseHistory.caseId, caseId),
+          eq(caseHistory.action, 'resubmission_email_sent'),
+        ),
+      )
+      .orderBy(desc(caseHistory.createdAt))
+      .limit(1)
+      .then((rows: Array<{ createdAt: Date }>) => rows[0] ?? null),
   ])
 
   if (!queue || !merchant) {
@@ -749,6 +770,8 @@ export async function getCaseDetail(caseId: string) {
     merchant,
     documents,
     fieldReviews,
+    latestResubmissionRequestedAt:
+      latestResubmissionEntry?.createdAt?.toISOString() ?? null,
     owner: caseData.ownerId
       ? { id: caseData.ownerId, name: caseData.ownerName ?? 'Unknown' }
       : null,
@@ -987,6 +1010,7 @@ export async function saveFieldReviews(
       id: cases.id,
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
+      queueId: cases.queueId,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -1014,6 +1038,11 @@ export async function saveFieldReviews(
     throw new AppError(400, 'Field reviews can only be saved in an in-progress stage.')
   }
 
+  const queue = await db.query.queues.findFirst({
+    where: eq(queues.id, caseData.queueId),
+    columns: { slug: true },
+  })
+
   // Upsert field reviews
   const now = new Date()
   for (const review of input.reviews) {
@@ -1039,15 +1068,16 @@ export async function saveFieldReviews(
       })
   }
 
-  // Record history
-  const rejected = input.reviews.filter((r) => r.status === 'rejected').length
-  const approved = input.reviews.filter((r) => r.status === 'approved').length
-  await db.insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'field_reviews_saved',
-    details: { total: input.reviews.length, approved, rejected },
-  })
+  if (queue?.slug !== 'documents-review') {
+    const rejected = input.reviews.filter((r) => r.status === 'rejected').length
+    const approved = input.reviews.filter((r) => r.status === 'approved').length
+    await db.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'field_reviews_saved',
+      details: { total: input.reviews.length, approved, rejected },
+    })
+  }
 
   return { saved: input.reviews.length }
 }
@@ -1418,21 +1448,7 @@ export async function sendForResubmission(
   // 5. Issue token
   const issued = await issueToken(caseId, userId)
 
-  // 6. Record queued history (best-effort outside transaction)
-  await db.insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'resubmission_email_queued',
-    details: {
-      tokenId: issued.tokenId,
-      expiresAt: issued.expiresAt.toISOString(),
-      rejectedFields: rejectedFieldNames,
-      rejectedFieldLabels,
-      recipient: row.merchantSubmitterEmail,
-    },
-  })
-
-  // 7. Send the email
+  // 6. Send the email
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const emailResult = await sendEmail({
     to: row.merchantSubmitterEmail,
@@ -1455,7 +1471,7 @@ export async function sendForResubmission(
     },
   })
 
-  // 8a. Email failed — invalidate the token, leave case in working
+  // 7a. Email failed — invalidate the token, leave case in working
   if (emailResult.status === 'failed') {
     await db
       .update(caseResubmissionTokens)
@@ -1481,9 +1497,22 @@ export async function sendForResubmission(
     }
   }
 
-  // 8b. Email sent — move case to awaiting_client
+  // 7b. Email sent — record the rejection batch and move case to awaiting_client
   const now = new Date()
   await db.transaction(async (tx) => {
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'rejections_prepared',
+      details: {
+        total: rejectedFieldNames.length,
+        rejected: rejectedFieldNames.length,
+        approved: 0,
+        rejectedFields: rejectedFieldNames,
+        rejectedFieldLabels,
+      },
+    })
+
     await tx
       .update(cases)
       .set({
