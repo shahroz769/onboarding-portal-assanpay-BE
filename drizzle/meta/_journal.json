@@ -33,22 +33,57 @@
     {
       "idx": 4,
       "version": "7",
+      "when": 1776507000000,
+      "tag": "0004_shallow_ser_duncan",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
       "when": 1776507219935,
       "tag": "0004_happy_blacklash",
       "breakpoints": true
     },
     {
-      "idx": 5,
+      "idx": 6,
+      "version": "7",
+      "when": 1776809000000,
+      "tag": "0005_heavy_stephen_strange",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
       "version": "7",
       "when": 1776809666467,
       "tag": "0005_overjoyed_quasimodo",
       "breakpoints": true
     },
     {
-      "idx": 6,
+      "idx": 8,
+      "version": "7",
+      "when": 1776888000000,
+      "tag": "0006_case_error_stage",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
       "version": "7",
       "when": 1776888255200,
       "tag": "0006_glossy_khan",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777113600000,
+      "tag": "0007_backend_query_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777115421984,
+      "tag": "0011_amused_lizard",
       "breakpoints": true
     }
   ]

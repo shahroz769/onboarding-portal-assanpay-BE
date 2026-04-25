@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   date,
@@ -284,6 +285,35 @@ export const merchants = pgTable(
     merchantsStatusIdx: index("merchants_status_idx").on(table.status),
     merchantsNumberIdx: index("merchants_number_idx").on(table.merchantNumber),
     merchantsPriorityIdx: index("merchants_priority_idx").on(table.priority),
+    merchantsActiveNumberIdx: index("merchants_active_number_idx")
+      .on(table.merchantNumber, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActiveCreatedIdx: index("merchants_active_created_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActiveBusinessNameLowerIdx: index("merchants_active_business_name_lower_idx")
+      .on(sql`lower(${table.businessName})`, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActiveStageCreatedIdx: index("merchants_active_stage_created_idx")
+      .on(table.onboardingStage, table.createdAt, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActivePriorityCreatedIdx: index("merchants_active_priority_created_idx")
+      .on(table.priority, table.createdAt, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActiveStatusIdIdx: index("merchants_active_status_id_idx")
+      .on(table.status, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsActiveScopeIdIdx: index("merchants_active_scope_id_idx")
+      .on(table.businessScope, table.id)
+      .where(sql`${table.deletedAt} IS NULL`),
+    merchantsBusinessNameTrgmIdx: index("merchants_business_name_trgm_idx").using(
+      "gin",
+      sql`${table.businessName} gin_trgm_ops`,
+    ),
+    merchantsSubmitterEmailTrgmIdx: index("merchants_submitter_email_trgm_idx").using(
+      "gin",
+      sql`${table.submitterEmail} gin_trgm_ops`,
+    ),
   }),
 );
 
@@ -356,6 +386,34 @@ export const cases = pgTable(
     casesCaseNumberIdx: index("cases_case_number_idx").on(table.caseNumber),
     casesOwnerIdIdx: index("cases_owner_id_idx").on(table.ownerId),
     casesCurrentStageIdIdx: index("cases_current_stage_id_idx").on(table.currentStageId),
+    casesListCreatedIdx: index("cases_list_created_idx").on(table.createdAt, table.id),
+    casesCaseNumberIdIdx: index("cases_case_number_id_idx").on(table.caseNumber, table.id),
+    casesStatusIdIdx: index("cases_status_id_idx").on(table.status, table.id),
+    casesClosedIdIdx: index("cases_closed_id_idx").on(table.closedAt, table.id),
+    casesClosedCoalesceIdIdx: index("cases_closed_coalesce_id_idx").on(
+      sql`coalesce(${table.closedAt}, '0001-01-01 00:00:00+00'::timestamptz)`,
+      table.id,
+    ),
+    casesUpdatedIdIdx: index("cases_updated_id_idx").on(table.updatedAt, table.id),
+    casesQueueCreatedIdx: index("cases_queue_created_idx").on(
+      table.queueId,
+      table.createdAt,
+      table.id,
+    ),
+    casesOwnerCreatedIdx: index("cases_owner_created_idx").on(
+      table.ownerId,
+      table.createdAt,
+      table.id,
+    ),
+    casesStatusCreatedIdx: index("cases_status_created_idx").on(
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    casesCaseNumberTrgmIdx: index("cases_case_number_trgm_idx").using(
+      "gin",
+      sql`${table.caseNumber} gin_trgm_ops`,
+    ),
   }),
 );
 
@@ -531,6 +589,14 @@ export const notifications = pgTable(
       table.createdAt,
     ),
     notificationsCreatedAtIdx: index("notifications_created_at_idx").on(table.createdAt),
+    notificationsUserCreatedIdIdx: index("notifications_user_created_id_idx").on(
+      table.userId,
+      table.createdAt,
+      table.id,
+    ),
+    notificationsUserUnreadCreatedIdIdx: index(
+      "notifications_user_unread_created_id_idx",
+    ).on(table.userId, table.isRead, table.createdAt, table.id),
   }),
 );
 

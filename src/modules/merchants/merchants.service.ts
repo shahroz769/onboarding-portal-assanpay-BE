@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
 import {
@@ -13,7 +13,6 @@ import {
   type FileStorageProvider,
 } from "../../lib/storage/google-drive";
 import { AppError } from "../../lib/errors";
-import { cascadeMerchantPriority } from "../cases/cases.service";
 import { ensureQueueStages } from "../queues/queue-stage-defaults";
 import type {
   BusinessScopeValue,
@@ -53,6 +52,105 @@ function parseCsvValues<TValue extends string>(
     .split(",")
     .map((value) => value.trim())
     .filter((value): value is TValue => value.length > 0 && allowedValues.has(value));
+}
+
+type KeysetCursorKind = "date" | "number" | "string";
+
+type DecodedKeysetCursor = {
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  value: Date | number | string;
+  id: string;
+};
+
+function encodeKeysetCursor(input: {
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  value: unknown;
+  id: string;
+}) {
+  return btoa(
+    encodeURIComponent(
+      JSON.stringify({
+        ...input,
+        value:
+          input.value instanceof Date ? input.value.toISOString() : input.value,
+      }),
+    ),
+  );
+}
+
+function decodeKeysetCursor(
+  rawCursor: string,
+  expected: {
+    sortBy: string;
+    sortOrder: "asc" | "desc";
+    kind: KeysetCursorKind;
+  },
+): DecodedKeysetCursor {
+  try {
+    const parsed = JSON.parse(decodeURIComponent(atob(rawCursor))) as {
+      sortBy?: unknown;
+      sortOrder?: unknown;
+      value?: unknown;
+      id?: unknown;
+    };
+
+    if (
+      parsed.sortBy !== expected.sortBy ||
+      parsed.sortOrder !== expected.sortOrder ||
+      typeof parsed.id !== "string"
+    ) {
+      throw new Error("Cursor does not match the active sort.");
+    }
+
+    let value: Date | number | string;
+    if (expected.kind === "date") {
+      if (typeof parsed.value !== "string") {
+        throw new Error("Cursor date is invalid.");
+      }
+      value = new Date(parsed.value);
+      if (Number.isNaN(value.getTime())) {
+        throw new Error("Cursor date is invalid.");
+      }
+    } else if (expected.kind === "number") {
+      value = Number(parsed.value);
+      if (!Number.isFinite(value)) {
+        throw new Error("Cursor number is invalid.");
+      }
+    } else {
+      if (typeof parsed.value !== "string") {
+        throw new Error("Cursor value is invalid.");
+      }
+      value = parsed.value;
+    }
+
+    return {
+      sortBy: expected.sortBy,
+      sortOrder: expected.sortOrder,
+      value,
+      id: parsed.id,
+    };
+  } catch {
+    throw new AppError(400, "Invalid pagination cursor.");
+  }
+}
+
+function buildKeysetCondition(input: {
+  expression: unknown;
+  idExpression: unknown;
+  sortOrder: "asc" | "desc";
+  value: Date | number | string;
+  id: string;
+}) {
+  const operator = input.sortOrder === "desc" ? "<" : ">";
+  return or(
+    sql`${input.expression} ${sql.raw(operator)} ${input.value}`,
+    and(
+      sql`${input.expression} = ${input.value}`,
+      sql`${input.idExpression} ${sql.raw(operator)} ${input.id}`,
+    ),
+  )!;
 }
 
 function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
@@ -304,13 +402,34 @@ function getSubmissionFolderName(index: number) {
 // ─── List / Update / Delete ─────────────────────────────────────────────────
 
 const sortColumnMap = {
-  merchantNumber: merchants.merchantNumber,
-  businessName: merchants.businessName,
-  onboardingStage: merchants.onboardingStage,
-  status: merchants.status,
-  priority: merchants.priority,
-  createdAt: merchants.createdAt,
-  businessScope: merchants.businessScope,
+  merchantNumber: {
+    expression: merchants.merchantNumber,
+    kind: "number",
+  },
+  businessName: {
+    expression: sql`lower(${merchants.businessName})`,
+    kind: "string",
+  },
+  onboardingStage: {
+    expression: merchants.onboardingStage,
+    kind: "string",
+  },
+  status: {
+    expression: merchants.status,
+    kind: "string",
+  },
+  priority: {
+    expression: merchants.priority,
+    kind: "string",
+  },
+  createdAt: {
+    expression: merchants.createdAt,
+    kind: "date",
+  },
+  businessScope: {
+    expression: merchants.businessScope,
+    kind: "string",
+  },
 } as const;
 
 export async function listMerchants(query: ListMerchantsQuery) {
@@ -380,50 +499,71 @@ export async function listMerchants(query: ListMerchantsQuery) {
     }
   }
 
-  const where = and(...conditions);
-
   const orderFn = query.sortOrder === "desc" ? desc : asc;
-  const sortCol = query.sortBy === "businessName"
-    ? sql`lower(${merchants.businessName})`
-    : sortColumnMap[query.sortBy] ?? merchants.createdAt;
-
-  const offset = (query.page - 1) * query.perPage;
-
-  const [rows, [totalRow]] = await Promise.all([
-    db
-      .select({
-        id: merchants.id,
-        merchantNumber: merchants.merchantNumber,
-        businessName: merchants.businessName,
-        onboardingStage: merchants.onboardingStage,
-        status: merchants.status,
-        priority: merchants.priority,
-        priorityNote: merchants.priorityNote,
-        createdAt: merchants.createdAt,
-        currency: merchants.currency,
-        businessScope: merchants.businessScope,
-        liveAt: merchants.liveAt,
+  const sortSpec = sortColumnMap[query.sortBy] ?? sortColumnMap.merchantNumber;
+  const cursor = query.cursor
+    ? decodeKeysetCursor(query.cursor, {
+        sortBy: query.sortBy,
+        sortOrder: query.sortOrder,
+        kind: sortSpec.kind,
       })
-      .from(merchants)
-      .where(where)
-      .orderBy(orderFn(sortCol), orderFn(merchants.id))
-      .limit(query.perPage)
-      .offset(offset),
-    db
-      .select({ count: count() })
-      .from(merchants)
-      .where(where),
-  ]);
+    : null;
 
-  const totalCount = Number(totalRow?.count ?? 0);
-  const totalPages = Math.ceil(totalCount / query.perPage);
+  if (cursor) {
+    conditions.push(
+      buildKeysetCondition({
+        expression: sortSpec.expression,
+        idExpression: merchants.id,
+        sortOrder: query.sortOrder,
+        value: cursor.value,
+        id: cursor.id,
+      }),
+    );
+  }
+
+  const where = and(...conditions);
+  const rows = await db
+    .select({
+      id: merchants.id,
+      merchantNumber: merchants.merchantNumber,
+      businessName: merchants.businessName,
+      onboardingStage: merchants.onboardingStage,
+      status: merchants.status,
+      priority: merchants.priority,
+      priorityNote: merchants.priorityNote,
+      createdAt: merchants.createdAt,
+      currency: merchants.currency,
+      businessScope: merchants.businessScope,
+      liveAt: merchants.liveAt,
+      cursorValue: sortSpec.expression,
+    })
+    .from(merchants)
+    .where(where)
+    .orderBy(orderFn(sortSpec.expression), orderFn(merchants.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const nextCursor =
+    hasMore && pageRows.length > 0
+      ? encodeKeysetCursor({
+          sortBy: query.sortBy,
+          sortOrder: query.sortOrder,
+          value: pageRows[pageRows.length - 1]!.cursorValue,
+          id: pageRows[pageRows.length - 1]!.id,
+        })
+      : null;
+  const items = pageRows.map((pageRow) => {
+    const row = { ...pageRow };
+    delete (row as { cursorValue?: unknown }).cursorValue;
+    return row;
+  });
 
   return {
-    merchants: rows,
-    page: query.page,
-    perPage: query.perPage,
-    totalCount,
-    totalPages,
+    merchants: items,
+    nextCursor,
+    hasMore,
+    limit: query.limit,
   };
 }
 
@@ -433,26 +573,35 @@ export async function updateMerchantPriority(
 ) {
   const db = getDb();
 
-  const [updated] = await db
-    .update(merchants)
-    .set({
-      priority: input.priority,
-      priorityNote: input.note,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
-    .returning({
-      id: merchants.id,
-      priority: merchants.priority,
-      priorityNote: merchants.priorityNote,
-    });
+  const [updated] = await db.transaction(async (tx) => {
+    const now = new Date();
+    const updatedRows = await tx
+      .update(merchants)
+      .set({
+        priority: input.priority,
+        priorityNote: input.note,
+        updatedAt: now,
+      })
+      .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+      .returning({
+        id: merchants.id,
+        priority: merchants.priority,
+        priorityNote: merchants.priorityNote,
+      });
+
+    if (updatedRows.length > 0) {
+      await tx
+        .update(cases)
+        .set({ priority: input.priority, updatedAt: now })
+        .where(eq(cases.merchantId, merchantId));
+    }
+
+    return updatedRows;
+  });
 
   if (!updated) {
     throw new AppError(404, "Merchant not found.");
   }
-
-  // Cascade priority to all cases for this merchant
-  await cascadeMerchantPriority(merchantId, input.priority);
 
   return updated;
 }
@@ -491,17 +640,27 @@ export async function bulkUpdatePriority(
 ) {
   const db = getDb();
 
-  const result = await db
-    .update(merchants)
-    .set({
-      priority,
-      updatedAt: new Date(),
-    })
-    .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
-    .returning({ id: merchants.id });
+  const result = await db.transaction(async (tx) => {
+    const now = new Date();
+    const updatedRows = await tx
+      .update(merchants)
+      .set({
+        priority,
+        updatedAt: now,
+      })
+      .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+      .returning({ id: merchants.id });
 
-  // Cascade priority to all cases for each merchant
-  await Promise.all(ids.map((id) => cascadeMerchantPriority(id, priority)));
+    const updatedIds = updatedRows.map((row) => row.id);
+    if (updatedIds.length > 0) {
+      await tx
+        .update(cases)
+        .set({ priority, updatedAt: now })
+        .where(inArray(cases.merchantId, updatedIds));
+    }
+
+    return updatedRows;
+  });
 
   return { updatedCount: result.length };
 }

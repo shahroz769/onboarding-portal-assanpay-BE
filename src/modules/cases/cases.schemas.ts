@@ -94,8 +94,8 @@ export const updateCasePrioritySchema = z
 export type UpdateCasePriorityInput = z.infer<typeof updateCasePrioritySchema>;
 
 export const listCasesQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  perPage: z.coerce.number().int().positive().max(100).default(30),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(100).default(30),
   search: z.string().optional(),
   queueId: z.string().uuid().optional(),
   ownerId: z.string().optional(),

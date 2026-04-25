@@ -1,13 +1,11 @@
 import {
   and,
   asc,
-  count,
   desc,
   eq,
   gt,
   ilike,
   inArray,
-  isNull,
   lt,
   or,
   sql,
@@ -76,6 +74,105 @@ function parseCsvValues<TValue extends string>(
 }
 
 // ─── Case Number Generation ─────────────────────────────────────────────────
+
+type KeysetCursorKind = 'date' | 'number' | 'string'
+
+type DecodedKeysetCursor = {
+  sortBy: string
+  sortOrder: 'asc' | 'desc'
+  value: Date | number | string
+  id: string
+}
+
+function encodeKeysetCursor(input: {
+  sortBy: string
+  sortOrder: 'asc' | 'desc'
+  value: unknown
+  id: string
+}) {
+  return btoa(
+    encodeURIComponent(
+      JSON.stringify({
+        ...input,
+        value:
+          input.value instanceof Date ? input.value.toISOString() : input.value,
+      }),
+    ),
+  )
+}
+
+function decodeKeysetCursor(
+  rawCursor: string,
+  expected: {
+    sortBy: string
+    sortOrder: 'asc' | 'desc'
+    kind: KeysetCursorKind
+  },
+): DecodedKeysetCursor {
+  try {
+    const parsed = JSON.parse(decodeURIComponent(atob(rawCursor))) as {
+      sortBy?: unknown
+      sortOrder?: unknown
+      value?: unknown
+      id?: unknown
+    }
+
+    if (
+      parsed.sortBy !== expected.sortBy ||
+      parsed.sortOrder !== expected.sortOrder ||
+      typeof parsed.id !== 'string'
+    ) {
+      throw new Error('Cursor does not match the active sort.')
+    }
+
+    let value: Date | number | string
+    if (expected.kind === 'date') {
+      if (typeof parsed.value !== 'string') {
+        throw new Error('Cursor date is invalid.')
+      }
+      value = new Date(parsed.value)
+      if (Number.isNaN(value.getTime())) {
+        throw new Error('Cursor date is invalid.')
+      }
+    } else if (expected.kind === 'number') {
+      value = Number(parsed.value)
+      if (!Number.isFinite(value)) {
+        throw new Error('Cursor number is invalid.')
+      }
+    } else {
+      if (typeof parsed.value !== 'string') {
+        throw new Error('Cursor value is invalid.')
+      }
+      value = parsed.value
+    }
+
+    return {
+      sortBy: expected.sortBy,
+      sortOrder: expected.sortOrder,
+      value,
+      id: parsed.id,
+    }
+  } catch {
+    throw new AppError(400, 'Invalid pagination cursor.')
+  }
+}
+
+function buildKeysetCondition(input: {
+  expression: unknown
+  idExpression: unknown
+  sortOrder: 'asc' | 'desc'
+  value: Date | number | string
+  id: string
+}) {
+  const operator = input.sortOrder === 'desc' ? '<' : '>'
+  return or(
+    sql`${input.expression} ${sql.raw(operator)} ${input.value}`,
+    and(
+      sql`${input.expression} = ${input.value}`,
+      sql`${input.idExpression} ${sql.raw(operator)} ${input.id}`,
+    ),
+  )!
+}
 
 async function generateCaseNumber(
   tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0],
@@ -238,65 +335,103 @@ export async function listCases(query: ListCasesQuery) {
     }
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined
-
   const sortColumnMap = {
-    caseNumber: cases.caseNumber,
-    status: cases.status,
-    createdAt: cases.createdAt,
-    closedAt: cases.closedAt,
-    updatedAt: cases.updatedAt,
-    merchantName: sql`lower(${merchants.businessName})`,
+    caseNumber: {
+      expression: cases.caseNumber,
+      kind: 'string',
+    },
+    status: {
+      expression: cases.status,
+      kind: 'string',
+    },
+    createdAt: {
+      expression: cases.createdAt,
+      kind: 'date',
+    },
+    closedAt: {
+      expression: sql`coalesce(${cases.closedAt}, '0001-01-01 00:00:00+00'::timestamptz)`,
+      kind: 'date',
+    },
+    updatedAt: {
+      expression: cases.updatedAt,
+      kind: 'date',
+    },
+    merchantName: {
+      expression: sql`lower(${merchants.businessName})`,
+      kind: 'string',
+    },
   } as const
 
   const orderFn = query.sortOrder === 'desc' ? desc : asc
-  const sortCol = sortColumnMap[query.sortBy] ?? cases.createdAt
-
-  const offset = (query.page - 1) * query.perPage
-
-  const [rows, [totalRow]] = await Promise.all([
-    db
-      .select({
-        id: cases.id,
-        caseNumber: cases.caseNumber,
-        queueId: cases.queueId,
-        queueName: queues.name,
-        merchantId: cases.merchantId,
-        merchantName: merchants.businessName,
-        ownerId: cases.ownerId,
-        ownerName: users.name,
-        status: cases.status,
-        priority: cases.priority,
-        closedAt: cases.closedAt,
-        createdAt: cases.createdAt,
-        updatedAt: cases.updatedAt,
+  const sortSpec = sortColumnMap[query.sortBy] ?? sortColumnMap.createdAt
+  const cursor = query.cursor
+    ? decodeKeysetCursor(query.cursor, {
+        sortBy: query.sortBy,
+        sortOrder: query.sortOrder,
+        kind: sortSpec.kind,
       })
-      .from(cases)
-      .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .leftJoin(users, eq(cases.ownerId, users.id))
-      .where(where)
-      .orderBy(orderFn(sortCol), orderFn(cases.id))
-      .limit(query.perPage)
-      .offset(offset),
-    db
-      .select({ count: count() })
-      .from(cases)
-      .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .leftJoin(users, eq(cases.ownerId, users.id))
-      .where(where),
-  ])
+    : null
 
-  const totalCount = Number(totalRow?.count ?? 0)
-  const totalPages = Math.ceil(totalCount / query.perPage)
+  if (cursor) {
+    conditions.push(
+      buildKeysetCondition({
+        expression: sortSpec.expression,
+        idExpression: cases.id,
+        sortOrder: query.sortOrder,
+        value: cursor.value,
+        id: cursor.id,
+      }),
+    )
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined
+  const rows = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      queueId: cases.queueId,
+      queueName: queues.name,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      ownerId: cases.ownerId,
+      ownerName: users.name,
+      status: cases.status,
+      priority: cases.priority,
+      closedAt: cases.closedAt,
+      createdAt: cases.createdAt,
+      updatedAt: cases.updatedAt,
+      cursorValue: sortSpec.expression,
+    })
+    .from(cases)
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .leftJoin(users, eq(cases.ownerId, users.id))
+    .where(where)
+    .orderBy(orderFn(sortSpec.expression), orderFn(cases.id))
+    .limit(query.limit + 1)
+
+  const hasMore = rows.length > query.limit
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows
+  const nextCursor =
+    hasMore && pageRows.length > 0
+      ? encodeKeysetCursor({
+          sortBy: query.sortBy,
+          sortOrder: query.sortOrder,
+          value: pageRows[pageRows.length - 1]!.cursorValue,
+          id: pageRows[pageRows.length - 1]!.id,
+        })
+      : null
+  const items = pageRows.map((pageRow) => {
+    const row = { ...pageRow }
+    delete (row as { cursorValue?: unknown }).cursorValue
+    return row
+  })
 
   return {
-    cases: rows,
-    page: query.page,
-    perPage: query.perPage,
-    totalCount,
-    totalPages,
+    cases: items,
+    nextCursor,
+    hasMore,
+    limit: query.limit,
   }
 }
 
@@ -351,15 +486,6 @@ export async function bulkAssignCases(
     throw new AppError(404, 'One or more cases were not found.')
   }
 
-  const updatedCases = await db
-    .update(cases)
-    .set({
-      ownerId,
-      updatedAt: new Date(),
-    })
-    .where(inArray(cases.id, uniqueCaseIds))
-    .returning({ id: cases.id })
-
   const historyEntries = existingCases
     .filter((caseRecord) => caseRecord.ownerId !== ownerId)
     .map((caseRecord) => ({
@@ -372,9 +498,24 @@ export async function bulkAssignCases(
       },
     }))
 
-  if (historyEntries.length > 0) {
-    await db.insert(caseHistory).values(historyEntries)
+  const updatedCases = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(cases)
+      .set({
+        ownerId,
+        updatedAt: new Date(),
+      })
+      .where(inArray(cases.id, uniqueCaseIds))
+      .returning({ id: cases.id })
 
+    if (historyEntries.length > 0) {
+      await tx.insert(caseHistory).values(historyEntries)
+    }
+
+    return updatedRows
+  })
+
+  if (historyEntries.length > 0) {
     // Notifications (best-effort) for each affected case
     try {
       const actor = await db.query.users.findFirst({
@@ -519,34 +660,40 @@ export async function assignCase(
     throw new AppError(404, 'User not found.')
   }
 
-  const [updated] = await db
-    .update(cases)
-    .set({
-      ownerId,
-      updatedAt: new Date(),
-    })
-    .where(eq(cases.id, caseId))
-    .returning({
-      id: cases.id,
-      ownerId: cases.ownerId,
-      updatedAt: cases.updatedAt,
-    })
+  const [updated] = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(cases)
+      .set({
+        ownerId,
+        updatedAt: new Date(),
+      })
+      .where(eq(cases.id, caseId))
+      .returning({
+        id: cases.id,
+        ownerId: cases.ownerId,
+        updatedAt: cases.updatedAt,
+      })
+
+    if (existingCase.ownerId !== ownerId) {
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId,
+        action: 'owner_changed',
+        details: {
+          fromOwner: existingCase.ownerName ?? 'Unassigned',
+          toOwner: nextOwner?.name ?? 'Unassigned',
+        },
+      })
+    }
+
+    return updatedRows
+  })
 
   if (!updated) {
     throw new AppError(500, 'Failed to assign case.')
   }
 
   if (existingCase.ownerId !== ownerId) {
-    await db.insert(caseHistory).values({
-      caseId,
-      actorId,
-      action: 'owner_changed',
-      details: {
-        fromOwner: existingCase.ownerName ?? 'Unassigned',
-        toOwner: nextOwner?.name ?? 'Unassigned',
-      },
-    })
-
     // Notifications (best-effort)
     try {
       const meta = await db
@@ -842,28 +989,31 @@ export async function takeOwnership(caseId: string, userId: string) {
 
   const newStatus = getStatusForStage(nextStage)
 
-  const [updated] = await db
-    .update(cases)
-    .set({
-      ownerId: userId,
-      currentStageId: nextStage.id,
-      status: newStatus,
-      updatedAt: new Date(),
-    })
-    .where(eq(cases.id, caseId))
-    .returning()
+  const [updated] = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(cases)
+      .set({
+        ownerId: userId,
+        currentStageId: nextStage.id,
+        status: newStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(cases.id, caseId))
+      .returning()
 
-  // Record history
-  await db.insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'ownership_taken',
-    details: {
-      fromStage: currentStage.name,
-      toStage: nextStage.name,
-      fromOwner: 'Unassigned',
-      toOwner: actor?.name ?? 'Assigned',
-    },
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'ownership_taken',
+      details: {
+        fromStage: currentStage.name,
+        toStage: nextStage.name,
+        fromOwner: 'Unassigned',
+        toOwner: actor?.name ?? 'Assigned',
+      },
+    })
+
+    return updatedRows
   })
 
   return updated
@@ -977,19 +1127,22 @@ export async function advanceStage(caseId: string, userId: string) {
     updateData.closedAt = now
   }
 
-  const [updated] = await db
-    .update(cases)
-    .set(updateData)
-    .where(eq(cases.id, caseId))
-    .returning()
-
-  // Record history
   const action = targetStage.category === 'closed' ? 'closed_successful' : 'stage_advanced'
-  await db.insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action,
-    details: { fromStage: currentStage.name, toStage: targetStage.name },
+  const [updated] = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(cases)
+      .set(updateData)
+      .where(eq(cases.id, caseId))
+      .returning()
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action,
+      details: { fromStage: currentStage.name, toStage: targetStage.name },
+    })
+
+    return updatedRows
   })
 
   return updated
@@ -1043,43 +1196,47 @@ export async function saveFieldReviews(
     columns: { slug: true },
   })
 
-  // Upsert field reviews
   const now = new Date()
-  for (const review of input.reviews) {
-    await db
+  const reviewByFieldName = new Map(
+    input.reviews.map((review) => [review.fieldName, review]),
+  )
+  const reviewValues = [...reviewByFieldName.values()].map((review) => ({
+    caseId,
+    fieldName: review.fieldName,
+    status: review.status,
+    remarks: review.remarks ?? null,
+    reviewedBy: userId,
+    createdAt: now,
+    updatedAt: now,
+  }))
+
+  await db.transaction(async (tx) => {
+    await tx
       .insert(caseFieldReviews)
-      .values({
-        caseId,
-        fieldName: review.fieldName,
-        status: review.status,
-        remarks: review.remarks ?? null,
-        reviewedBy: userId,
-        createdAt: now,
-        updatedAt: now,
-      })
+      .values(reviewValues)
       .onConflictDoUpdate({
         target: [caseFieldReviews.caseId, caseFieldReviews.fieldName],
         set: {
-          status: review.status,
-          remarks: review.remarks ?? null,
+          status: sql`excluded.status`,
+          remarks: sql`excluded.remarks`,
           reviewedBy: userId,
           updatedAt: now,
         },
       })
-  }
 
-  if (queue?.slug !== 'documents-review') {
-    const rejected = input.reviews.filter((r) => r.status === 'rejected').length
-    const approved = input.reviews.filter((r) => r.status === 'approved').length
-    await db.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'field_reviews_saved',
-      details: { total: input.reviews.length, approved, rejected },
-    })
-  }
+    if (queue?.slug !== 'documents-review') {
+      const rejected = reviewValues.filter((r) => r.status === 'rejected').length
+      const approved = reviewValues.filter((r) => r.status === 'approved').length
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'field_reviews_saved',
+        details: { total: reviewValues.length, approved, rejected },
+      })
+    }
+  })
 
-  return { saved: input.reviews.length }
+  return { saved: reviewValues.length }
 }
 
 // ─── Close Unsuccessful ─────────────────────────────────────────────────────
@@ -1140,24 +1297,28 @@ export async function closeUnsuccessful(
   }
 
   const now = new Date()
-  const [updated] = await db
-    .update(cases)
-    .set({
-      currentStageId: closedStage.id,
-      status: queue?.slug === 'documents-review' ? 'closed' : 'error',
-      closeOutcome: 'unsuccessful',
-      closeReason: input.reason,
-      closedAt: now,
-      updatedAt: now,
-    })
-    .where(eq(cases.id, caseId))
-    .returning()
+  const [updated] = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(cases)
+      .set({
+        currentStageId: closedStage.id,
+        status: queue?.slug === 'documents-review' ? 'closed' : 'error',
+        closeOutcome: 'unsuccessful',
+        closeReason: input.reason,
+        closedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(cases.id, caseId))
+      .returning()
 
-  await db.insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'closed_unsuccessful',
-    details: { reason: input.reason },
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'closed_unsuccessful',
+      details: { reason: input.reason },
+    })
+
+    return updatedRows
   })
 
   return updated
@@ -1293,7 +1454,15 @@ export async function listCaseHistory(caseId: string) {
         sql`${caseHistory.action} <> 'comment_added'`,
       ),
     )
-    .orderBy(desc(caseHistory.createdAt))
+    .orderBy(
+      desc(caseHistory.createdAt),
+      sql`case
+        when ${caseHistory.action} = 'resubmission_email_sent' then 2
+        when ${caseHistory.action} = 'rejections_prepared' then 1
+        else 0
+      end desc`,
+      desc(caseHistory.id),
+    )
 
   return history
 }
@@ -1448,6 +1617,8 @@ export async function sendForResubmission(
   // 5. Issue token
   const issued = await issueToken(caseId, userId)
 
+  const preparedAt = new Date()
+
   // 6. Send the email
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const emailResult = await sendEmail({
@@ -1498,7 +1669,7 @@ export async function sendForResubmission(
   }
 
   // 7b. Email sent — record the rejection batch and move case to awaiting_client
-  const now = new Date()
+  const sentAt = new Date()
   await db.transaction(async (tx) => {
     await tx.insert(caseHistory).values({
       caseId,
@@ -1511,6 +1682,7 @@ export async function sendForResubmission(
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
       },
+      createdAt: preparedAt,
     })
 
     await tx
@@ -1518,7 +1690,7 @@ export async function sendForResubmission(
       .set({
         status: 'awaiting_client',
         currentStageId: awaitingStage.id,
-        updatedAt: now,
+        updatedAt: sentAt,
       })
       .where(eq(cases.id, caseId))
 
@@ -1534,6 +1706,7 @@ export async function sendForResubmission(
         emailLogId: emailResult.emailLogId,
         recipient: row.merchantSubmitterEmail,
       },
+      createdAt: sentAt,
     })
   })
 

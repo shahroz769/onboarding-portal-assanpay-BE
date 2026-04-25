@@ -12,7 +12,7 @@ export const notificationTypeValues = [
 export type NotificationType = (typeof notificationTypeValues)[number];
 
 export const listNotificationsQuerySchema = z.object({
-  cursor: z.string().datetime().optional(),
+  cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(50).default(20),
   filter: z.enum(["all", "unread"]).default("all"),
 });

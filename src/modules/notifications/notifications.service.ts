@@ -1,4 +1,4 @@
-import { and, count, desc, eq, lt, sql } from "drizzle-orm";
+import { and, count, desc, eq, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
 import {
@@ -22,6 +22,29 @@ import type {
 
 // ─── List ───────────────────────────────────────────────────────────────────
 
+const NOTIFICATION_CURSOR_SEPARATOR = "__";
+
+function encodeNotificationCursor(row: { createdAt: Date; id: string }) {
+  return `${row.createdAt.toISOString()}${NOTIFICATION_CURSOR_SEPARATOR}${row.id}`;
+}
+
+function decodeNotificationCursor(cursor: string) {
+  const [rawDate, id] = cursor.split(NOTIFICATION_CURSOR_SEPARATOR);
+  const cursorDate = rawDate ? new Date(rawDate) : null;
+
+  if (!cursorDate || Number.isNaN(cursorDate.getTime())) {
+    return null;
+  }
+
+  return {
+    createdAt: cursorDate,
+    id:
+      id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+        ? id
+        : null,
+  };
+}
+
 export async function listForUser(userId: string, query: ListNotificationsQuery) {
   const db = getDb();
 
@@ -30,9 +53,19 @@ export async function listForUser(userId: string, query: ListNotificationsQuery)
     conds.push(eq(notifications.isRead, false));
   }
   if (query.cursor) {
-    const cursorDate = new Date(query.cursor);
-    if (!Number.isNaN(cursorDate.getTime())) {
-      conds.push(lt(notifications.createdAt, cursorDate));
+    const cursor = decodeNotificationCursor(query.cursor);
+    if (cursor) {
+      conds.push(
+        cursor.id
+          ? or(
+              lt(notifications.createdAt, cursor.createdAt),
+              and(
+                eq(notifications.createdAt, cursor.createdAt),
+                lt(notifications.id, cursor.id),
+              ),
+            )!
+          : lt(notifications.createdAt, cursor.createdAt),
+      );
     }
   }
 
@@ -63,7 +96,7 @@ export async function listForUser(userId: string, query: ListNotificationsQuery)
   const items = hasMore ? rows.slice(0, query.limit) : rows;
   const nextCursor =
     hasMore && items.length > 0
-      ? items[items.length - 1]!.createdAt.toISOString()
+      ? encodeNotificationCursor(items[items.length - 1]!)
       : null;
 
   const unreadCount = await getUnreadCount(userId);
