@@ -19,7 +19,6 @@ export type DocumentResubmissionEmailRejection = {
 };
 
 export type DocumentResubmissionEmailProps = {
-  caseNumber: string;
   merchantName: string;
   ownerName: string;
   rejections: DocumentResubmissionEmailRejection[];
@@ -28,7 +27,6 @@ export type DocumentResubmissionEmailProps = {
 };
 
 export function DocumentResubmissionEmail({
-  caseNumber,
   merchantName,
   ownerName,
   rejections,
@@ -47,9 +45,6 @@ export function DocumentResubmissionEmail({
             <Heading className="m-0 text-2xl font-semibold text-gray-900">
               Update required for {merchantName}
             </Heading>
-            <Text className="mt-2 text-sm text-gray-500">
-              Case reference: {caseNumber}
-            </Text>
 
             <Text className="mt-6 text-base text-gray-800">
               Hi {ownerName},
@@ -115,7 +110,6 @@ export function DocumentResubmissionEmail({
 }
 
 DocumentResubmissionEmail.PreviewProps = {
-  caseNumber: "DR-000000123",
   merchantName: "Acme Pvt Ltd",
   ownerName: "Jane Owner",
   rejections: [

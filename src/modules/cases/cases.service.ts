@@ -1641,10 +1641,9 @@ export async function sendForResubmission(
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const emailResult = await sendEmail({
     to: row.merchantSubmitterEmail,
-    subject: `Action required for case ${row.caseNumber}`,
+    subject: 'Action required to update your onboarding submission',
     template: 'document-resubmission',
     react: DocumentResubmissionEmail({
-      caseNumber: row.caseNumber,
       merchantName: row.merchantName,
       ownerName: row.merchantOwnerName,
       rejections,
