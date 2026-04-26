@@ -162,6 +162,7 @@ notificationRoutes.get('/stream', (c) => {
       stream.onAbort(() => {
         cleanup()
       })
+      c.req.raw.signal.addEventListener('abort', cleanup, { once: true })
 
       try {
         if (!(await writeSse({ event: 'ready', data: 'ok' }))) {
