@@ -1614,6 +1614,24 @@ export async function sendForResubmission(
     )
   }
 
+  const reservedAt = new Date()
+  const [reservedCase] = await db
+    .update(cases)
+    .set({
+      status: 'awaiting_client',
+      currentStageId: awaitingStage.id,
+      updatedAt: reservedAt,
+    })
+    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+    .returning({ id: cases.id })
+
+  if (!reservedCase) {
+    throw new AppError(
+      409,
+      'This case has already been sent for resubmission.',
+    )
+  }
+
   // 5. Issue token
   const issued = await issueToken(caseId, userId)
 
@@ -1648,6 +1666,15 @@ export async function sendForResubmission(
       .update(caseResubmissionTokens)
       .set({ consumedAt: new Date() })
       .where(eq(caseResubmissionTokens.id, issued.tokenId))
+
+    await db
+      .update(cases)
+      .set({
+        status: 'working',
+        currentStageId: row.currentStageId,
+        updatedAt: new Date(),
+      })
+      .where(eq(cases.id, caseId))
 
     await db.insert(caseHistory).values({
       caseId,
@@ -1684,15 +1711,6 @@ export async function sendForResubmission(
       },
       createdAt: preparedAt,
     })
-
-    await tx
-      .update(cases)
-      .set({
-        status: 'awaiting_client',
-        currentStageId: awaitingStage.id,
-        updatedAt: sentAt,
-      })
-      .where(eq(cases.id, caseId))
 
     await tx.insert(caseHistory).values({
       caseId,

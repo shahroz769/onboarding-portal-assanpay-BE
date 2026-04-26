@@ -202,6 +202,22 @@ function sanitizeDocumentRecord(document: typeof merchantDocuments.$inferSelect)
   };
 }
 
+function sanitizeCaseRecord(caseRecord: typeof cases.$inferSelect) {
+  return {
+    id: caseRecord.id,
+    caseNumber: caseRecord.caseNumber,
+    queueId: caseRecord.queueId,
+    merchantId: caseRecord.merchantId,
+    ownerId: caseRecord.ownerId,
+    currentStageId: caseRecord.currentStageId,
+    status: caseRecord.status,
+    priority: caseRecord.priority,
+    closedAt: caseRecord.closedAt,
+    createdAt: caseRecord.createdAt,
+    updatedAt: caseRecord.updatedAt,
+  };
+}
+
 export async function createMerchantSubmission(
   input: MerchantFormSubmission,
   storage: FileStorageProvider = new GoogleDriveStorageProvider(),
@@ -267,8 +283,8 @@ export async function createMerchantSubmission(
           accountNumberIban: input.accountNumberIban,
           swiftCode: input.swiftCode,
           nextOfKinRelation: input.nextOfKinRelation,
-          status: "form_submitted",
-          onboardingStage: "form_submitted",
+          status: "documents_review",
+          onboardingStage: "documents_review",
           submittedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -295,49 +311,78 @@ export async function createMerchantSubmission(
             .returning()
         : [];
 
-      // Auto-create Documents Review case
-      const docReviewQueue = await tx.query.queues.findFirst({
-        where: eq(queues.slug, "documents-review"),
-        columns: { id: true, prefix: true },
-      });
-
-      let createdCase = null;
-      if (docReviewQueue) {
-        const stages = await ensureQueueStages(tx, {
-          id: docReviewQueue.id,
+      const [docReviewQueue] = await tx
+        .insert(queues)
+        .values({
           name: "Documents Review",
           slug: "documents-review",
+          prefix: "DR",
           qcEnabled: false,
+        })
+        .onConflictDoUpdate({
+          target: queues.slug,
+          set: {
+            name: "Documents Review",
+            prefix: "DR",
+            qcEnabled: false,
+          },
+        })
+        .returning({
+          id: queues.id,
+          name: queues.name,
+          slug: queues.slug,
+          prefix: queues.prefix,
+          qcEnabled: queues.qcEnabled,
         });
-        const initialStage = stages[0];
 
-        if (!initialStage) {
-          throw new AppError(500, "No initial stage configured for documents review queue.");
-        }
+      if (!docReviewQueue) {
+        throw new AppError(500, "Failed to resolve documents review queue.");
+      }
 
-        const [seqRow] = await tx
-          .update(queueCaseSequences)
-          .set({
-            lastNumber: sql`${queueCaseSequences.lastNumber} + 1`,
-          })
-          .where(eq(queueCaseSequences.queueId, docReviewQueue.id))
-          .returning({ lastNumber: queueCaseSequences.lastNumber });
+      const stages = await ensureQueueStages(tx, docReviewQueue);
+      const initialStage = stages[0];
 
-        if (seqRow) {
-          const caseNumber = `${docReviewQueue.prefix}-${String(seqRow.lastNumber).padStart(9, "0")}`;
-          [createdCase] = await tx
-            .insert(cases)
-            .values({
-              caseNumber,
-              queueId: docReviewQueue.id,
-              merchantId,
-              ownerId: null,
-              currentStageId: initialStage.id,
-              status: "new",
-              updatedAt: new Date(),
-            })
-            .returning();
-        }
+      if (!initialStage) {
+        throw new AppError(500, "No initial stage configured for documents review queue.");
+      }
+
+      await tx
+        .insert(queueCaseSequences)
+        .values({
+          queueId: docReviewQueue.id,
+          lastNumber: 0,
+        })
+        .onConflictDoNothing();
+
+      const [seqRow] = await tx
+        .update(queueCaseSequences)
+        .set({
+          lastNumber: sql`${queueCaseSequences.lastNumber} + 1`,
+        })
+        .where(eq(queueCaseSequences.queueId, docReviewQueue.id))
+        .returning({ lastNumber: queueCaseSequences.lastNumber });
+
+      if (!seqRow) {
+        throw new AppError(500, "Failed to generate documents review case number.");
+      }
+
+      const caseNumber = `${docReviewQueue.prefix}-${String(seqRow.lastNumber).padStart(9, "0")}`;
+      const [createdCase] = await tx
+        .insert(cases)
+        .values({
+          caseNumber,
+          queueId: docReviewQueue.id,
+          merchantId,
+          ownerId: null,
+          currentStageId: initialStage.id,
+          status: "new",
+          priority: createdMerchant.priority,
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      if (!createdCase) {
+        throw new AppError(500, "Failed to create documents review case.");
       }
 
       return {
@@ -350,6 +395,7 @@ export async function createMerchantSubmission(
     return {
       merchant: sanitizeMerchantRecord(result.merchant),
       documents: result.documents.map(sanitizeDocumentRecord),
+      case: sanitizeCaseRecord(result.case),
     };
   } catch (error) {
     if (submissionFolderId) {
