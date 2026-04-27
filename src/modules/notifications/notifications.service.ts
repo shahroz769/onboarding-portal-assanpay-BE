@@ -1,4 +1,4 @@
-import { and, count, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/client";
 import {
@@ -186,7 +186,7 @@ export async function createBulkNotifications(rows: CreateNotificationInput[]) {
     const actors = await db
       .select({ id: users.id, name: users.name })
       .from(users)
-      .where(sql`${users.id} = ANY(${actorIds})`);
+      .where(inArray(users.id, actorIds));
     for (const a of actors) actorMap.set(a.id, a.name);
   }
 
