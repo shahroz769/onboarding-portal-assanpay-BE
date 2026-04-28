@@ -14,6 +14,7 @@ import {
 import { getDb } from '../../db/client'
 import {
   caseComments,
+  caseFiles,
   caseFieldReviews,
   caseHistory,
   caseResubmissionTokens,
@@ -23,10 +24,12 @@ import {
   queues,
   queueCaseSequences,
   queueStages,
+  subMerchantFormDetails,
   users,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   ensureQueueStages,
   getVisibleStagesForQueue,
@@ -39,6 +42,7 @@ import {
 } from '../notifications/notifications.service'
 import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
+import { SubMerchantFormEmail } from '../email/templates/sub-merchant-form'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
@@ -50,16 +54,37 @@ import { issueToken } from './case-resubmission-tokens.service'
 import {
   caseStatusValues,
   isValidStatusTransition,
-  type CaseStatusValue,
-  type CloseUnsuccessfulInput,
-  type CreateCaseInput,
-  type CreateCommentInput,
-  type ListCasesQuery,
-  type SaveFieldReviewsInput,
-  type UpdateCaseStatusInput,
 } from './cases.schemas'
+import type {
+  CaseStatusValue,
+  CloseUnsuccessfulInput,
+  CreateCaseInput,
+  CreateCommentInput,
+  ListCasesQuery,
+  SaveFieldReviewsInput,
+  SelectSubMerchantFormInput,
+  UpdateCaseStatusInput,
+} from './cases.schemas'
+import {
+  SUB_MERCHANT_FINAL_FORM_KIND,
+  SUB_MERCHANT_FORM_QUEUE_NAME,
+  SUB_MERCHANT_FORM_QUEUE_PREFIX,
+  SUB_MERCHANT_FORM_QUEUE_SLUG,
+  getSubMerchantFormOption,
+} from './sub-merchant-form.config'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
+const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024
+const SUB_MERCHANT_FINAL_FORM_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
+const SUB_MERCHANT_FINAL_FORM_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
+
+type DbTransaction = Parameters<
+  Parameters<ReturnType<typeof getDb>['transaction']>[0]
+>[0]
 
 function parseCsvValues<TValue extends string>(
   rawValue: string,
@@ -175,7 +200,7 @@ function buildKeysetCondition(input: {
 }
 
 async function generateCaseNumber(
-  tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0],
+  tx: DbTransaction,
   queueId: string,
 ): Promise<string> {
   // Get queue prefix
@@ -293,7 +318,7 @@ export async function listCases(query: ListCasesQuery) {
   if (query.search) {
     const term = `%${query.search}%`
     conditions.push(
-      or(ilike(cases.caseNumber, term), ilike(merchants.businessName, term))!,
+      or(ilike(cases.caseNumber, term), ilike(merchants.businessName, term)),
     )
   }
 
@@ -363,7 +388,7 @@ export async function listCases(query: ListCasesQuery) {
   } as const
 
   const orderFn = query.sortOrder === 'desc' ? desc : asc
-  const sortSpec = sortColumnMap[query.sortBy] ?? sortColumnMap.createdAt
+  const sortSpec = sortColumnMap[query.sortBy]
   const cursor = query.cursor
     ? decodeKeysetCursor(query.cursor, {
         sortBy: query.sortBy,
@@ -433,6 +458,134 @@ export async function listCases(query: ListCasesQuery) {
     hasMore,
     limit: query.limit,
   }
+}
+
+async function ensureSubMerchantFormQueue(tx: DbTransaction) {
+  const [queue] = await tx
+    .insert(queues)
+    .values({
+      name: SUB_MERCHANT_FORM_QUEUE_NAME,
+      slug: SUB_MERCHANT_FORM_QUEUE_SLUG,
+      prefix: SUB_MERCHANT_FORM_QUEUE_PREFIX,
+      qcEnabled: false,
+    })
+    .onConflictDoUpdate({
+      target: queues.slug,
+      set: {
+        name: SUB_MERCHANT_FORM_QUEUE_NAME,
+        prefix: SUB_MERCHANT_FORM_QUEUE_PREFIX,
+        qcEnabled: false,
+      },
+    })
+    .returning({
+      id: queues.id,
+      name: queues.name,
+      slug: queues.slug,
+      prefix: queues.prefix,
+      qcEnabled: queues.qcEnabled,
+    })
+
+  if (!queue) {
+    throw new AppError(500, 'Failed to resolve EP Sub-Merchant Form queue.')
+  }
+
+  await tx
+    .insert(queueCaseSequences)
+    .values({ queueId: queue.id, lastNumber: 0 })
+    .onConflictDoNothing()
+
+  const stages = await ensureQueueStages(tx, queue)
+  const initialStage = stages.find((stage) => stage.slug === 'new') ?? stages[0]
+
+  if (!initialStage) {
+    throw new AppError(500, 'No initial stage configured for EP Sub-Merchant Form.')
+  }
+
+  return { queue, initialStage }
+}
+
+async function createSubMerchantFormCaseIfMissing(
+  tx: DbTransaction,
+  input: {
+    merchantId: string
+    priority: 'normal' | 'high'
+    actorId: string
+    sourceCaseId: string
+    sourceCaseNumber: string
+  },
+) {
+  const { queue, initialStage } = await ensureSubMerchantFormQueue(tx)
+  const existing = await tx
+    .select({ id: cases.id })
+    .from(cases)
+    .where(and(eq(cases.merchantId, input.merchantId), eq(cases.queueId, queue.id)))
+    .limit(1)
+
+  if (existing[0]) {
+    return null
+  }
+
+  const caseNumber = await generateCaseNumber(tx, queue.id)
+  const [created] = await tx
+    .insert(cases)
+    .values({
+      caseNumber,
+      queueId: queue.id,
+      merchantId: input.merchantId,
+      ownerId: null,
+      currentStageId: initialStage.id,
+      status: 'new',
+      priority: input.priority,
+      updatedAt: new Date(),
+    })
+    .returning()
+
+  if (!created) {
+    throw new AppError(500, 'Failed to create EP Sub-Merchant Form case.')
+  }
+
+  await tx.insert(caseHistory).values({
+    caseId: created.id,
+    actorId: input.actorId,
+    action: 'case_created_from_documents_review',
+    details: {
+      sourceCaseId: input.sourceCaseId,
+      sourceCaseNumber: input.sourceCaseNumber,
+      queueName: SUB_MERCHANT_FORM_QUEUE_NAME,
+    },
+  })
+
+  return created
+}
+
+function getFileExtension(fileName: string) {
+  const match = fileName.toLowerCase().match(/\.[^.]+$/)
+  return match?.[0] ?? ''
+}
+
+function validateSubMerchantFinalFormFile(file: File) {
+  if (file.size > MAX_SUB_MERCHANT_FINAL_FORM_BYTES) {
+    throw new AppError(400, 'Final Form must be 1 MB or smaller.')
+  }
+
+  const extension = getFileExtension(file.name)
+  const mimeType = file.type || 'application/octet-stream'
+  if (
+    !SUB_MERCHANT_FINAL_FORM_EXTENSIONS.has(extension) ||
+    !SUB_MERCHANT_FINAL_FORM_MIME_TYPES.has(mimeType)
+  ) {
+    throw new AppError(400, 'Final Form must be a PDF, DOC, or DOCX file.')
+  }
+}
+
+function buildCaseUploadFolderName(caseNumber: string, merchantName: string) {
+  const safeMerchantName = merchantName
+    .replace(/[^a-zA-Z0-9._ -]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+
+  return `${caseNumber} - ${safeMerchantName || 'Merchant'}`
 }
 
 // ─── List Case Owners ───────────────────────────────────────────────────────
@@ -815,6 +968,7 @@ export async function getCaseDetail(caseId: string) {
     documents,
     fieldReviews,
     latestResubmissionEntry,
+    subMerchantForm,
   ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
@@ -859,6 +1013,28 @@ export async function getCaseDetail(caseId: string) {
       .orderBy(desc(caseHistory.createdAt))
       .limit(1)
       .then((rows: Array<{ createdAt: Date }>) => rows[0] ?? null),
+    db
+      .select({
+        subMerchantKey: subMerchantFormDetails.subMerchantKey,
+        subMerchantName: subMerchantFormDetails.subMerchantName,
+        draftUrl: subMerchantFormDetails.draftUrl,
+        emailStatus: subMerchantFormDetails.emailStatus,
+        emailLogId: subMerchantFormDetails.emailLogId,
+        emailSentAt: subMerchantFormDetails.emailSentAt,
+        emailRecipient: subMerchantFormDetails.emailRecipient,
+        finalFormId: caseFiles.id,
+        finalFormOriginalName: caseFiles.originalName,
+        finalFormMimeType: caseFiles.mimeType,
+        finalFormSizeBytes: caseFiles.sizeBytes,
+        finalFormGoogleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+        finalFormGoogleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+        finalFormCreatedAt: caseFiles.createdAt,
+      })
+      .from(subMerchantFormDetails)
+      .leftJoin(caseFiles, eq(subMerchantFormDetails.finalFormFileId, caseFiles.id))
+      .where(eq(subMerchantFormDetails.caseId, caseId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
   ])
 
   if (!queue || !merchant) {
@@ -917,6 +1093,30 @@ export async function getCaseDetail(caseId: string) {
     merchant,
     documents,
     fieldReviews,
+    subMerchantForm: subMerchantForm
+      ? {
+          subMerchantKey: subMerchantForm.subMerchantKey,
+          subMerchantName: subMerchantForm.subMerchantName,
+          draftUrl: subMerchantForm.draftUrl,
+          emailStatus: subMerchantForm.emailStatus,
+          emailLogId: subMerchantForm.emailLogId,
+          emailSentAt: subMerchantForm.emailSentAt,
+          emailRecipient: subMerchantForm.emailRecipient,
+          finalForm: subMerchantForm.finalFormId
+            ? {
+                id: subMerchantForm.finalFormId,
+                originalName: subMerchantForm.finalFormOriginalName,
+                mimeType: subMerchantForm.finalFormMimeType,
+                sizeBytes: subMerchantForm.finalFormSizeBytes,
+                googleDriveWebViewLink:
+                  subMerchantForm.finalFormGoogleDriveWebViewLink,
+                googleDriveDownloadLink:
+                  subMerchantForm.finalFormGoogleDriveDownloadLink,
+                createdAt: subMerchantForm.finalFormCreatedAt,
+              }
+            : null,
+        }
+      : null,
     latestResubmissionRequestedAt:
       latestResubmissionEntry?.createdAt?.toISOString() ?? null,
     owner: caseData.ownerId
@@ -1030,7 +1230,10 @@ export async function advanceStage(caseId: string, userId: string) {
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      merchantId: cases.merchantId,
+      caseNumber: cases.caseNumber,
       status: cases.status,
+      priority: cases.priority,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -1071,6 +1274,46 @@ export async function advanceStage(caseId: string, userId: string) {
         400,
         'Documents-review cases can only be closed successfully from working.',
       )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
+  } else if (queue?.slug === SUB_MERCHANT_FORM_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'EP Sub-Merchant Form cases can only be closed successfully from working.',
+      )
+    }
+
+    const details = await db
+      .select({
+        caseId: subMerchantFormDetails.caseId,
+        finalFormFileId: subMerchantFormDetails.finalFormFileId,
+        emailStatus: subMerchantFormDetails.emailStatus,
+      })
+      .from(subMerchantFormDetails)
+      .where(eq(subMerchantFormDetails.caseId, caseId))
+      .limit(1)
+
+    if (!details[0]) {
+      throw new AppError(400, 'Select a sub-merchant before closing this case.')
+    }
+
+    if (!details[0].finalFormFileId) {
+      throw new AppError(400, 'Upload the Final Form before closing this case.')
+    }
+
+    if (details[0].emailStatus !== 'sent') {
+      throw new AppError(400, 'Send the Final Form email before closing this case.')
     }
 
     targetStage = await db.query.queueStages.findFirst({
@@ -1141,6 +1384,29 @@ export async function advanceStage(caseId: string, userId: string) {
       action,
       details: { fromStage: currentStage.name, toStage: targetStage.name },
     })
+
+    if (queue?.slug === 'documents-review' && targetStage.category === 'closed') {
+      const createdNextCase = await createSubMerchantFormCaseIfMissing(tx, {
+        merchantId: caseData.merchantId,
+        priority: caseData.priority,
+        actorId: userId,
+        sourceCaseId: caseData.id,
+        sourceCaseNumber: caseData.caseNumber,
+      })
+
+      if (createdNextCase) {
+        await tx.insert(caseHistory).values({
+          caseId,
+          actorId: userId,
+          action: 'next_case_created',
+          details: {
+            nextCaseId: createdNextCase.id,
+            nextCaseNumber: createdNextCase.caseNumber,
+            queueName: SUB_MERCHANT_FORM_QUEUE_NAME,
+          },
+        })
+      }
+    }
 
     return updatedRows
   })
@@ -1734,6 +2000,347 @@ export async function sendForResubmission(
   }
 }
 
+// ─── EP Sub-Merchant Form ───────────────────────────────────────────────────
+
+type SubMerchantFormEmailResult = {
+  status: 'sent' | 'failed'
+  emailLogId: string
+  error?: string
+}
+
+async function loadSubMerchantFormCase(caseId: string, userId: string) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      currentStageId: cases.currentStageId,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      merchantOwnerName: merchants.ownerFullName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+      queueId: cases.queueId,
+      queueSlug: queues.slug,
+      priority: cases.priority,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (row.queueSlug !== SUB_MERCHANT_FORM_QUEUE_SLUG) {
+    throw new AppError(400, 'This action is only available for EP Sub-Merchant Form cases.')
+  }
+
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can update this case.')
+  }
+
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  return row
+}
+
+export async function selectSubMerchantForm(
+  caseId: string,
+  userId: string,
+  input: SelectSubMerchantFormInput,
+) {
+  const db = getDb()
+  const caseRow = await loadSubMerchantFormCase(caseId, userId)
+  const option = getSubMerchantFormOption(input.subMerchantKey)
+
+  if (!option) {
+    throw new AppError(400, 'Invalid sub-merchant selection.')
+  }
+
+  const now = new Date()
+  const [details] = await db.transaction(async (tx) => {
+    const [upserted] = await tx
+      .insert(subMerchantFormDetails)
+      .values({
+        caseId,
+        subMerchantKey: option.key,
+        subMerchantName: option.name,
+        draftUrl: option.draftUrl,
+        emailStatus: 'not_sent',
+        emailLogId: null,
+        emailSentAt: null,
+        emailRecipient: null,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: subMerchantFormDetails.caseId,
+        set: {
+          subMerchantKey: option.key,
+          subMerchantName: option.name,
+          draftUrl: option.draftUrl,
+          emailStatus: 'not_sent',
+          emailLogId: null,
+          emailSentAt: null,
+          emailRecipient: null,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'sub_merchant_selected',
+      details: {
+        subMerchantKey: option.key,
+        subMerchantName: option.name,
+        caseNumber: caseRow.caseNumber,
+      },
+    })
+
+    return [upserted]
+  })
+
+  return details
+}
+
+export async function uploadSubMerchantFinalForm(
+  caseId: string,
+  userId: string,
+  input: {
+    file: File
+    subMerchantKey: string
+  },
+) {
+  const db = getDb()
+  const caseRow = await loadSubMerchantFormCase(caseId, userId)
+  const option = getSubMerchantFormOption(input.subMerchantKey)
+
+  if (!option) {
+    throw new AppError(400, 'Invalid sub-merchant selection.')
+  }
+
+  const file = input.file
+  validateSubMerchantFinalFormFile(file)
+
+  const details = await db.query.subMerchantFormDetails.findFirst({
+    where: eq(subMerchantFormDetails.caseId, caseId),
+  })
+
+  const existingFile = details?.finalFormFileId
+    ? await db.query.caseFiles.findFirst({
+        where: eq(caseFiles.id, details.finalFormFileId),
+      })
+    : null
+
+  const storage = new GoogleDriveStorageProvider()
+  const folder = await storage.createMerchantFolder(
+    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
+  )
+  const uploaded = await storage.uploadFile(folder.folderId, {
+    fileName: file.name,
+    mimeType: file.type,
+    file,
+  })
+
+  const now = new Date()
+  const [savedFile] = await db.transaction(async (tx) => {
+    await tx
+      .insert(subMerchantFormDetails)
+      .values({
+        caseId,
+        subMerchantKey: option.key,
+        subMerchantName: option.name,
+        draftUrl: option.draftUrl,
+        emailStatus: 'not_sent',
+        emailLogId: null,
+        emailSentAt: null,
+        emailRecipient: null,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: subMerchantFormDetails.caseId,
+        set: {
+          subMerchantKey: option.key,
+          subMerchantName: option.name,
+          draftUrl: option.draftUrl,
+          emailStatus: 'not_sent',
+          emailLogId: null,
+          emailSentAt: null,
+          emailRecipient: null,
+          updatedAt: now,
+        },
+      })
+
+    const [caseFile] = await tx
+      .insert(caseFiles)
+      .values({
+        caseId,
+        fileKind: SUB_MERCHANT_FINAL_FORM_KIND,
+        originalName: file.name,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        uploadedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [caseFiles.caseId, caseFiles.fileKind],
+        set: {
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!caseFile) {
+      throw new AppError(500, 'Failed to save Final Form.')
+    }
+
+    await tx
+      .update(subMerchantFormDetails)
+      .set({
+        finalFormFileId: caseFile.id,
+        emailStatus: 'not_sent',
+        emailLogId: null,
+        emailSentAt: null,
+        emailRecipient: null,
+        updatedAt: now,
+      })
+      .where(eq(subMerchantFormDetails.caseId, caseId))
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'sub_merchant_final_form_uploaded',
+      details: {
+        fileName: file.name,
+        sizeBytes: uploaded.sizeBytes,
+        subMerchantName: option.name,
+      },
+    })
+
+    return [caseFile]
+  })
+
+  if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
+    await storage.deleteFile(existingFile.googleDriveFileId).catch((error) => {
+      console.error('[sub-merchant-form.cleanup]', error)
+    })
+  }
+
+  return savedFile
+}
+
+export async function sendSubMerchantFormEmail(
+  caseId: string,
+  userId: string,
+): Promise<SubMerchantFormEmailResult> {
+  const db = getDb()
+  const caseRow = await loadSubMerchantFormCase(caseId, userId)
+
+  if (!caseRow.merchantSubmitterEmail) {
+    throw new AppError(400, 'No submitter email is on file for this merchant.')
+  }
+
+  const [details] = await db
+    .select({
+      subMerchantName: subMerchantFormDetails.subMerchantName,
+      finalFormFileId: subMerchantFormDetails.finalFormFileId,
+      finalFormUrl: caseFiles.googleDriveWebViewLink,
+      finalFormGoogleDriveFileId: caseFiles.googleDriveFileId,
+    })
+    .from(subMerchantFormDetails)
+    .leftJoin(caseFiles, eq(subMerchantFormDetails.finalFormFileId, caseFiles.id))
+    .where(eq(subMerchantFormDetails.caseId, caseId))
+    .limit(1)
+
+  if (!details) {
+    throw new AppError(400, 'Select a sub-merchant before sending email.')
+  }
+
+  if (!details.finalFormFileId || !details.finalFormUrl) {
+    throw new AppError(400, 'Upload the Final Form before sending email.')
+  }
+
+  const emailResult = await sendEmail({
+    to: caseRow.merchantSubmitterEmail,
+    subject: `Final sub-merchant form for ${caseRow.merchantName}`,
+    template: 'sub-merchant-form',
+    react: SubMerchantFormEmail({
+      merchantName: caseRow.merchantName,
+      ownerName: caseRow.merchantOwnerName,
+      subMerchantName: details.subMerchantName,
+      finalFormUrl: details.finalFormUrl,
+    }),
+    caseId,
+    merchantId: caseRow.merchantId,
+    idempotencyKey: `sub-merchant-form/${caseId}/${details.finalFormGoogleDriveFileId}`,
+    metadata: {
+      subMerchantName: details.subMerchantName,
+      finalFormFileId: details.finalFormFileId,
+    },
+  })
+
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    await tx
+      .update(subMerchantFormDetails)
+      .set({
+        emailStatus: emailResult.status,
+        emailLogId: emailResult.emailLogId,
+        emailSentAt: emailResult.status === 'sent' ? now : null,
+        emailRecipient: caseRow.merchantSubmitterEmail,
+        updatedAt: now,
+      })
+      .where(eq(subMerchantFormDetails.caseId, caseId))
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action:
+        emailResult.status === 'sent'
+          ? 'sub_merchant_form_email_sent'
+          : 'sub_merchant_form_email_failed',
+      details: {
+        emailLogId: emailResult.emailLogId,
+        recipient: caseRow.merchantSubmitterEmail,
+        subMerchantName: details.subMerchantName,
+        error: emailResult.error ?? null,
+      },
+    })
+  })
+
+  if (emailResult.status === 'failed') {
+    return {
+      status: 'failed',
+      emailLogId: emailResult.emailLogId,
+      error: emailResult.error,
+    }
+  }
+
+  return {
+    status: 'sent',
+    emailLogId: emailResult.emailLogId,
+  }
+}
+
 // ─── Apply Resubmission (called from public route) ──────────────────────────
 
 export type ResubmissionContext = {
@@ -1833,15 +2440,14 @@ export async function getResubmissionContext(
       const docId = getDocumentIdFromFieldName(review.fieldName)
       const doc = docId ? docsById.get(docId) : null
       const label = doc
-        ? (DOCUMENT_TYPE_LABELS[doc.documentType as keyof typeof DOCUMENT_TYPE_LABELS] ??
-          doc.documentType)
+        ? DOCUMENT_TYPE_LABELS[doc.documentType as keyof typeof DOCUMENT_TYPE_LABELS]
         : 'Uploaded document'
       return {
         fieldName: review.fieldName,
         label,
         remarks: review.remarks,
         isDocument: true,
-        isRequired: doc ? requiredDocumentTypes.has(doc.documentType as any) : false,
+        isRequired: doc ? requiredDocumentTypes.has(doc.documentType) : false,
         currentDocumentName: doc?.originalName,
         documentType: doc?.documentType,
         currentDocumentUrl: doc?.currentDocumentUrl,
@@ -1851,8 +2457,7 @@ export async function getResubmissionContext(
     const value = merchantData[review.fieldName]
     return {
       fieldName: review.fieldName,
-      label:
-        MERCHANT_FIELD_LABELS[review.fieldName] ?? review.fieldName,
+      label: MERCHANT_FIELD_LABELS[review.fieldName],
       remarks: review.remarks,
       isDocument: false,
       currentValue: value == null ? '' : String(value),

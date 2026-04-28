@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 
-import { queueStages, type NewQueueStage, type QueueStage } from "../../db/schema";
+import { queueStages } from "../../db/schema";
+import type { NewQueueStage, QueueStage } from "../../db/schema";
 import type { CaseStatusValue, StageCategoryValue } from "../cases/cases.schemas";
 
 type QueueStageDb = {
@@ -93,6 +94,31 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
         name: defaultStageNames.closed,
         slug: "closed",
         order: 4,
+        category: "closed",
+      },
+    ] satisfies Array<
+      Pick<NewQueueStage, "name" | "slug" | "order" | "category">
+    >;
+  }
+
+  if (queue.slug === "sub-merchant-form") {
+    return [
+      {
+        name: defaultStageNames.new,
+        slug: "new",
+        order: 1,
+        category: "new",
+      },
+      {
+        name: defaultStageNames.in_progress,
+        slug: "working",
+        order: 2,
+        category: "in_progress",
+      },
+      {
+        name: defaultStageNames.closed,
+        slug: "closed",
+        order: 3,
         category: "closed",
       },
     ] satisfies Array<
@@ -236,16 +262,14 @@ export function getVisibleStagesForQueue(
   queueSlug: string,
   stages: QueueStage[],
 ) {
-  if (queueSlug !== "documents-review") {
+  if (queueSlug !== "documents-review" && queueSlug !== "sub-merchant-form") {
     return stages;
   }
 
-  const allowedStageSlugs = new Set([
-    "new",
-    "working",
-    "awaiting_client",
-    "closed",
-  ]);
+  const allowedStageSlugs =
+    queueSlug === "documents-review"
+      ? new Set(["new", "working", "awaiting_client", "closed"])
+      : new Set(["new", "working", "closed"]);
 
   return stages.filter((stage) => allowedStageSlugs.has(stage.slug));
 }

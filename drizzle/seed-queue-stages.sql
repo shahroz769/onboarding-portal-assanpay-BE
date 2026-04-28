@@ -41,3 +41,19 @@ WHERE q.slug = 'documents-review'
     WHEN 'error' THEN 'closed'
   END
   AND c.current_stage_id IS NULL;
+
+-- EP Sub-Merchant Form: New -> Working -> Closed
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'New', 'new', 1, 'new', now()
+FROM queues q WHERE q.slug = 'sub-merchant-form'
+ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'Working', 'working', 2, 'in_progress', now()
+FROM queues q WHERE q.slug = 'sub-merchant-form'
+ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'Closed', 'closed', 3, 'closed', now()
+FROM queues q WHERE q.slug = 'sub-merchant-form'
+ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;

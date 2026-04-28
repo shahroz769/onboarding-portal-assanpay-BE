@@ -5,7 +5,7 @@
 INSERT INTO queues (id, name, slug, prefix, created_at)
 VALUES
   (gen_random_uuid(), 'Documents Review', 'documents-review', 'DR', now()),
-  (gen_random_uuid(), 'Sub Merchant Form', 'sub-merchant-form', 'SM', now()),
+  (gen_random_uuid(), 'EP Sub-Merchant Form', 'sub-merchant-form', 'SM', now()),
   (gen_random_uuid(), 'Agreement', 'agreement', 'AG', now()),
   (gen_random_uuid(), 'Merchant ID', 'merchant-id', 'MI', now()),
   (gen_random_uuid(), 'Live', 'live', 'LV', now()),

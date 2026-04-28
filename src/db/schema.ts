@@ -600,6 +600,84 @@ export const notifications = pgTable(
   }),
 );
 
+export const caseFiles = pgTable(
+  "case_files",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    caseId: uuid("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    fileKind: varchar("file_kind", { length: 80 }).notNull(),
+    originalName: varchar("original_name", { length: 255 }).notNull(),
+    mimeType: varchar("mime_type", { length: 128 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    googleDriveFileId: varchar("google_drive_file_id", { length: 255 }).notNull(),
+    googleDriveWebViewLink: text("google_drive_web_view_link").notNull(),
+    googleDriveDownloadLink: text("google_drive_download_link"),
+    googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).notNull(),
+    uploadedBy: uuid("uploaded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFilesCaseIdIdx: index("case_files_case_id_idx").on(table.caseId),
+    caseFilesUploaderIdx: index("case_files_uploaded_by_idx").on(table.uploadedBy),
+    caseFilesCaseKindUniq: uniqueIndex("case_files_case_kind_uniq").on(
+      table.caseId,
+      table.fileKind,
+    ),
+  }),
+);
+
+export const subMerchantFormEmailStatusEnum = pgEnum("sub_merchant_form_email_status", [
+  "not_sent",
+  "sent",
+  "failed",
+]);
+
+export const subMerchantFormDetails = pgTable(
+  "sub_merchant_form_details",
+  {
+    caseId: uuid("case_id")
+      .primaryKey()
+      .references(() => cases.id, { onDelete: "cascade" }),
+    subMerchantKey: varchar("sub_merchant_key", { length: 80 }).notNull(),
+    subMerchantName: varchar("sub_merchant_name", { length: 160 }).notNull(),
+    draftUrl: text("draft_url").notNull(),
+    finalFormFileId: uuid("final_form_file_id").references(() => caseFiles.id, {
+      onDelete: "set null",
+    }),
+    emailStatus: subMerchantFormEmailStatusEnum("email_status")
+      .default("not_sent")
+      .notNull(),
+    emailLogId: uuid("email_log_id").references(() => emailLog.id, {
+      onDelete: "set null",
+    }),
+    emailSentAt: timestamp("email_sent_at", { withTimezone: true }),
+    emailRecipient: varchar("email_recipient", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    subMerchantFormDetailsFinalFormIdx: index(
+      "sub_merchant_form_details_final_form_idx",
+    ).on(table.finalFormFileId),
+    subMerchantFormDetailsEmailLogIdx: index(
+      "sub_merchant_form_details_email_log_idx",
+    ).on(table.emailLogId),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Merchant = typeof merchants.$inferSelect;
@@ -624,3 +702,7 @@ export type CaseResubmissionToken = typeof caseResubmissionTokens.$inferSelect;
 export type NewCaseResubmissionToken = typeof caseResubmissionTokens.$inferInsert;
 export type EmailLog = typeof emailLog.$inferSelect;
 export type NewEmailLog = typeof emailLog.$inferInsert;
+export type CaseFile = typeof caseFiles.$inferSelect;
+export type NewCaseFile = typeof caseFiles.$inferInsert;
+export type SubMerchantFormDetails = typeof subMerchantFormDetails.$inferSelect;
+export type NewSubMerchantFormDetails = typeof subMerchantFormDetails.$inferInsert;

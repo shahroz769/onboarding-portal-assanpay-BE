@@ -191,3 +191,25 @@ export const sendForResubmissionResponseSchema = z.object({
 export type SendForResubmissionResponse = z.infer<
   typeof sendForResubmissionResponseSchema
 >;
+
+// ─── Sub-Merchant Form Schemas ───────────────────────────────────────────────
+
+export const selectSubMerchantFormSchema = z
+  .object({
+    subMerchantKey: z.string().min(1).max(80),
+  })
+  .strict();
+
+export type SelectSubMerchantFormInput = z.infer<
+  typeof selectSubMerchantFormSchema
+>;
+
+export const subMerchantFormEmailResponseSchema = z.object({
+  status: z.enum(["sent", "failed"]),
+  emailLogId: z.string().uuid(),
+  error: z.string().optional(),
+});
+
+export type SubMerchantFormEmailResponse = z.infer<
+  typeof subMerchantFormEmailResponseSchema
+>;

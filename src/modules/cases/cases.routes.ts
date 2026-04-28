@@ -2,6 +2,7 @@ import { Hono } from "hono";
 
 import { requireAuth } from "../../middleware/auth";
 import { requireRoles } from "../../middleware/rbac";
+import { AppError } from "../../lib/errors";
 import { zodValidator } from "../../lib/validators";
 import type { AppEnv } from "../../types/auth";
 import {
@@ -12,17 +13,21 @@ import {
   createCommentSchema,
   listCasesQuerySchema,
   saveFieldReviewsSchema,
+  selectSubMerchantFormSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
-  type AssignCaseInput,
-  type BulkAssignCaseInput,
-  type CloseUnsuccessfulInput,
-  type CreateCaseInput,
-  type CreateCommentInput,
-  type ListCasesQuery,
-  type SaveFieldReviewsInput,
-  type UpdateCasePriorityInput,
-  type UpdateCaseStatusInput,
+} from "./cases.schemas";
+import type {
+  AssignCaseInput,
+  BulkAssignCaseInput,
+  CloseUnsuccessfulInput,
+  CreateCaseInput,
+  CreateCommentInput,
+  ListCasesQuery,
+  SaveFieldReviewsInput,
+  SelectSubMerchantFormInput,
+  UpdateCasePriorityInput,
+  UpdateCaseStatusInput,
 } from "./cases.schemas";
 import {
   advanceStage,
@@ -37,10 +42,13 @@ import {
   listCaseOwners,
   listCases,
   saveFieldReviews,
+  selectSubMerchantForm,
   takeOwnership,
   updateCasePriority,
   updateCaseStatus,
   sendForResubmission,
+  sendSubMerchantFormEmail,
+  uploadSubMerchantFinalForm,
 } from "./cases.service";
 
 export const caseRoutes = new Hono<AppEnv>();
@@ -184,6 +192,58 @@ caseRoutes.post("/:id/send-for-resubmission", async (c) => {
   const auth = c.get("auth");
   const id = c.req.param("id");
   const result = await sendForResubmission(id, auth.userId);
+  return c.json(result);
+});
+
+// PUT /api/cases/:id/sub-merchant-form/selection — Select sub-merchant
+caseRoutes.put(
+  "/:id/sub-merchant-form/selection",
+  zodValidator("json", selectSubMerchantFormSchema),
+  async (c) => {
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const input = c.req.valid("json" as never) as SelectSubMerchantFormInput;
+    const result = await selectSubMerchantForm(id, auth.userId, input);
+    return c.json(result);
+  },
+);
+
+// POST /api/cases/:id/sub-merchant-form/final-form — Upload final form
+caseRoutes.post("/:id/sub-merchant-form/final-form", async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+
+  if (!contentType.toLowerCase().includes("multipart/form-data")) {
+    throw new AppError(400, "Content-Type must be multipart/form-data.");
+  }
+
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, "Invalid multipart form payload.");
+  });
+  const file = formData.get("file");
+  const subMerchantKey = formData.get("subMerchantKey");
+
+  if (!(file instanceof File)) {
+    throw new AppError(400, "Final Form file is required.");
+  }
+
+  if (typeof subMerchantKey !== "string" || !subMerchantKey.trim()) {
+    throw new AppError(400, "Sub-merchant selection is required.");
+  }
+
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const result = await uploadSubMerchantFinalForm(id, auth.userId, {
+    file,
+    subMerchantKey,
+  });
+  return c.json(result);
+});
+
+// POST /api/cases/:id/sub-merchant-form/send-mail — Email final form
+caseRoutes.post("/:id/sub-merchant-form/send-mail", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const result = await sendSubMerchantFormEmail(id, auth.userId);
   return c.json(result);
 });
 
