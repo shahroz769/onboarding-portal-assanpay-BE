@@ -67,8 +67,6 @@ import type {
 } from './cases.schemas'
 import {
   SUB_MERCHANT_FINAL_FORM_KIND,
-  SUB_MERCHANT_FORM_QUEUE_NAME,
-  SUB_MERCHANT_FORM_QUEUE_PREFIX,
   SUB_MERCHANT_FORM_QUEUE_SLUG,
   getSubMerchantFormOption,
 } from './sub-merchant-form.config'
@@ -213,6 +211,11 @@ async function generateCaseNumber(
     throw new AppError(404, 'Queue not found.')
   }
 
+  await tx
+    .insert(queueCaseSequences)
+    .values({ queueId, lastNumber: 0 })
+    .onConflictDoNothing()
+
   // Atomically increment the sequence counter
   const [updated] = await tx
     .update(queueCaseSequences)
@@ -235,7 +238,7 @@ async function generateCaseNumber(
 
 // ─── Create Case ────────────────────────────────────────────────────────────
 
-export async function createCase(input: CreateCaseInput) {
+export async function createCase(input: CreateCaseInput, actorId?: string) {
   const db = getDb()
 
   return db.transaction(async (tx) => {
@@ -289,6 +292,18 @@ export async function createCase(input: CreateCaseInput) {
 
     if (!created) {
       throw new AppError(500, 'Failed to create case.')
+    }
+
+    if (actorId) {
+      await tx.insert(caseHistory).values({
+        caseId: created.id,
+        actorId,
+        action: 'case_created_manually',
+        details: {
+          queueName: queue.name,
+          merchantName: merchant.businessName,
+        },
+      })
     }
 
     return {
@@ -458,104 +473,6 @@ export async function listCases(query: ListCasesQuery) {
     hasMore,
     limit: query.limit,
   }
-}
-
-async function ensureSubMerchantFormQueue(tx: DbTransaction) {
-  const [queue] = await tx
-    .insert(queues)
-    .values({
-      name: SUB_MERCHANT_FORM_QUEUE_NAME,
-      slug: SUB_MERCHANT_FORM_QUEUE_SLUG,
-      prefix: SUB_MERCHANT_FORM_QUEUE_PREFIX,
-      qcEnabled: false,
-    })
-    .onConflictDoUpdate({
-      target: queues.slug,
-      set: {
-        name: SUB_MERCHANT_FORM_QUEUE_NAME,
-        prefix: SUB_MERCHANT_FORM_QUEUE_PREFIX,
-        qcEnabled: false,
-      },
-    })
-    .returning({
-      id: queues.id,
-      name: queues.name,
-      slug: queues.slug,
-      prefix: queues.prefix,
-      qcEnabled: queues.qcEnabled,
-    })
-
-  if (!queue) {
-    throw new AppError(500, 'Failed to resolve EP Sub-Merchant Form queue.')
-  }
-
-  await tx
-    .insert(queueCaseSequences)
-    .values({ queueId: queue.id, lastNumber: 0 })
-    .onConflictDoNothing()
-
-  const stages = await ensureQueueStages(tx, queue)
-  const initialStage = stages.find((stage) => stage.slug === 'new') ?? stages[0]
-
-  if (!initialStage) {
-    throw new AppError(500, 'No initial stage configured for EP Sub-Merchant Form.')
-  }
-
-  return { queue, initialStage }
-}
-
-async function createSubMerchantFormCaseIfMissing(
-  tx: DbTransaction,
-  input: {
-    merchantId: string
-    priority: 'normal' | 'high'
-    actorId: string
-    sourceCaseId: string
-    sourceCaseNumber: string
-  },
-) {
-  const { queue, initialStage } = await ensureSubMerchantFormQueue(tx)
-  const existing = await tx
-    .select({ id: cases.id })
-    .from(cases)
-    .where(and(eq(cases.merchantId, input.merchantId), eq(cases.queueId, queue.id)))
-    .limit(1)
-
-  if (existing[0]) {
-    return null
-  }
-
-  const caseNumber = await generateCaseNumber(tx, queue.id)
-  const [created] = await tx
-    .insert(cases)
-    .values({
-      caseNumber,
-      queueId: queue.id,
-      merchantId: input.merchantId,
-      ownerId: null,
-      currentStageId: initialStage.id,
-      status: 'new',
-      priority: input.priority,
-      updatedAt: new Date(),
-    })
-    .returning()
-
-  if (!created) {
-    throw new AppError(500, 'Failed to create EP Sub-Merchant Form case.')
-  }
-
-  await tx.insert(caseHistory).values({
-    caseId: created.id,
-    actorId: input.actorId,
-    action: 'case_created_from_documents_review',
-    details: {
-      sourceCaseId: input.sourceCaseId,
-      sourceCaseNumber: input.sourceCaseNumber,
-      queueName: SUB_MERCHANT_FORM_QUEUE_NAME,
-    },
-  })
-
-  return created
 }
 
 function getFileExtension(fileName: string) {
@@ -1384,29 +1301,6 @@ export async function advanceStage(caseId: string, userId: string) {
       action,
       details: { fromStage: currentStage.name, toStage: targetStage.name },
     })
-
-    if (queue?.slug === 'documents-review' && targetStage.category === 'closed') {
-      const createdNextCase = await createSubMerchantFormCaseIfMissing(tx, {
-        merchantId: caseData.merchantId,
-        priority: caseData.priority,
-        actorId: userId,
-        sourceCaseId: caseData.id,
-        sourceCaseNumber: caseData.caseNumber,
-      })
-
-      if (createdNextCase) {
-        await tx.insert(caseHistory).values({
-          caseId,
-          actorId: userId,
-          action: 'next_case_created',
-          details: {
-            nextCaseId: createdNextCase.id,
-            nextCaseNumber: createdNextCase.caseNumber,
-            queueName: SUB_MERCHANT_FORM_QUEUE_NAME,
-          },
-        })
-      }
-    }
 
     return updatedRows
   })

@@ -80,7 +80,8 @@ caseRoutes.post(
   zodValidator("json", createCaseSchema),
   async (c) => {
     const input = c.req.valid("json" as never) as CreateCaseInput;
-    const result = await createCase(input);
+    const auth = c.get("auth");
+    const result = await createCase(input, auth.userId);
     return c.json(result, 201);
   },
 );

@@ -24,7 +24,6 @@ merchantFormRoutes.post("/merchant-form", async (c) => {
     {
       merchant: result.merchant,
       documents: result.documents,
-      case: result.case,
     },
     201,
   );

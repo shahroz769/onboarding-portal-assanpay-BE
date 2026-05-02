@@ -5,15 +5,12 @@ import {
   cases,
   merchantDocuments,
   merchants,
-  queues,
-  queueCaseSequences,
 } from "../../db/schema";
 import {
   GoogleDriveStorageProvider,
-  type FileStorageProvider,
 } from "../../lib/storage/google-drive";
+import type { FileStorageProvider } from "../../lib/storage/google-drive";
 import { AppError } from "../../lib/errors";
-import { ensureQueueStages } from "../queues/queue-stage-defaults";
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -202,22 +199,6 @@ function sanitizeDocumentRecord(document: typeof merchantDocuments.$inferSelect)
   };
 }
 
-function sanitizeCaseRecord(caseRecord: typeof cases.$inferSelect) {
-  return {
-    id: caseRecord.id,
-    caseNumber: caseRecord.caseNumber,
-    queueId: caseRecord.queueId,
-    merchantId: caseRecord.merchantId,
-    ownerId: caseRecord.ownerId,
-    currentStageId: caseRecord.currentStageId,
-    status: caseRecord.status,
-    priority: caseRecord.priority,
-    closedAt: caseRecord.closedAt,
-    createdAt: caseRecord.createdAt,
-    updatedAt: caseRecord.updatedAt,
-  };
-}
-
 export async function createMerchantSubmission(
   input: MerchantFormSubmission,
   storage: FileStorageProvider = new GoogleDriveStorageProvider(),
@@ -283,8 +264,8 @@ export async function createMerchantSubmission(
           accountNumberIban: input.accountNumberIban,
           swiftCode: input.swiftCode,
           nextOfKinRelation: input.nextOfKinRelation,
-          status: "documents_review",
-          onboardingStage: "documents_review",
+          status: "form_submitted",
+          onboardingStage: "form_submitted",
           submittedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -311,91 +292,15 @@ export async function createMerchantSubmission(
             .returning()
         : [];
 
-      const [docReviewQueue] = await tx
-        .insert(queues)
-        .values({
-          name: "Documents Review",
-          slug: "documents-review",
-          prefix: "DR",
-          qcEnabled: false,
-        })
-        .onConflictDoUpdate({
-          target: queues.slug,
-          set: {
-            name: "Documents Review",
-            prefix: "DR",
-            qcEnabled: false,
-          },
-        })
-        .returning({
-          id: queues.id,
-          name: queues.name,
-          slug: queues.slug,
-          prefix: queues.prefix,
-          qcEnabled: queues.qcEnabled,
-        });
-
-      if (!docReviewQueue) {
-        throw new AppError(500, "Failed to resolve documents review queue.");
-      }
-
-      const stages = await ensureQueueStages(tx, docReviewQueue);
-      const initialStage = stages[0];
-
-      if (!initialStage) {
-        throw new AppError(500, "No initial stage configured for documents review queue.");
-      }
-
-      await tx
-        .insert(queueCaseSequences)
-        .values({
-          queueId: docReviewQueue.id,
-          lastNumber: 0,
-        })
-        .onConflictDoNothing();
-
-      const [seqRow] = await tx
-        .update(queueCaseSequences)
-        .set({
-          lastNumber: sql`${queueCaseSequences.lastNumber} + 1`,
-        })
-        .where(eq(queueCaseSequences.queueId, docReviewQueue.id))
-        .returning({ lastNumber: queueCaseSequences.lastNumber });
-
-      if (!seqRow) {
-        throw new AppError(500, "Failed to generate documents review case number.");
-      }
-
-      const caseNumber = `${docReviewQueue.prefix}-${String(seqRow.lastNumber).padStart(9, "0")}`;
-      const [createdCase] = await tx
-        .insert(cases)
-        .values({
-          caseNumber,
-          queueId: docReviewQueue.id,
-          merchantId,
-          ownerId: null,
-          currentStageId: initialStage.id,
-          status: "new",
-          priority: createdMerchant.priority,
-          updatedAt: new Date(),
-        })
-        .returning();
-
-      if (!createdCase) {
-        throw new AppError(500, "Failed to create documents review case.");
-      }
-
       return {
         merchant: createdMerchant,
         documents: createdDocuments,
-        case: createdCase,
       };
     });
 
     return {
       merchant: sanitizeMerchantRecord(result.merchant),
       documents: result.documents.map(sanitizeDocumentRecord),
-      case: sanitizeCaseRecord(result.case),
     };
   } catch (error) {
     if (submissionFolderId) {
@@ -492,7 +397,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
     if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
       searchConditions.push(eq(merchants.merchantNumber, numericSearch));
     }
-    conditions.push(or(...searchConditions)!);
+    conditions.push(or(...searchConditions));
   }
 
   if (query.onboardingStage) {
@@ -546,7 +451,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
   }
 
   const orderFn = query.sortOrder === "desc" ? desc : asc;
-  const sortSpec = sortColumnMap[query.sortBy] ?? sortColumnMap.merchantNumber;
+  const sortSpec = sortColumnMap[query.sortBy];
   const cursor = query.cursor
     ? decodeKeysetCursor(query.cursor, {
         sortBy: query.sortBy,
