@@ -17,7 +17,7 @@ export const MERCHANT_FIELD_LABELS: Record<string, string> = {
   businessRegistrationDate: "Business Registration Date",
   businessDescription: "Business Description",
   businessNature: "Nature of Business",
-  merchantType: "Merchant Type",
+  merchantType: "Business Type",
   estimatedMonthlyTransactions: "Estimated Monthly Transactions",
   estimatedMonthlyVolume: "Estimated Monthly Volume (PKR)",
   accountTitle: "Account Title",

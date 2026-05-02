@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors";
 export const merchantTypes = [
   "sole_proprietorship",
   "private_limited_company",
+  "public_limited_company",
   "partnership",
   "limited_liability_partnership",
   "ngo_npo_charity",
@@ -41,6 +42,16 @@ export const merchantSpecificDocumentMap = {
     optional: ["authority_letter", "taxpayer_registration_certificate"],
   },
   private_limited_company: {
+    required: ["company_ntn", "company_incorporation_certificate"],
+    optional: [
+      "memorandum_articles",
+      "form_ii",
+      "form_a",
+      "board_resolution",
+      "certificate_of_commencement",
+    ],
+  },
+  public_limited_company: {
     required: ["company_ntn", "company_incorporation_certificate"],
     optional: [
       "memorandum_articles",
@@ -390,7 +401,7 @@ function assertRequiredDocuments(
     if (!allowedDocumentTypes.has(documentType)) {
       throw new AppError(
         400,
-        `Document "${documentType}" is not allowed for merchant type "${merchantType}".`,
+        `Document "${documentType}" is not allowed for business type "${merchantType}".`,
       );
     }
   }

@@ -34,6 +34,7 @@ export const refreshTokenStatusEnum = pgEnum("refresh_token_status", [
 export const merchantTypeEnum = pgEnum("merchant_type", [
   "sole_proprietorship",
   "private_limited_company",
+  "public_limited_company",
   "partnership",
   "limited_liability_partnership",
   "ngo_npo_charity",

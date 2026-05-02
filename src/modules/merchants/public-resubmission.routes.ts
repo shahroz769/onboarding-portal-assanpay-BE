@@ -220,7 +220,7 @@ resubmissionRoutes.post("/:token", async (c) => {
     if (!allowedDocumentTypes.has(existing.documentType)) {
       throw new AppError(
         400,
-        `Document "${existing.documentType}" is not allowed for this merchant type.`,
+        `Document "${existing.documentType}" is not allowed for this business type.`,
       );
     }
 
