@@ -3,28 +3,28 @@
 -- seeded here. Other queues should be seeded explicitly when their workflow
 -- is finalized.
 -- This script is idempotent: it uses ON CONFLICT DO NOTHING on the unique
--- (queue_id, slug) constraint.
+-- (queue_id, slug) index.
 
 -- Documents Review: New -> Working -> Awaiting Client -> Closed
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'New', 'new', 1, 'new', now()
 FROM queues q WHERE q.slug = 'documents-review'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'Working', 'working', 2, 'in_progress', now()
 FROM queues q WHERE q.slug = 'documents-review'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'Awaiting Client', 'awaiting_client', 3, 'in_progress', now()
 FROM queues q WHERE q.slug = 'documents-review'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'Closed', 'closed', 4, 'closed', now()
 FROM queues q WHERE q.slug = 'documents-review'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 -- Backfill existing documents-review cases that do not have a current stage.
 UPDATE cases c
@@ -46,14 +46,35 @@ WHERE q.slug = 'documents-review'
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'New', 'new', 1, 'new', now()
 FROM queues q WHERE q.slug = 'sub-merchant-form'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'Working', 'working', 2, 'in_progress', now()
 FROM queues q WHERE q.slug = 'sub-merchant-form'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
 
 INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
 SELECT gen_random_uuid(), q.id, 'Closed', 'closed', 3, 'closed', now()
 FROM queues q WHERE q.slug = 'sub-merchant-form'
-ON CONFLICT ON CONSTRAINT queue_stages_queue_slug_uniq DO NOTHING;
+ON CONFLICT (queue_id, slug) DO NOTHING;
+
+-- Agreement: New -> Working -> Awaiting Client -> Closed
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'New', 'new', 1, 'new', now()
+FROM queues q WHERE q.slug = 'agreement'
+ON CONFLICT (queue_id, slug) DO NOTHING;
+
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'Working', 'working', 2, 'in_progress', now()
+FROM queues q WHERE q.slug = 'agreement'
+ON CONFLICT (queue_id, slug) DO NOTHING;
+
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'Awaiting Client', 'awaiting_client', 3, 'in_progress', now()
+FROM queues q WHERE q.slug = 'agreement'
+ON CONFLICT (queue_id, slug) DO NOTHING;
+
+INSERT INTO queue_stages (id, queue_id, name, slug, "order", category, created_at)
+SELECT gen_random_uuid(), q.id, 'Closed', 'closed', 4, 'closed', now()
+FROM queues q WHERE q.slug = 'agreement'
+ON CONFLICT (queue_id, slug) DO NOTHING;

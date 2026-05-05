@@ -56,9 +56,7 @@
         "access_policies_name_unique": {
           "name": "access_policies_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -95,12 +93,8 @@
           "name": "policy_queues_policy_id_access_policies_id_fk",
           "tableFrom": "policy_queues",
           "tableTo": "access_policies",
-          "columnsFrom": [
-            "policy_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["policy_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -108,12 +102,8 @@
           "name": "policy_queues_queue_id_queues_id_fk",
           "tableFrom": "policy_queues",
           "tableTo": "queues",
-          "columnsFrom": [
-            "queue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["queue_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -121,10 +111,7 @@
       "compositePrimaryKeys": {
         "policy_queues_pk": {
           "name": "policy_queues_pk",
-          "columns": [
-            "policy_id",
-            "queue_id"
-          ]
+          "columns": ["policy_id", "queue_id"]
         }
       },
       "uniqueConstraints": {},
@@ -170,16 +157,12 @@
         "queues_name_unique": {
           "name": "queues_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         },
         "queues_slug_unique": {
           "name": "queues_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "policies": {},
@@ -292,12 +275,8 @@
           "name": "refresh_tokens_user_id_users_id_fk",
           "tableFrom": "refresh_tokens",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -307,9 +286,7 @@
         "refresh_tokens_token_hash_unique": {
           "name": "refresh_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -442,12 +419,8 @@
           "name": "users_access_policy_id_access_policies_id_fk",
           "tableFrom": "users",
           "tableTo": "access_policies",
-          "columnsFrom": [
-            "access_policy_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["access_policy_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -457,16 +430,12 @@
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         },
         "users_employee_id_unique": {
           "name": "users_employee_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "employee_id"
-          ]
+          "columns": ["employee_id"]
         }
       },
       "policies": {},
@@ -478,29 +447,17 @@
     "public.refresh_token_status": {
       "name": "refresh_token_status",
       "schema": "public",
-      "values": [
-        "active",
-        "revoked",
-        "rotated"
-      ]
+      "values": ["active", "revoked", "rotated"]
     },
     "public.role_type": {
       "name": "role_type",
       "schema": "public",
-      "values": [
-        "super_admin",
-        "admin",
-        "supervisor",
-        "employee"
-      ]
+      "values": ["super_admin", "admin", "supervisor", "employee"]
     },
     "public.user_status": {
       "name": "user_status",
       "schema": "public",
-      "values": [
-        "active",
-        "inactive"
-      ]
+      "values": ["active", "inactive"]
     }
   },
   "schemas": {},

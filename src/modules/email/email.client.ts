@@ -1,12 +1,12 @@
-import { Resend } from "resend";
+import { Resend } from 'resend'
 
-import { env } from "../../config/env";
+import { env } from '../../config/env'
 
-let cachedClient: Resend | null = null;
+let cachedClient: Resend | null = null
 
 export function getResendClient(): Resend {
   if (!cachedClient) {
-    cachedClient = new Resend(env.RESEND_API_KEY ?? "re_placeholder");
+    cachedClient = new Resend(env.RESEND_API_KEY ?? 're_placeholder')
   }
-  return cachedClient;
+  return cachedClient
 }

@@ -1,57 +1,57 @@
-import { SignJWT, jwtVerify } from "jose";
+import { SignJWT, jwtVerify } from 'jose'
 
-import { env } from "../config/env";
-import type { RoleType, SessionUser } from "../types/auth";
+import { env } from '../config/env'
+import type { RoleType, SessionUser } from '../types/auth'
 
-const accessSecret = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
-const refreshSecret = new TextEncoder().encode(env.JWT_REFRESH_SECRET);
+const accessSecret = new TextEncoder().encode(env.JWT_ACCESS_SECRET)
+const refreshSecret = new TextEncoder().encode(env.JWT_REFRESH_SECRET)
 
 function getAccessExpiration() {
-  return `${env.ACCESS_TOKEN_TTL_MINUTES}m`;
+  return `${env.ACCESS_TOKEN_TTL_MINUTES}m`
 }
 
 function getRefreshExpiration() {
-  return `${env.REFRESH_TOKEN_TTL_DAYS}d`;
+  return `${env.REFRESH_TOKEN_TTL_DAYS}d`
 }
 
 export async function signAccessToken(payload: {
-  sub: string;
-  roleType: RoleType;
-  email: string;
-  sessionVersion: number;
+  sub: string
+  roleType: RoleType
+  email: string
+  sessionVersion: number
 }) {
   return new SignJWT({
     roleType: payload.roleType,
     email: payload.email,
     sessionVersion: payload.sessionVersion,
   })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: 'HS256' })
     .setSubject(payload.sub)
     .setIssuedAt()
     .setExpirationTime(getAccessExpiration())
-    .sign(accessSecret);
+    .sign(accessSecret)
 }
 
 export async function signRefreshToken(payload: {
-  sub: string;
-  sessionId: string;
+  sub: string
+  sessionId: string
 }) {
   return new SignJWT({
     sessionId: payload.sessionId,
   })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: 'HS256' })
     .setSubject(payload.sub)
     .setIssuedAt()
     .setExpirationTime(getRefreshExpiration())
-    .sign(refreshSecret);
+    .sign(refreshSecret)
 }
 
 export async function verifyAccessToken(token: string): Promise<SessionUser> {
-  const { payload } = await jwtVerify(token, accessSecret);
-  const sessionVersion = Number(payload.sessionVersion);
+  const { payload } = await jwtVerify(token, accessSecret)
+  const sessionVersion = Number(payload.sessionVersion)
 
   if (!Number.isInteger(sessionVersion) || sessionVersion < 0) {
-    throw new Error("Invalid access token session version.");
+    throw new Error('Invalid access token session version.')
   }
 
   return {
@@ -59,14 +59,14 @@ export async function verifyAccessToken(token: string): Promise<SessionUser> {
     email: String(payload.email),
     roleType: payload.roleType as RoleType,
     sessionVersion,
-  };
+  }
 }
 
 export async function verifyRefreshToken(token: string) {
-  const { payload } = await jwtVerify(token, refreshSecret);
+  const { payload } = await jwtVerify(token, refreshSecret)
 
   return {
     userId: String(payload.sub),
     sessionId: String(payload.sessionId),
-  };
+  }
 }

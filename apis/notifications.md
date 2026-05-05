@@ -11,11 +11,11 @@ Cursor-paginated list of notifications for the current user, latest first.
 
 **Query parameters**
 
-| Name   | Type           | Default | Description                                |
-| ------ | -------------- | ------- | ------------------------------------------ |
-| cursor | ISO datetime   | —       | Returns items strictly older than cursor.  |
-| limit  | int (1..50)    | 20      | Page size.                                 |
-| filter | `all`\|`unread` | all    | Restrict to unread.                         |
+| Name   | Type            | Default | Description                               |
+| ------ | --------------- | ------- | ----------------------------------------- |
+| cursor | ISO datetime    | —       | Returns items strictly older than cursor. |
+| limit  | int (1..50)     | 20      | Page size.                                |
+| filter | `all`\|`unread` | all     | Restrict to unread.                       |
 
 **200 Response**
 
@@ -32,7 +32,11 @@ Cursor-paginated list of notifications for the current user, latest first.
       "commentId": null,
       "actorId": "uuid",
       "actorName": "Alice",
-      "metadata": { "caseNumber": "CASE-000000123", "queueName": "Onboarding", "actorName": "Alice" },
+      "metadata": {
+        "caseNumber": "CASE-000000123",
+        "queueName": "Onboarding",
+        "actorName": "Alice"
+      },
       "isRead": false,
       "readAt": null,
       "createdAt": "2026-04-22T10:00:00.000Z"
@@ -93,10 +97,10 @@ The connection unsubscribes automatically on client disconnect.
 
 Notifications are created automatically by other endpoints:
 
-| Source                                 | Type(s) created                                    | Recipients                                                                  |
-| -------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
-| `PATCH /api/cases/:id/assign`          | `case_assigned`, `case_unassigned`                 | New owner (assigned), previous owner (unassigned). Excludes the actor.      |
-| `POST  /api/cases/bulk-assign`         | `case_assigned`, `case_unassigned`                 | Same rules per case.                                                        |
-| `POST  /api/cases/:id/comments`        | `comment_mention` > `comment_reply` > `comment_thread` (precedence per recipient) | @-mentioned users; parent comment author on reply; prior commenters in the thread. Excludes the comment author. |
+| Source                          | Type(s) created                                                                   | Recipients                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `PATCH /api/cases/:id/assign`   | `case_assigned`, `case_unassigned`                                                | New owner (assigned), previous owner (unassigned). Excludes the actor.                                          |
+| `POST  /api/cases/bulk-assign`  | `case_assigned`, `case_unassigned`                                                | Same rules per case.                                                                                            |
+| `POST  /api/cases/:id/comments` | `comment_mention` > `comment_reply` > `comment_thread` (precedence per recipient) | @-mentioned users; parent comment author on reply; prior commenters in the thread. Excludes the comment author. |
 
 Notification creation is best-effort — failures are logged and do **not** roll back the originating action.

@@ -11,14 +11,14 @@ import {
   Section,
   Tailwind,
   Text,
-} from "@react-email/components";
+} from '@react-email/components'
 
 export type SubMerchantFormEmailProps = {
-  merchantName: string;
-  ownerName: string;
-  subMerchantName: string;
-  finalFormUrl: string;
-};
+  merchantName: string
+  ownerName: string
+  subMerchantName: string
+  finalFormUrl: string
+}
 
 export function SubMerchantFormEmail({
   merchantName,
@@ -29,9 +29,7 @@ export function SubMerchantFormEmail({
   return (
     <Html>
       <Head />
-      <Preview>
-        Final sub-merchant form for {merchantName}
-      </Preview>
+      <Preview>Final sub-merchant form for {merchantName}</Preview>
       <Tailwind>
         <Body className="bg-gray-50 font-sans">
           <Container className="mx-auto my-10 max-w-xl rounded-lg bg-white p-6">
@@ -80,14 +78,14 @@ export function SubMerchantFormEmail({
         </Body>
       </Tailwind>
     </Html>
-  );
+  )
 }
 
 SubMerchantFormEmail.PreviewProps = {
-  merchantName: "Acme Pvt Ltd",
-  ownerName: "Jane Owner",
-  subMerchantName: "Devtects",
-  finalFormUrl: "https://drive.google.com/open?id=example",
-} satisfies SubMerchantFormEmailProps;
+  merchantName: 'Acme Pvt Ltd',
+  ownerName: 'Jane Owner',
+  subMerchantName: 'Devtects',
+  finalFormUrl: 'https://drive.google.com/open?id=example',
+} satisfies SubMerchantFormEmailProps
 
-export default SubMerchantFormEmail;
+export default SubMerchantFormEmail

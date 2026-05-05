@@ -1,15 +1,15 @@
-import { z } from "zod";
+import { z } from 'zod'
 
 export const caseStatusValues = [
-  "new",
-  "working",
-  "pending",
-  "qc",
-  "error",
-  "closed",
-  "awaiting_client",
-] as const;
-export type CaseStatusValue = (typeof caseStatusValues)[number];
+  'new',
+  'working',
+  'pending',
+  'qc',
+  'error',
+  'closed',
+  'awaiting_client',
+] as const
+export type CaseStatusValue = (typeof caseStatusValues)[number]
 
 // Ordered index for transition validation
 const statusOrder: Record<CaseStatusValue, number> = {
@@ -20,7 +20,7 @@ const statusOrder: Record<CaseStatusValue, number> = {
   error: 4,
   closed: 5,
   awaiting_client: 6,
-};
+}
 
 /**
  * Validates that a status transition is allowed.
@@ -32,21 +32,21 @@ export function isValidStatusTransition(
   current: CaseStatusValue,
   next: CaseStatusValue,
 ): boolean {
-  if (current === next) return false;
+  if (current === next) return false
 
-  if (current === "working" && next === "awaiting_client") return true;
-  if (current === "awaiting_client" && next === "working") return true;
+  if (current === 'working' && next === 'awaiting_client') return true
+  if (current === 'awaiting_client' && next === 'working') return true
 
-  const currentIdx = statusOrder[current];
-  const nextIdx = statusOrder[next];
+  const currentIdx = statusOrder[current]
+  const nextIdx = statusOrder[next]
 
   // Forward: any jump forward is allowed
-  if (nextIdx > currentIdx) return true;
+  if (nextIdx > currentIdx) return true
 
   // Backward: only one step back is allowed
-  if (currentIdx - nextIdx === 1) return true;
+  if (currentIdx - nextIdx === 1) return true
 
-  return false;
+  return false
 }
 
 // ─── Request Schemas ────────────────────────────────────────────────────────
@@ -56,42 +56,42 @@ export const createCaseSchema = z
     merchantId: z.string().uuid(),
     queueId: z.string().uuid(),
   })
-  .strict();
+  .strict()
 
-export type CreateCaseInput = z.infer<typeof createCaseSchema>;
+export type CreateCaseInput = z.infer<typeof createCaseSchema>
 
 export const updateCaseStatusSchema = z
   .object({
     status: z.enum(caseStatusValues),
   })
-  .strict();
+  .strict()
 
-export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>;
+export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>
 
 export const assignCaseSchema = z
   .object({
     ownerId: z.string().uuid().nullable(),
   })
-  .strict();
+  .strict()
 
-export type AssignCaseInput = z.infer<typeof assignCaseSchema>;
+export type AssignCaseInput = z.infer<typeof assignCaseSchema>
 
 export const bulkAssignCaseSchema = z
   .object({
     ids: z.array(z.string().uuid()).min(1),
     ownerId: z.string().uuid().nullable(),
   })
-  .strict();
+  .strict()
 
-export type BulkAssignCaseInput = z.infer<typeof bulkAssignCaseSchema>;
+export type BulkAssignCaseInput = z.infer<typeof bulkAssignCaseSchema>
 
 export const updateCasePrioritySchema = z
   .object({
-    priority: z.enum(["normal", "high"]),
+    priority: z.enum(['normal', 'high']),
   })
-  .strict();
+  .strict()
 
-export type UpdateCasePriorityInput = z.infer<typeof updateCasePrioritySchema>;
+export type UpdateCasePriorityInput = z.infer<typeof updateCasePrioritySchema>
 
 export const listCasesQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
@@ -101,46 +101,65 @@ export const listCasesQuerySchema = z.object({
   ownerId: z.string().optional(),
   status: z.string().optional(),
   sortBy: z
-    .enum(["caseNumber", "status", "createdAt", "closedAt", "updatedAt", "merchantName"])
-    .default("createdAt"),
-  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+    .enum([
+      'caseNumber',
+      'status',
+      'createdAt',
+      'closedAt',
+      'updatedAt',
+      'merchantName',
+    ])
+    .default('createdAt'),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
   createdAtFrom: z.string().optional(),
   createdAtTo: z.string().optional(),
-});
+})
 
-export type ListCasesQuery = z.infer<typeof listCasesQuerySchema>;
+export type ListCasesQuery = z.infer<typeof listCasesQuerySchema>
 
 // ─── Stage-based Schemas ────────────────────────────────────────────────────
 
-export const stageCategoryValues = ["new", "in_progress", "qc", "error", "closed"] as const;
-export type StageCategoryValue = (typeof stageCategoryValues)[number];
+export const stageCategoryValues = [
+  'new',
+  'in_progress',
+  'qc',
+  'error',
+  'closed',
+] as const
+export type StageCategoryValue = (typeof stageCategoryValues)[number]
 
 /**
  * Maps stage category to the legacy status column for backward compat.
  */
-export function categoryToStatus(category: StageCategoryValue): CaseStatusValue {
+export function categoryToStatus(
+  category: StageCategoryValue,
+): CaseStatusValue {
   switch (category) {
-    case "new":
-      return "new";
-    case "in_progress":
-      return "working";
-    case "qc":
-      return "qc";
-    case "error":
-      return "error";
-    case "closed":
-      return "closed";
+    case 'new':
+      return 'new'
+    case 'in_progress':
+      return 'working'
+    case 'qc':
+      return 'qc'
+    case 'error':
+      return 'error'
+    case 'closed':
+      return 'closed'
   }
-}// ─── Field Review Schemas ───────────────────────────────────────────────────
+} // ─── Field Review Schemas ───────────────────────────────────────────────────
 
-export const fieldReviewStatusValues = ["pending", "approved", "rejected"] as const;
-export type FieldReviewStatusValue = (typeof fieldReviewStatusValues)[number];
+export const fieldReviewStatusValues = [
+  'pending',
+  'approved',
+  'rejected',
+] as const
+export type FieldReviewStatusValue = (typeof fieldReviewStatusValues)[number]
 
 export const fieldReviewItemSchema = z.object({
   fieldName: z.string().min(1).max(120),
   status: z.enum(fieldReviewStatusValues),
   remarks: z.string().max(2000).optional(),
-});
+})
 
 export const saveFieldReviewsSchema = z
   .object({
@@ -150,12 +169,13 @@ export const saveFieldReviewsSchema = z
   .refine(
     (data) =>
       data.reviews.every(
-        (r) => r.status !== "rejected" || (r.remarks && r.remarks.trim().length > 0),
+        (r) =>
+          r.status !== 'rejected' || (r.remarks && r.remarks.trim().length > 0),
       ),
-    { message: "Remarks are required for rejected fields." },
-  );
+    { message: 'Remarks are required for rejected fields.' },
+  )
 
-export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>;
+export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>
 
 // ─── Close Unsuccessful Schema ──────────────────────────────────────────────
 
@@ -163,9 +183,9 @@ export const closeUnsuccessfulSchema = z
   .object({
     reason: z.string().min(1).max(2000),
   })
-  .strict();
+  .strict()
 
-export type CloseUnsuccessfulInput = z.infer<typeof closeUnsuccessfulSchema>;
+export type CloseUnsuccessfulInput = z.infer<typeof closeUnsuccessfulSchema>
 
 // ─── Comment Schemas ────────────────────────────────────────────────────────
 
@@ -175,22 +195,22 @@ export const createCommentSchema = z
     parentId: z.string().uuid().optional(),
     mentions: z.array(z.string().uuid()).max(20).optional(),
   })
-  .strict();
+  .strict()
 
-export type CreateCommentInput = z.infer<typeof createCommentSchema>;
+export type CreateCommentInput = z.infer<typeof createCommentSchema>
 
 // ─── Resubmission Schemas ───────────────────────────────────────────────────
 
 export const sendForResubmissionResponseSchema = z.object({
-  status: z.enum(["sent", "failed"]),
+  status: z.enum(['sent', 'failed']),
   tokenExpiresAt: z.string().nullable(),
   emailLogId: z.string().uuid(),
   error: z.string().optional(),
-});
+})
 
 export type SendForResubmissionResponse = z.infer<
   typeof sendForResubmissionResponseSchema
->;
+>
 
 // ─── Sub-Merchant Form Schemas ───────────────────────────────────────────────
 
@@ -198,18 +218,37 @@ export const selectSubMerchantFormSchema = z
   .object({
     subMerchantKey: z.string().min(1).max(80),
   })
-  .strict();
+  .strict()
 
 export type SelectSubMerchantFormInput = z.infer<
   typeof selectSubMerchantFormSchema
->;
+>
 
 export const subMerchantFormEmailResponseSchema = z.object({
-  status: z.enum(["sent", "failed"]),
+  status: z.enum(['sent', 'failed']),
   emailLogId: z.string().uuid(),
   error: z.string().optional(),
-});
+})
 
 export type SubMerchantFormEmailResponse = z.infer<
   typeof subMerchantFormEmailResponseSchema
->;
+>
+
+export const sendAgreementEmailSchema = z
+  .object({
+    remarks: z.string().max(2000).optional().nullable(),
+  })
+  .strict()
+
+export type SendAgreementEmailInput = z.infer<typeof sendAgreementEmailSchema>
+
+export const agreementEmailResponseSchema = z.object({
+  status: z.enum(['sent', 'failed']),
+  emailLogId: z.string().uuid(),
+  tokenExpiresAt: z.string().nullable(),
+  error: z.string().optional(),
+})
+
+export type AgreementEmailResponse = z.infer<
+  typeof agreementEmailResponseSchema
+>

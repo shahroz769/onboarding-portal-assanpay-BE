@@ -3,31 +3,35 @@
 ## Stack Recommendations
 
 ### ORM: Drizzle ORM (recommended over Prisma)
-| | Drizzle | Prisma |
-|---|---|---|
-| Bun support | Native, first-class | Works but has query engine overhead |
-| Performance | Direct SQL, no runtime overhead | Extra query engine process |
-| Type-safety | Full, SQL-like syntax | Full, custom DSL |
-| Migrations | Lightweight `drizzle-kit` | Heavier CLI |
-| Bundle size | ~50KB | ~2MB+ engine |
+
+|             | Drizzle                         | Prisma                              |
+| ----------- | ------------------------------- | ----------------------------------- |
+| Bun support | Native, first-class             | Works but has query engine overhead |
+| Performance | Direct SQL, no runtime overhead | Extra query engine process          |
+| Type-safety | Full, SQL-like syntax           | Full, custom DSL                    |
+| Migrations  | Lightweight `drizzle-kit`       | Heavier CLI                         |
+| Bundle size | ~50KB                           | ~2MB+ engine                        |
 
 **Verdict:** Drizzle aligns perfectly with the Bun + Hono lightweight philosophy.
 
 ### Email: Nodemailer + SMTP (recommended over Resend)
-| | Nodemailer + SMTP | Resend |
-|---|---|---|
-| Cost | Free (use Brevo free 300/day, or your own SMTP) | Free tier: 100/day, then paid |
-| Vendor lock-in | None — swap SMTP providers anytime | Tied to Resend API |
-| Templates | Use any templating (React Email, MJML, Handlebars) | React Email built-in |
-| Setup | Moderate | Very easy |
-| Control | Full control over delivery | Managed |
+
+|                | Nodemailer + SMTP                                  | Resend                        |
+| -------------- | -------------------------------------------------- | ----------------------------- |
+| Cost           | Free (use Brevo free 300/day, or your own SMTP)    | Free tier: 100/day, then paid |
+| Vendor lock-in | None — swap SMTP providers anytime                 | Tied to Resend API            |
+| Templates      | Use any templating (React Email, MJML, Handlebars) | React Email built-in          |
+| Setup          | Moderate                                           | Very easy                     |
+| Control        | Full control over delivery                         | Managed                       |
 
 **Verdict:** Nodemailer gives you flexibility. In production, point it at Brevo, Mailgun, or your own SMTP relay. Zero lock-in.
 
 ### File Storage: Google Drive for now, Hetzner Object Storage later
+
 Google Drive can be used in the first version if the business needs document access restricted to company Google accounts.
 
 **Recommended temporary approach:**
+
 - Upload documents to Google Drive through the backend
 - Create a dedicated folder structure per merchant
 - Store `file_id`, `folder_id`, filename, mime type, checksum, and links in the database
@@ -35,11 +39,13 @@ Google Drive can be used in the first version if the business needs document acc
 - Keep audit logs for upload, access, review, and replacement actions
 
 **Long-term direction:**
+
 - Abstract storage behind a provider interface
 - Start with Google Drive as the current provider
 - Migrate later to Hetzner Object Storage without changing business logic
 
 ### Auth: Custom JWT (access + refresh tokens)
+
 For this specific flow (admin-created users, direct password creation, RBAC with policies), a custom implementation gives the most control.
 
 - **Access token:** 15-min expiry, stored in memory on frontend
@@ -47,9 +53,11 @@ For this specific flow (admin-created users, direct password creation, RBAC with
 - **Password hashing:** `Bun.password.hash()` (built-in Argon2)
 
 ### Deployment: Hetzner + Coolify
+
 Use Hetzner infrastructure with Coolify for deployment orchestration and server management.
 
 **Recommended setup:**
+
 - Hetzner VPS
 - Coolify-managed application deployment
 - Docker image/container deployment through Coolify
@@ -104,25 +112,25 @@ Reverse Proxy:  Coolify managed proxy
 
 ### Key Tables
 
-| Table | Purpose |
-|---|---|
-| `users` | Portal users (name, email, employee_id, password_hash, role_type, access_policy_id, status, created_by_user_id) |
-| `access_policies` | Operational access policies for queue permissions, mainly for supervisor/employee scope |
-| `policy_queues` | M2M: which queues a policy grants access to |
-| `queues` | Queue definitions (Documents Review, Sub Merchant Form, Agreement, MID, Support Tickets, Going Live) |
-| `merchants` | All merchant data from form (business name, contact, type, status, onboarding_stage) |
-| `merchant_documents` | Uploaded documents with review status (approved/rejected/pending, rejection_reason) |
-| `merchant_timeline` | Audit trail: every event from form fill to live |
-| `cases` | Central case table (queue_id, merchant_id, owner_id, current_stage_id, priority, created_at) |
-| `case_stage_definitions` | Stage definitions per case type / queue |
-| `case_stage_transitions` | Allowed transitions between stages for each case type |
-| `case_comments` | Chatter: internal comments with @mentions |
-| `case_history` | Field-level change log (who changed what, when) |
-| `case_documents` | Files attached to specific cases |
-| `notifications` | All notifications (mention, assignment, status change, etc.) |
-| `tokens` | Resubmission form tokens and go-live tokens (with expiry, type) |
-| `merchant_credentials` | MID credentials (AES-encrypted email and password) |
-| `email_log` | Record of every email sent (to, subject, template, case_id) |
+| Table                    | Purpose                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `users`                  | Portal users (name, email, employee_id, password_hash, role_type, access_policy_id, status, created_by_user_id) |
+| `access_policies`        | Operational access policies for queue permissions, mainly for supervisor/employee scope                         |
+| `policy_queues`          | M2M: which queues a policy grants access to                                                                     |
+| `queues`                 | Queue definitions (Documents Review, Sub Merchant Form, Agreement, MID, Support Tickets, Going Live)            |
+| `merchants`              | All merchant data from form (business name, contact, type, status, onboarding_stage)                            |
+| `merchant_documents`     | Uploaded documents with review status (approved/rejected/pending, rejection_reason)                             |
+| `merchant_timeline`      | Audit trail: every event from form fill to live                                                                 |
+| `cases`                  | Central case table (queue_id, merchant_id, owner_id, current_stage_id, priority, created_at)                    |
+| `case_stage_definitions` | Stage definitions per case type / queue                                                                         |
+| `case_stage_transitions` | Allowed transitions between stages for each case type                                                           |
+| `case_comments`          | Chatter: internal comments with @mentions                                                                       |
+| `case_history`           | Field-level change log (who changed what, when)                                                                 |
+| `case_documents`         | Files attached to specific cases                                                                                |
+| `notifications`          | All notifications (mention, assignment, status change, etc.)                                                    |
+| `tokens`                 | Resubmission form tokens and go-live tokens (with expiry, type)                                                 |
+| `merchant_credentials`   | MID credentials (AES-encrypted email and password)                                                              |
+| `email_log`              | Record of every email sent (to, subject, template, case_id)                                                     |
 
 ---
 
@@ -213,78 +221,87 @@ src/
 ## Detailed API Endpoints
 
 ### Auth
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/login` | Login with email + password |
-| POST | `/api/auth/refresh` | Refresh access token |
-| POST | `/api/auth/logout` | Invalidate refresh token |
+
+| Method | Endpoint            | Description                 |
+| ------ | ------------------- | --------------------------- |
+| POST   | `/api/auth/login`   | Login with email + password |
+| POST   | `/api/auth/refresh` | Refresh access token        |
+| POST   | `/api/auth/logout`  | Invalidate refresh token    |
+
 ### Users
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/users` | List users with filters |
-| GET | `/api/users/:id` | User detail + work stats |
-| GET | `/api/users/:id/cases` | User's open/closed cases |
-| POST | `/api/users` | Create user with email + password, subject to creator role rules |
-| PATCH | `/api/users/:id` | Update user |
-| DELETE | `/api/users/:id` | Deactivate user (soft delete) |
+
+| Method | Endpoint               | Description                                                      |
+| ------ | ---------------------- | ---------------------------------------------------------------- |
+| GET    | `/api/users`           | List users with filters                                          |
+| GET    | `/api/users/:id`       | User detail + work stats                                         |
+| GET    | `/api/users/:id/cases` | User's open/closed cases                                         |
+| POST   | `/api/users`           | Create user with email + password, subject to creator role rules |
+| PATCH  | `/api/users/:id`       | Update user                                                      |
+| DELETE | `/api/users/:id`       | Deactivate user (soft delete)                                    |
 
 ### Access Policies (Admin+)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/policies` | List policies |
-| POST | `/api/policies` | Create policy with queue assignments |
-| PATCH | `/api/policies/:id` | Update policy |
-| DELETE | `/api/policies/:id` | Delete policy |
+
+| Method | Endpoint            | Description                          |
+| ------ | ------------------- | ------------------------------------ |
+| GET    | `/api/policies`     | List policies                        |
+| POST   | `/api/policies`     | Create policy with queue assignments |
+| PATCH  | `/api/policies/:id` | Update policy                        |
+| DELETE | `/api/policies/:id` | Delete policy                        |
 
 ### Merchants
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/public/merchant-form` | Public: Submit onboarding form |
-| POST | `/api/public/merchant-resubmit/:token` | Public: Resubmit rejected docs |
-| POST | `/api/public/agreement-upload/:token` | Public: Merchant uploads agreement |
-| POST | `/api/public/go-live-request/:token` | Public: Request going live |
-| GET | `/api/merchants` | List merchants (filterable) |
-| GET | `/api/merchants/:id` | Merchant detail |
-| GET | `/api/merchants/:id/timeline` | Full timeline |
+
+| Method | Endpoint                               | Description                        |
+| ------ | -------------------------------------- | ---------------------------------- |
+| POST   | `/api/public/merchant-form`            | Public: Submit onboarding form     |
+| POST   | `/api/public/merchant-resubmit/:token` | Public: Resubmit rejected docs     |
+| POST   | `/api/public/agreement-upload/:token`  | Public: Merchant uploads agreement |
+| POST   | `/api/public/go-live-request/:token`   | Public: Request going live         |
+| GET    | `/api/merchants`                       | List merchants (filterable)        |
+| GET    | `/api/merchants/:id`                   | Merchant detail                    |
+| GET    | `/api/merchants/:id/timeline`          | Full timeline                      |
 
 ### Cases
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/cases` | List cases (filter by queue, stage, owner) |
-| GET | `/api/cases/:id` | Case detail |
-| PATCH | `/api/cases/:id/assign` | Assign/take ownership |
-| PATCH | `/api/cases/:id/stage` | Transition stage based on the case's configured stage flow |
-| POST | `/api/cases/:id/review` | Submit document review decisions |
-| POST | `/api/cases/:id/send-rejection-email` | Send rejection email to merchant |
-| POST | `/api/cases/:id/upload-document` | Upload case-specific file |
-| POST | `/api/cases/:id/send-agreement` | Send agreement link to merchant |
-| POST | `/api/cases/:id/credentials` | Save MID credentials |
-| POST | `/api/cases/:id/send-credentials` | Send credentials to merchant |
-| POST | `/api/cases/:id/set-limits` | Set testing/live limits |
-| POST | `/api/cases/:id/close` | Close case (triggers auto-create next) |
+
+| Method | Endpoint                              | Description                                                |
+| ------ | ------------------------------------- | ---------------------------------------------------------- |
+| GET    | `/api/cases`                          | List cases (filter by queue, stage, owner)                 |
+| GET    | `/api/cases/:id`                      | Case detail                                                |
+| PATCH  | `/api/cases/:id/assign`               | Assign/take ownership                                      |
+| PATCH  | `/api/cases/:id/stage`                | Transition stage based on the case's configured stage flow |
+| POST   | `/api/cases/:id/review`               | Submit document review decisions                           |
+| POST   | `/api/cases/:id/send-rejection-email` | Send rejection email to merchant                           |
+| POST   | `/api/cases/:id/upload-document`      | Upload case-specific file                                  |
+| POST   | `/api/cases/:id/send-agreement`       | Send agreement link to merchant                            |
+| POST   | `/api/cases/:id/credentials`          | Save MID credentials                                       |
+| POST   | `/api/cases/:id/send-credentials`     | Send credentials to merchant                               |
+| POST   | `/api/cases/:id/set-limits`           | Set testing/live limits                                    |
+| POST   | `/api/cases/:id/close`                | Close case (triggers auto-create next)                     |
 
 ### Comments (Chatter)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/cases/:id/comments` | List comments for case |
-| POST | `/api/cases/:id/comments` | Add comment (with @mentions) |
-| PATCH | `/api/comments/:id` | Edit comment |
-| DELETE | `/api/comments/:id` | Delete comment |
+
+| Method | Endpoint                  | Description                  |
+| ------ | ------------------------- | ---------------------------- |
+| GET    | `/api/cases/:id/comments` | List comments for case       |
+| POST   | `/api/cases/:id/comments` | Add comment (with @mentions) |
+| PATCH  | `/api/comments/:id`       | Edit comment                 |
+| DELETE | `/api/comments/:id`       | Delete comment               |
 
 ### Notifications
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/notifications` | List user's notifications |
-| PATCH | `/api/notifications/:id/read` | Mark as read |
-| PATCH | `/api/notifications/read-all` | Mark all as read |
-| WS | `/ws` | WebSocket for live notifications |
+
+| Method | Endpoint                      | Description                      |
+| ------ | ----------------------------- | -------------------------------- |
+| GET    | `/api/notifications`          | List user's notifications        |
+| PATCH  | `/api/notifications/:id/read` | Mark as read                     |
+| PATCH  | `/api/notifications/read-all` | Mark all as read                 |
+| WS     | `/ws`                         | WebSocket for live notifications |
 
 ### Dashboard
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/dashboard/stats` | Key metrics |
-| GET | `/api/dashboard/queue-summary` | Cases per queue with stage breakdown |
-| GET | `/api/dashboard/recent-activity` | Recent timeline events |
+
+| Method | Endpoint                         | Description                          |
+| ------ | -------------------------------- | ------------------------------------ |
+| GET    | `/api/dashboard/stats`           | Key metrics                          |
+| GET    | `/api/dashboard/queue-summary`   | Cases per queue with stage breakdown |
+| GET    | `/api/dashboard/recent-activity` | Recent timeline events               |
 
 ---
 
@@ -372,26 +389,26 @@ Use a single `users` table, but separate platform authority from operational acc
 
 ### Platform Roles
 
-| Role | Access |
-|---|---|
+| Role        | Access                                              |
+| ----------- | --------------------------------------------------- |
 | Super Admin | Full access to everything, including admin creation |
-| Admin | Full access except super admin actions |
+| Admin       | Full access except super admin actions              |
 
 ### Operational Roles
 
-| Role | Access |
-|---|---|
+| Role       | Access                                      |
+| ---------- | ------------------------------------------- |
 | Supervisor | Access to assigned queues + user work stats |
-| Employee | Access to assigned queues only |
+| Employee   | Access to assigned queues only              |
 
 ### User Creation Hierarchy
 
-| Creator Role | Can Create |
-|---|---|
-| Super Admin | Admin, Supervisor, Employee |
-| Admin | Supervisor, Employee |
-| Supervisor | Employee |
-| Employee | No user creation access |
+| Creator Role | Can Create                  |
+| ------------ | --------------------------- |
+| Super Admin  | Admin, Supervisor, Employee |
+| Admin        | Supervisor, Employee        |
+| Supervisor   | Employee                    |
+| Employee     | No user creation access     |
 
 Rules:
 
@@ -404,6 +421,7 @@ Rules:
 - Every created user should store `created_by_user_id` for auditability
 
 **Access Policy flow:**
+
 1. Create a policy → give it a name + select queues
 2. Assign the policy to a user
 3. User can only see/work cases in their allowed queues
@@ -445,6 +463,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 ## Missing Features to Add
 
 ### Critical (Include Now)
+
 1. **Audit logging** — Log every action (who, what, when, IP). Essential for compliance.
 2. **Soft deletes** — Never hard-delete merchants, cases, or users.
 3. **Email log** — Record every email sent (deliverability tracking, debugging).
@@ -457,6 +476,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 10. **Case priority levels** — High/Medium/Low for triage.
 
 ### Important (Phase 2)
+
 11. **SLA tracking** — Time in each case stage, alerts when overdue.
 12. **Auto-assignment rules** — Round-robin or load-based case assignment.
 13. **Case escalation** — Auto-escalate if case sits in a stage too long.
@@ -469,6 +489,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 20. **Activity feed** — Dashboard showing real-time org-wide activity.
 
 ### Nice to Have (Phase 3)
+
 21. **Email template editor** — Admin-editable email templates.
 22. **Webhook support** — Notify external systems on status changes.
 23. **Form builder** — Configurable onboarding form fields.
@@ -480,6 +501,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 ## Implementation Phases
 
 ### Phase 1 — Foundation (Core Infrastructure)
+
 - [ ] Project structure, config, database setup
 - [ ] Drizzle schema + migrations
 - [ ] Auth system (JWT, login, refresh/logout flow)
@@ -488,6 +510,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 - [ ] Error handling, validation, logging
 
 ### Phase 2 — Merchant & Cases Core
+
 - [ ] Merchant form (public endpoint)
 - [ ] Merchants list + detail + timeline
 - [ ] Queue & case system (CRUD, case-dependent stage transitions)
@@ -496,6 +519,7 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 - [ ] Email service + templates
 
 ### Phase 3 — Remaining Case Handlers
+
 - [ ] Sub Merchant Form case handler
 - [ ] Agreement case handler (upload link flow)
 - [ ] MID case handler (credentials, go-live token with 3-day delay)
@@ -503,12 +527,14 @@ form_submitted → documents_review → sub_merchant → agreement → testing �
 - [ ] Case automation (auto-create chain on close)
 
 ### Phase 4 — Collaboration & Real-time
+
 - [ ] Chatter/comments with @mentions
 - [ ] Case history (field-level changes)
 - [ ] WebSocket notifications (live push)
 - [ ] Notification system (mention, assignment, status change)
 
 ### Phase 5 — Dashboard & Polish
+
 - [ ] Dashboard stats & queue summary
 - [ ] User work details (case load, metrics)
 - [ ] Support Tickets queue

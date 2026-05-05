@@ -11,20 +11,20 @@ import {
   Section,
   Tailwind,
   Text,
-} from "@react-email/components";
+} from '@react-email/components'
 
 export type DocumentResubmissionEmailRejection = {
-  label: string;
-  remarks: string | null;
-};
+  label: string
+  remarks: string | null
+}
 
 export type DocumentResubmissionEmailProps = {
-  merchantName: string;
-  ownerName: string;
-  rejections: DocumentResubmissionEmailRejection[];
-  resubmissionUrl: string;
-  expiresAt: string;
-};
+  merchantName: string
+  ownerName: string
+  rejections: DocumentResubmissionEmailRejection[]
+  resubmissionUrl: string
+  expiresAt: string
+}
 
 export function DocumentResubmissionEmail({
   merchantName,
@@ -37,7 +37,8 @@ export function DocumentResubmissionEmail({
     <Html>
       <Head />
       <Preview>
-        Action required: please update your onboarding submission for {merchantName}
+        Action required: please update your onboarding submission for{' '}
+        {merchantName}
       </Preview>
       <Tailwind>
         <Body className="bg-gray-50 font-sans">
@@ -106,18 +107,21 @@ export function DocumentResubmissionEmail({
         </Body>
       </Tailwind>
     </Html>
-  );
+  )
 }
 
 DocumentResubmissionEmail.PreviewProps = {
-  merchantName: "Acme Pvt Ltd",
-  ownerName: "Jane Owner",
+  merchantName: 'Acme Pvt Ltd',
+  ownerName: 'Jane Owner',
   rejections: [
-    { label: "Business Name", remarks: "Name does not match NTN certificate." },
-    { label: "Owner CNIC Front", remarks: "Image is blurry, please re-upload." },
+    { label: 'Business Name', remarks: 'Name does not match NTN certificate.' },
+    {
+      label: 'Owner CNIC Front',
+      remarks: 'Image is blurry, please re-upload.',
+    },
   ],
-  resubmissionUrl: "https://app.example.com/onboarding-form/resubmit/abc123",
-  expiresAt: "April 29, 2026",
-} satisfies DocumentResubmissionEmailProps;
+  resubmissionUrl: 'https://app.example.com/onboarding-form/resubmit/abc123',
+  expiresAt: 'April 29, 2026',
+} satisfies DocumentResubmissionEmailProps
 
-export default DocumentResubmissionEmail;
+export default DocumentResubmissionEmail

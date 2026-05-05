@@ -1,6 +1,6 @@
-import { z } from "zod";
+import { z } from 'zod'
 
-const defaultCookieSecure = Bun.env.NODE_ENV === "production" ? "true" : "false";
+const defaultCookieSecure = Bun.env.NODE_ENV === 'production' ? 'true' : 'false'
 
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
@@ -10,15 +10,15 @@ const envSchema = z.object({
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   ALLOW_ADMIN_REGISTRATION: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((value) => value === "true"),
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   COOKIE_DOMAIN: z.string().min(1).optional(),
   COOKIE_SECURE: z
-    .enum(["true", "false"])
+    .enum(['true', 'false'])
     .default(defaultCookieSecure)
-    .transform((value) => value === "true"),
-  CORS_ORIGIN: z.string().min(1).default("http://localhost:5173"),
+    .transform((value) => value === 'true'),
+  CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),
@@ -26,15 +26,11 @@ const envSchema = z.object({
   EMAIL_FROM: z
     .string()
     .min(1)
-    .default("Onboarding Portal <onboarding@resend.dev>"),
+    .default('Onboarding Portal <onboarding@resend.dev>'),
   EMAIL_REPLY_TO: z.string().email().optional(),
   EMAIL_TEST_TO: z.string().email().optional(),
-  PUBLIC_APP_URL: z.string().url().default("http://localhost:5173"),
-  RESUBMISSION_TOKEN_TTL_DAYS: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(7),
-});
+  PUBLIC_APP_URL: z.string().url().default('http://localhost:5173'),
+  RESUBMISSION_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+})
 
-export const env = envSchema.parse(Bun.env);
+export const env = envSchema.parse(Bun.env)

@@ -1,11 +1,11 @@
-import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { migrate } from 'drizzle-orm/postgres-js/migrator'
 
-import { getDb, getQueryClient } from "./client";
+import { getDb, getQueryClient } from './client'
 
 await migrate(getDb(), {
-  migrationsFolder: "./drizzle",
-});
+  migrationsFolder: './drizzle',
+})
 
-await getQueryClient().end();
+await getQueryClient().end()
 
-console.log("Migrations applied.");
+console.log('Migrations applied.')

@@ -1,16 +1,16 @@
-import { createMiddleware } from "hono/factory";
+import { createMiddleware } from 'hono/factory'
 
-import { AppError } from "../lib/errors";
-import type { AppEnv, RoleType } from "../types/auth";
+import { AppError } from '../lib/errors'
+import type { AppEnv, RoleType } from '../types/auth'
 
 export function requireRoles(...roles: RoleType[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const auth = c.var.auth;
+    const auth = c.var.auth
 
     if (!roles.includes(auth.roleType)) {
-      throw new AppError(403, "Insufficient permissions.");
+      throw new AppError(403, 'Insufficient permissions.')
     }
 
-    await next();
-  });
+    await next()
+  })
 }

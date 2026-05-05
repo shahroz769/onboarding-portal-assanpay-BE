@@ -56,9 +56,7 @@
         "access_policies_name_unique": {
           "name": "access_policies_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -173,12 +171,8 @@
           "name": "case_comments_case_id_cases_id_fk",
           "tableFrom": "case_comments",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -186,12 +180,8 @@
           "name": "case_comments_author_id_users_id_fk",
           "tableFrom": "case_comments",
           "tableTo": "users",
-          "columnsFrom": [
-            "author_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["author_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -324,12 +314,8 @@
           "name": "case_field_reviews_case_id_cases_id_fk",
           "tableFrom": "case_field_reviews",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -337,12 +323,8 @@
           "name": "case_field_reviews_reviewed_by_users_id_fk",
           "tableFrom": "case_field_reviews",
           "tableTo": "users",
-          "columnsFrom": [
-            "reviewed_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reviewed_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -497,12 +479,8 @@
           "name": "case_files_case_id_cases_id_fk",
           "tableFrom": "case_files",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -510,12 +488,8 @@
           "name": "case_files_uploaded_by_users_id_fk",
           "tableFrom": "case_files",
           "tableTo": "users",
-          "columnsFrom": [
-            "uploaded_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["uploaded_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -606,12 +580,8 @@
           "name": "case_history_case_id_cases_id_fk",
           "tableFrom": "case_history",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -619,12 +589,8 @@
           "name": "case_history_actor_id_users_id_fk",
           "tableFrom": "case_history",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -706,12 +672,8 @@
           "name": "case_resubmission_tokens_case_id_cases_id_fk",
           "tableFrom": "case_resubmission_tokens",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -719,12 +681,8 @@
           "name": "case_resubmission_tokens_created_by_users_id_fk",
           "tableFrom": "case_resubmission_tokens",
           "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -734,9 +692,7 @@
         "case_resubmission_tokens_token_unique": {
           "name": "case_resubmission_tokens_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
+          "columns": ["token"]
         }
       },
       "policies": {},
@@ -1153,12 +1109,8 @@
           "name": "cases_queue_id_queues_id_fk",
           "tableFrom": "cases",
           "tableTo": "queues",
-          "columnsFrom": [
-            "queue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["queue_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1166,12 +1118,8 @@
           "name": "cases_merchant_id_merchants_id_fk",
           "tableFrom": "cases",
           "tableTo": "merchants",
-          "columnsFrom": [
-            "merchant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["merchant_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1179,12 +1127,8 @@
           "name": "cases_owner_id_users_id_fk",
           "tableFrom": "cases",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1192,12 +1136,8 @@
           "name": "cases_current_stage_id_queue_stages_id_fk",
           "tableFrom": "cases",
           "tableTo": "queue_stages",
-          "columnsFrom": [
-            "current_stage_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["current_stage_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1207,9 +1147,7 @@
         "cases_case_number_unique": {
           "name": "cases_case_number_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "case_number"
-          ]
+          "columns": ["case_number"]
         }
       },
       "policies": {},
@@ -1350,12 +1288,8 @@
           "name": "email_log_case_id_cases_id_fk",
           "tableFrom": "email_log",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1363,12 +1297,8 @@
           "name": "email_log_merchant_id_merchants_id_fk",
           "tableFrom": "email_log",
           "tableTo": "merchants",
-          "columnsFrom": [
-            "merchant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["merchant_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1505,12 +1435,8 @@
           "name": "merchant_documents_merchant_id_merchants_id_fk",
           "tableFrom": "merchant_documents",
           "tableTo": "merchants",
-          "columnsFrom": [
-            "merchant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["merchant_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2040,9 +1966,7 @@
         "merchants_merchant_number_unique": {
           "name": "merchants_merchant_number_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "merchant_number"
-          ]
+          "columns": ["merchant_number"]
         }
       },
       "policies": {},
@@ -2254,12 +2178,8 @@
           "name": "notifications_user_id_users_id_fk",
           "tableFrom": "notifications",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2267,12 +2187,8 @@
           "name": "notifications_actor_id_users_id_fk",
           "tableFrom": "notifications",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2280,12 +2196,8 @@
           "name": "notifications_case_id_cases_id_fk",
           "tableFrom": "notifications",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2293,12 +2205,8 @@
           "name": "notifications_comment_id_case_comments_id_fk",
           "tableFrom": "notifications",
           "tableTo": "case_comments",
-          "columnsFrom": [
-            "comment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["comment_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2339,12 +2247,8 @@
           "name": "policy_queues_policy_id_access_policies_id_fk",
           "tableFrom": "policy_queues",
           "tableTo": "access_policies",
-          "columnsFrom": [
-            "policy_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["policy_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2352,12 +2256,8 @@
           "name": "policy_queues_queue_id_queues_id_fk",
           "tableFrom": "policy_queues",
           "tableTo": "queues",
-          "columnsFrom": [
-            "queue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["queue_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2365,10 +2265,7 @@
       "compositePrimaryKeys": {
         "policy_queues_pk": {
           "name": "policy_queues_pk",
-          "columns": [
-            "policy_id",
-            "queue_id"
-          ]
+          "columns": ["policy_id", "queue_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2400,12 +2297,8 @@
           "name": "queue_case_sequences_queue_id_queues_id_fk",
           "tableFrom": "queue_case_sequences",
           "tableTo": "queues",
-          "columnsFrom": [
-            "queue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["queue_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2530,12 +2423,8 @@
           "name": "queue_stages_queue_id_queues_id_fk",
           "tableFrom": "queue_stages",
           "tableTo": "queues",
-          "columnsFrom": [
-            "queue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["queue_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2597,23 +2486,17 @@
         "queues_name_unique": {
           "name": "queues_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         },
         "queues_slug_unique": {
           "name": "queues_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         },
         "queues_prefix_unique": {
           "name": "queues_prefix_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "prefix"
-          ]
+          "columns": ["prefix"]
         }
       },
       "policies": {},
@@ -2726,12 +2609,8 @@
           "name": "refresh_tokens_user_id_users_id_fk",
           "tableFrom": "refresh_tokens",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2741,9 +2620,7 @@
         "refresh_tokens_token_hash_unique": {
           "name": "refresh_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -2862,12 +2739,8 @@
           "name": "sub_merchant_form_details_case_id_cases_id_fk",
           "tableFrom": "sub_merchant_form_details",
           "tableTo": "cases",
-          "columnsFrom": [
-            "case_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["case_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2875,12 +2748,8 @@
           "name": "sub_merchant_form_details_final_form_file_id_case_files_id_fk",
           "tableFrom": "sub_merchant_form_details",
           "tableTo": "case_files",
-          "columnsFrom": [
-            "final_form_file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["final_form_file_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2888,12 +2757,8 @@
           "name": "sub_merchant_form_details_email_log_id_email_log_id_fk",
           "tableFrom": "sub_merchant_form_details",
           "tableTo": "email_log",
-          "columnsFrom": [
-            "email_log_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["email_log_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3037,12 +2902,8 @@
           "name": "users_access_policy_id_access_policies_id_fk",
           "tableFrom": "users",
           "tableTo": "access_policies",
-          "columnsFrom": [
-            "access_policy_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["access_policy_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3052,16 +2913,12 @@
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         },
         "users_employee_id_unique": {
           "name": "users_employee_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "employee_id"
-          ]
+          "columns": ["employee_id"]
         }
       },
       "policies": {},
@@ -3073,18 +2930,12 @@
     "public.business_scope": {
       "name": "business_scope",
       "schema": "public",
-      "values": [
-        "local",
-        "international"
-      ]
+      "values": ["local", "international"]
     },
     "public.case_close_outcome": {
       "name": "case_close_outcome",
       "schema": "public",
-      "values": [
-        "successful",
-        "unsuccessful"
-      ]
+      "values": ["successful", "unsuccessful"]
     },
     "public.case_status": {
       "name": "case_status",
@@ -3102,29 +2953,17 @@
     "public.document_status": {
       "name": "document_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "approved",
-        "rejected"
-      ]
+      "values": ["pending", "approved", "rejected"]
     },
     "public.email_log_status": {
       "name": "email_log_status",
       "schema": "public",
-      "values": [
-        "queued",
-        "sent",
-        "failed"
-      ]
+      "values": ["queued", "sent", "failed"]
     },
     "public.field_review_status": {
       "name": "field_review_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "approved",
-        "rejected"
-      ]
+      "values": ["pending", "approved", "rejected"]
     },
     "public.kin_relation": {
       "name": "kin_relation",
@@ -3207,65 +3046,37 @@
     "public.priority": {
       "name": "priority",
       "schema": "public",
-      "values": [
-        "normal",
-        "high"
-      ]
+      "values": ["normal", "high"]
     },
     "public.refresh_token_status": {
       "name": "refresh_token_status",
       "schema": "public",
-      "values": [
-        "active",
-        "revoked",
-        "rotated"
-      ]
+      "values": ["active", "revoked", "rotated"]
     },
     "public.role_type": {
       "name": "role_type",
       "schema": "public",
-      "values": [
-        "admin",
-        "supervisor",
-        "employee"
-      ]
+      "values": ["admin", "supervisor", "employee"]
     },
     "public.stage_category": {
       "name": "stage_category",
       "schema": "public",
-      "values": [
-        "new",
-        "in_progress",
-        "qc",
-        "error",
-        "closed"
-      ]
+      "values": ["new", "in_progress", "qc", "error", "closed"]
     },
     "public.sub_merchant_form_email_status": {
       "name": "sub_merchant_form_email_status",
       "schema": "public",
-      "values": [
-        "not_sent",
-        "sent",
-        "failed"
-      ]
+      "values": ["not_sent", "sent", "failed"]
     },
     "public.user_status": {
       "name": "user_status",
       "schema": "public",
-      "values": [
-        "active",
-        "inactive"
-      ]
+      "values": ["active", "inactive"]
     },
     "public.website_cms": {
       "name": "website_cms",
       "schema": "public",
-      "values": [
-        "wordpress",
-        "shopify",
-        "custom_website"
-      ]
+      "values": ["wordpress", "shopify", "custom_website"]
     }
   },
   "schemas": {},

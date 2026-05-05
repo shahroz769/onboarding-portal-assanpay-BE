@@ -1,23 +1,27 @@
-import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
 
-import { env } from "../../config/env";
-import { getDb } from "../../db/client";
-import { refreshTokens, users } from "../../db/schema";
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../../lib/auth";
-import { AppError } from "../../lib/errors";
-import { hashToken } from "../../lib/security";
-import type { RoleType, SessionUser } from "../../types/auth";
+import { env } from '../../config/env'
+import { getDb } from '../../db/client'
+import { refreshTokens, users } from '../../db/schema'
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+} from '../../lib/auth'
+import { AppError } from '../../lib/errors'
+import { hashToken } from '../../lib/security'
+import type { RoleType, SessionUser } from '../../types/auth'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
-  admin: ["supervisor", "employee"],
-  supervisor: ["employee"],
+  admin: ['supervisor', 'employee'],
+  supervisor: ['employee'],
   employee: [],
-};
+}
 
 function getRefreshTokenExpiresAt() {
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + env.REFRESH_TOKEN_TTL_DAYS);
-  return expiresAt;
+  const expiresAt = new Date()
+  expiresAt.setDate(expiresAt.getDate() + env.REFRESH_TOKEN_TTL_DAYS)
+  return expiresAt
 }
 
 function sanitizeUser(user: typeof users.$inferSelect) {
@@ -33,7 +37,7 @@ function sanitizeUser(user: typeof users.$inferSelect) {
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
-  };
+  }
 }
 
 async function assertUniqueUser(input: { email: string; username: string }) {
@@ -42,30 +46,30 @@ async function assertUniqueUser(input: { email: string; username: string }) {
       or(eq(users.email, input.email), eq(users.username, input.username)),
       isNull(users.deletedAt),
     ),
-  });
+  })
 
   if (!existingUser) {
-    return;
+    return
   }
 
   if (existingUser.email === input.email) {
-    throw new AppError(409, "Email is already in use.");
+    throw new AppError(409, 'Email is already in use.')
   }
 
-  throw new AppError(409, "Username is already in use.");
+  throw new AppError(409, 'Username is already in use.')
 }
 
 async function issueSession(params: {
-  user: typeof users.$inferSelect;
-  userAgent?: string;
-  ipAddress?: string;
+  user: typeof users.$inferSelect
+  userAgent?: string
+  ipAddress?: string
 }) {
-  const sessionId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID()
   const refreshToken = await signRefreshToken({
     sub: params.user.id,
     sessionId,
-  });
-  const refreshTokenHash = await hashToken(refreshToken);
+  })
+  const refreshTokenHash = await hashToken(refreshToken)
 
   await getDb().insert(refreshTokens).values({
     id: sessionId,
@@ -74,38 +78,38 @@ async function issueSession(params: {
     expiresAt: getRefreshTokenExpiresAt(),
     userAgent: params.userAgent,
     ipAddress: params.ipAddress,
-  });
+  })
 
   const accessToken = await signAccessToken({
     sub: params.user.id,
     email: params.user.email,
     roleType: params.user.roleType,
     sessionVersion: params.user.sessionVersion,
-  });
+  })
 
   return {
     accessToken,
     refreshToken,
     user: sanitizeUser(params.user),
-  };
+  }
 }
 
 export async function registerAdmin(input: {
-  name: string;
-  email: string;
-  username: string;
-  password: string;
+  name: string
+  email: string
+  username: string
+  password: string
 }) {
   if (!env.ALLOW_ADMIN_REGISTRATION) {
-    throw new AppError(403, "Admin registration is disabled.");
+    throw new AppError(403, 'Admin registration is disabled.')
   }
 
   await assertUniqueUser({
     email: input.email,
     username: input.username,
-  });
+  })
 
-  const passwordHash = await Bun.password.hash(input.password);
+  const passwordHash = await Bun.password.hash(input.password)
 
   const [createdUser] = await getDb()
     .insert(users)
@@ -114,36 +118,42 @@ export async function registerAdmin(input: {
       email: input.email,
       username: input.username,
       passwordHash,
-      roleType: "admin",
-      status: "active",
+      roleType: 'admin',
+      status: 'active',
     })
-    .returning();
+    .returning()
 
-  return sanitizeUser(createdUser);
+  return sanitizeUser(createdUser)
 }
 
 export async function login(input: {
-  identifier: string;
-  password: string;
-  userAgent?: string;
-  ipAddress?: string;
+  identifier: string
+  password: string
+  userAgent?: string
+  ipAddress?: string
 }) {
   const user = await getDb().query.users.findFirst({
     where: and(
-      or(eq(users.email, input.identifier), eq(users.username, input.identifier)),
-      eq(users.status, "active"),
+      or(
+        eq(users.email, input.identifier),
+        eq(users.username, input.identifier),
+      ),
+      eq(users.status, 'active'),
       isNull(users.deletedAt),
     ),
-  });
+  })
 
   if (!user) {
-    throw new AppError(401, "Invalid email or password.");
+    throw new AppError(401, 'Invalid email or password.')
   }
 
-  const passwordMatches = await Bun.password.verify(input.password, user.passwordHash);
+  const passwordMatches = await Bun.password.verify(
+    input.password,
+    user.passwordHash,
+  )
 
   if (!passwordMatches) {
-    throw new AppError(401, "Invalid email or password.");
+    throw new AppError(401, 'Invalid email or password.')
   }
 
   await getDb()
@@ -152,37 +162,37 @@ export async function login(input: {
       lastLoginAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(users.id, user.id));
+    .where(eq(users.id, user.id))
 
   return issueSession({
     user,
     userAgent: input.userAgent,
     ipAddress: input.ipAddress,
-  });
+  })
 }
 
 export async function refreshSession(input: {
-  refreshToken: string;
-  userAgent?: string;
-  ipAddress?: string;
+  refreshToken: string
+  userAgent?: string
+  ipAddress?: string
 }) {
   const payload = await verifyRefreshToken(input.refreshToken).catch(() => {
-    throw new AppError(401, "Invalid refresh token.");
-  });
+    throw new AppError(401, 'Invalid refresh token.')
+  })
 
-  const hashedToken = await hashToken(input.refreshToken);
-  const nextSessionId = crypto.randomUUID();
+  const hashedToken = await hashToken(input.refreshToken)
+  const nextSessionId = crypto.randomUUID()
   const nextRefreshToken = await signRefreshToken({
     sub: payload.userId,
     sessionId: nextSessionId,
-  });
-  const nextRefreshTokenHash = await hashToken(nextRefreshToken);
+  })
+  const nextRefreshTokenHash = await hashToken(nextRefreshToken)
 
   return getDb().transaction(async (tx) => {
     const [rotatedToken] = await tx
       .update(refreshTokens)
       .set({
-        status: "rotated",
+        status: 'rotated',
         revokedAt: new Date(),
         replacedByTokenId: nextSessionId,
       })
@@ -191,28 +201,28 @@ export async function refreshSession(input: {
           eq(refreshTokens.id, payload.sessionId),
           eq(refreshTokens.userId, payload.userId),
           eq(refreshTokens.tokenHash, hashedToken),
-          eq(refreshTokens.status, "active"),
+          eq(refreshTokens.status, 'active'),
           gt(refreshTokens.expiresAt, new Date()),
         ),
       )
       .returning({
         id: refreshTokens.id,
-      });
+      })
 
     if (!rotatedToken) {
-      throw new AppError(401, "Refresh token is expired or revoked.");
+      throw new AppError(401, 'Refresh token is expired or revoked.')
     }
 
     const user = await tx.query.users.findFirst({
       where: and(
         eq(users.id, payload.userId),
-        eq(users.status, "active"),
+        eq(users.status, 'active'),
         isNull(users.deletedAt),
       ),
-    });
+    })
 
     if (!user) {
-      throw new AppError(401, "User is not available.");
+      throw new AppError(401, 'User is not available.')
     }
 
     await tx.insert(refreshTokens).values({
@@ -222,36 +232,36 @@ export async function refreshSession(input: {
       expiresAt: getRefreshTokenExpiresAt(),
       userAgent: input.userAgent,
       ipAddress: input.ipAddress,
-    });
+    })
 
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       roleType: user.roleType,
       sessionVersion: user.sessionVersion,
-    });
+    })
 
     return {
       accessToken,
       refreshToken: nextRefreshToken,
       user: sanitizeUser(user),
-    };
-  });
+    }
+  })
 }
 
 export async function logout(refreshToken: string) {
-  const payload = await verifyRefreshToken(refreshToken).catch(() => null);
+  const payload = await verifyRefreshToken(refreshToken).catch(() => null)
 
   if (!payload) {
-    return;
+    return
   }
 
-  const hashedToken = await hashToken(refreshToken);
+  const hashedToken = await hashToken(refreshToken)
 
   await getDb()
     .update(refreshTokens)
     .set({
-      status: "revoked",
+      status: 'revoked',
       revokedAt: new Date(),
     })
     .where(
@@ -259,34 +269,34 @@ export async function logout(refreshToken: string) {
         eq(refreshTokens.id, payload.sessionId),
         eq(refreshTokens.tokenHash, hashedToken),
       ),
-    );
+    )
 }
 
 export function canCreateRole(actorRole: RoleType, targetRole: RoleType) {
-  return roleCreationRules[actorRole].includes(targetRole);
+  return roleCreationRules[actorRole].includes(targetRole)
 }
 
 export async function createManagedUser(
   actor: SessionUser,
   input: {
-    name: string;
-    email: string;
-    username: string;
-    password: string;
-    roleType: RoleType;
-    accessPolicyId?: string;
+    name: string
+    email: string
+    username: string
+    password: string
+    roleType: RoleType
+    accessPolicyId?: string
   },
 ) {
   if (!canCreateRole(actor.roleType, input.roleType)) {
-    throw new AppError(403, "You cannot create a user with this role.");
+    throw new AppError(403, 'You cannot create a user with this role.')
   }
 
   await assertUniqueUser({
     email: input.email,
     username: input.username,
-  });
+  })
 
-  const passwordHash = await Bun.password.hash(input.password);
+  const passwordHash = await Bun.password.hash(input.password)
 
   const [createdUser] = await getDb()
     .insert(users)
@@ -296,13 +306,13 @@ export async function createManagedUser(
       username: input.username,
       passwordHash,
       roleType: input.roleType,
-      status: "active",
+      status: 'active',
       accessPolicyId: input.accessPolicyId,
       createdByUserId: actor.userId,
     })
-    .returning();
+    .returning()
 
-  return sanitizeUser(createdUser);
+  return sanitizeUser(createdUser)
 }
 
 export async function revokeAllUserSessions(userId: string) {
@@ -310,10 +320,10 @@ export async function revokeAllUserSessions(userId: string) {
     await tx
       .update(refreshTokens)
       .set({
-        status: "revoked",
+        status: 'revoked',
         revokedAt: new Date(),
       })
-      .where(eq(refreshTokens.userId, userId));
+      .where(eq(refreshTokens.userId, userId))
 
     await tx
       .update(users)
@@ -321,6 +331,6 @@ export async function revokeAllUserSessions(userId: string) {
         sessionVersion: sql`${users.sessionVersion} + 1`,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, userId));
-  });
+      .where(eq(users.id, userId))
+  })
 }
