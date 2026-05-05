@@ -252,3 +252,46 @@ export const agreementEmailResponseSchema = z.object({
 export type AgreementEmailResponse = z.infer<
   typeof agreementEmailResponseSchema
 >
+
+export const sendMidCreationEmailSchema = z
+  .object({
+    email: z.string().trim().email().max(255),
+    password: z.string().min(8).max(128),
+    portalMid: z.coerce.number().int().positive(),
+  })
+  .strict()
+
+export type SendMidCreationEmailInput = z.infer<
+  typeof sendMidCreationEmailSchema
+>
+
+export const midCreationEmailResponseSchema = z.object({
+  status: z.enum(['sent', 'failed']),
+  emailLogId: z.string().uuid(),
+  goLiveAvailableAt: z.string().nullable(),
+  error: z.string().optional(),
+})
+
+export type MidCreationEmailResponse = z.infer<
+  typeof midCreationEmailResponseSchema
+>
+
+export const markTestingLimitsAppliedSchema = z
+  .object({
+    applied: z.literal(true),
+  })
+  .strict()
+
+export type MarkTestingLimitsAppliedInput = z.infer<
+  typeof markTestingLimitsAppliedSchema
+>
+
+export const markLiveLimitsAppliedSchema = z
+  .object({
+    applied: z.literal(true),
+  })
+  .strict()
+
+export type MarkLiveLimitsAppliedInput = z.infer<
+  typeof markLiveLimitsAppliedSchema
+>

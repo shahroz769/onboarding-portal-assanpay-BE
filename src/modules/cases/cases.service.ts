@@ -20,6 +20,7 @@ import {
   caseHistory,
   caseResubmissionTokens,
   cases,
+  midGoLiveTokens,
   merchantDocuments,
   merchants,
   queues,
@@ -45,6 +46,7 @@ import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
 import { SubMerchantFormEmail } from '../email/templates/sub-merchant-form'
 import { AgreementEmail } from '../email/templates/agreement'
+import { MidCreationEmail } from '../email/templates/mid-creation'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
@@ -60,8 +62,11 @@ import type {
   CreateCaseInput,
   CreateCommentInput,
   ListCasesQuery,
+  MarkLiveLimitsAppliedInput,
+  MarkTestingLimitsAppliedInput,
   SaveFieldReviewsInput,
   SelectSubMerchantFormInput,
+  SendMidCreationEmailInput,
   UpdateCaseStatusInput,
 } from './cases.schemas'
 import {
@@ -86,10 +91,21 @@ const SUB_MERCHANT_FINAL_FORM_MIME_TYPES = new Set([
 const SUB_MERCHANT_FINAL_FORM_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
 const AGREEMENT_FILE_MIME_TYPES = SUB_MERCHANT_FINAL_FORM_MIME_TYPES
 const AGREEMENT_FILE_EXTENSIONS = SUB_MERCHANT_FINAL_FORM_EXTENSIONS
+const MID_CREATION_QUEUE_SLUG = 'merchant-id'
+const TESTING_QUEUE_SLUG = 'testing'
+const LIVE_QUEUE_SLUG = 'live'
+const MID_GO_LIVE_DELAY_HOURS = 72
+const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
 >[0]
+
+function generatePublicTokenString(): string {
+  const bytes = new Uint8Array(64)
+  crypto.getRandomValues(bytes)
+  return Buffer.from(bytes).toString('base64url')
+}
 
 function parseCsvValues<TValue extends string>(
   rawValue: string,
@@ -241,6 +257,70 @@ async function generateCaseNumber(
 
   const paddedNumber = String(updated.lastNumber).padStart(9, '0')
   return `${queue.prefix}-${paddedNumber}`
+}
+
+async function getTestingLimitsAppliedEntry(caseId: string) {
+  const db = getDb()
+  const [entry] = await db
+    .select({
+      createdAt: caseHistory.createdAt,
+      actorId: caseHistory.actorId,
+      actorName: users.name,
+    })
+    .from(caseHistory)
+    .leftJoin(users, eq(caseHistory.actorId, users.id))
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        eq(caseHistory.action, 'testing_limits_applied'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  return entry ?? null
+}
+
+async function getLiveLimitsAppliedEntry(caseId: string) {
+  const db = getDb()
+  const [entry] = await db
+    .select({
+      createdAt: caseHistory.createdAt,
+      actorId: caseHistory.actorId,
+      actorName: users.name,
+    })
+    .from(caseHistory)
+    .leftJoin(users, eq(caseHistory.actorId, users.id))
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        eq(caseHistory.action, 'live_limits_applied'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  return entry ?? null
+}
+
+async function getMidCreationPortalMid(merchantId: string): Promise<number | null> {
+  const db = getDb()
+  const [entry] = await db
+    .select({ details: caseHistory.details })
+    .from(caseHistory)
+    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(caseHistory.action, 'mid_creation_email_sent'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  if (!entry) return null
+  const details = entry.details as { portalMid?: unknown } | null
+  return typeof details?.portalMid === 'number' ? details.portalMid : null
 }
 
 // ─── Create Case ────────────────────────────────────────────────────────────
@@ -894,6 +974,9 @@ export async function getCaseDetail(caseId: string) {
     latestResubmissionEntry,
     subMerchantForm,
     agreement,
+    testingLimitsAppliedEntry,
+    liveLimitsAppliedEntry,
+    midCreationPortalMid,
   ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
@@ -991,6 +1074,9 @@ export async function getCaseDetail(caseId: string) {
       .where(eq(agreementCaseDetails.caseId, caseId))
       .limit(1)
       .then((rows) => rows[0] ?? null),
+    getTestingLimitsAppliedEntry(caseId),
+    getLiveLimitsAppliedEntry(caseId),
+    getMidCreationPortalMid(caseData.merchantId),
   ])
 
   if (!queue || !merchant) {
@@ -1169,6 +1255,27 @@ export async function getCaseDetail(caseId: string) {
       : null,
     latestResubmissionRequestedAt:
       latestResubmissionEntry?.createdAt?.toISOString() ?? null,
+    testing: {
+      limitsAppliedAt:
+        testingLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
+      limitsAppliedBy: testingLimitsAppliedEntry?.actorId
+        ? {
+            id: testingLimitsAppliedEntry.actorId,
+            name: testingLimitsAppliedEntry.actorName ?? 'Unknown',
+          }
+        : null,
+      portalMid: midCreationPortalMid,
+    },
+    live: {
+      limitsAppliedAt:
+        liveLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
+      limitsAppliedBy: liveLimitsAppliedEntry?.actorId
+        ? {
+            id: liveLimitsAppliedEntry.actorId,
+            name: liveLimitsAppliedEntry.actorName ?? 'Unknown',
+          }
+        : null,
+    },
     owner: caseData.ownerId
       ? { id: caseData.ownerId, name: caseData.ownerName ?? 'Unknown' }
       : null,
@@ -1281,11 +1388,13 @@ export async function advanceStage(caseId: string, userId: string) {
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
       merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
       caseNumber: cases.caseNumber,
       status: cases.status,
       priority: cases.priority,
     })
     .from(cases)
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
     .where(eq(cases.id, caseId))
     .limit(1)
 
@@ -1418,6 +1527,97 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
+  } else if (queue?.slug === MID_CREATION_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'MID Creation cases can only be closed successfully from working.',
+      )
+    }
+
+    const [emailSentEntry] = await db
+      .select({
+        id: caseHistory.id,
+      })
+      .from(caseHistory)
+      .where(
+        and(
+          eq(caseHistory.caseId, caseId),
+          eq(caseHistory.action, 'mid_creation_email_sent'),
+        ),
+      )
+      .orderBy(desc(caseHistory.createdAt))
+      .limit(1)
+
+    if (!emailSentEntry) {
+      throw new AppError(
+        400,
+        'Send the MID credentials email before closing this case.',
+      )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
+  } else if (queue?.slug === TESTING_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'Testing cases can only be closed successfully from working.',
+      )
+    }
+
+    const limitsAppliedEntry = await getTestingLimitsAppliedEntry(caseId)
+    if (!limitsAppliedEntry) {
+      throw new AppError(
+        400,
+        'Confirm testing limits were applied before closing this case.',
+      )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
+  } else if (queue?.slug === LIVE_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'Live cases can only be closed successfully from working.',
+      )
+    }
+
+    const limitsAppliedEntry = await getLiveLimitsAppliedEntry(caseId)
+    if (!limitsAppliedEntry) {
+      throw new AppError(
+        400,
+        'Confirm live limits were applied before closing this case.',
+      )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
   } else {
     const nextStage = await db.query.queueStages.findFirst({
       where: and(
@@ -1475,7 +1675,10 @@ export async function advanceStage(caseId: string, userId: string) {
       caseId,
       actorId: userId,
       action,
-      details: { fromStage: currentStage.name, toStage: targetStage.name },
+      details: {
+        fromStage: currentStage.name,
+        toStage: targetStage.name,
+      },
     })
 
     return updatedRows
@@ -1676,6 +1879,184 @@ export async function closeUnsuccessful(
 
 // ─── Case Comments ──────────────────────────────────────────────────────────
 
+export async function markTestingLimitsApplied(
+  caseId: string,
+  userId: string,
+  input: MarkTestingLimitsAppliedInput,
+) {
+  const db = getDb()
+  void input
+
+  const [caseRow] = await db
+    .select({
+      id: cases.id,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      currentStageId: cases.currentStageId,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (caseRow.queueSlug !== TESTING_QUEUE_SLUG) {
+    throw new AppError(400, 'This action is only available for Testing cases.')
+  }
+
+  if (caseRow.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can update this case.')
+  }
+
+  if (caseRow.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  const currentStage = caseRow.currentStageId
+    ? await db.query.queueStages.findFirst({
+        where: eq(queueStages.id, caseRow.currentStageId),
+      })
+    : null
+
+  if (!currentStage || currentStage.category !== 'in_progress') {
+    throw new AppError(
+      400,
+      'Testing limits can only be confirmed in an in-progress stage.',
+    )
+  }
+
+  const existingEntry = await getTestingLimitsAppliedEntry(caseId)
+  if (existingEntry) {
+    return {
+      limitsAppliedAt: existingEntry.createdAt.toISOString(),
+      limitsAppliedBy: existingEntry.actorId
+        ? {
+            id: existingEntry.actorId,
+            name: existingEntry.actorName ?? 'Unknown',
+          }
+        : null,
+    }
+  }
+
+  const now = new Date()
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'testing_limits_applied',
+    details: {
+      collection: '10-100',
+      disbursement: '1000-50,000',
+    },
+    createdAt: now,
+  })
+
+  const actor = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { name: true },
+  })
+
+  return {
+    limitsAppliedAt: now.toISOString(),
+    limitsAppliedBy: {
+      id: userId,
+      name: actor?.name ?? 'Unknown',
+    },
+  }
+}
+
+export async function markLiveLimitsApplied(
+  caseId: string,
+  userId: string,
+  input: MarkLiveLimitsAppliedInput,
+) {
+  const db = getDb()
+  void input
+
+  const [caseRow] = await db
+    .select({
+      id: cases.id,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      currentStageId: cases.currentStageId,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (caseRow.queueSlug !== LIVE_QUEUE_SLUG) {
+    throw new AppError(400, 'This action is only available for Live cases.')
+  }
+
+  if (caseRow.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can update this case.')
+  }
+
+  if (caseRow.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  const currentStage = caseRow.currentStageId
+    ? await db.query.queueStages.findFirst({
+        where: eq(queueStages.id, caseRow.currentStageId),
+      })
+    : null
+
+  if (!currentStage || currentStage.category !== 'in_progress') {
+    throw new AppError(
+      400,
+      'Live limits can only be confirmed in an in-progress stage.',
+    )
+  }
+
+  const existingEntry = await getLiveLimitsAppliedEntry(caseId)
+  if (existingEntry) {
+    return {
+      limitsAppliedAt: existingEntry.createdAt.toISOString(),
+      limitsAppliedBy: existingEntry.actorId
+        ? {
+            id: existingEntry.actorId,
+            name: existingEntry.actorName ?? 'Unknown',
+          }
+        : null,
+    }
+  }
+
+  const now = new Date()
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'live_limits_applied',
+    details: {
+      collection: '100-50,000',
+      disbursement: '1000-50,000',
+    },
+    createdAt: now,
+  })
+
+  const actor = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { name: true },
+  })
+
+  return {
+    limitsAppliedAt: now.toISOString(),
+    limitsAppliedBy: {
+      id: userId,
+      name: actor?.name ?? 'Unknown',
+    },
+  }
+}
+
 export async function listCaseComments(caseId: string) {
   const db = getDb()
 
@@ -1845,6 +2226,18 @@ function formatExpiryDate(date: Date): string {
   return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'long',
     timeZone: 'UTC',
+  }).format(date)
+}
+
+function formatEmailDateTime(date: Date): string {
+  return new Intl.DateTimeFormat('en-PK', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'Asia/Karachi',
+    timeZoneName: 'short',
   }).format(date)
 }
 
@@ -2431,6 +2824,148 @@ export async function sendSubMerchantFormEmail(
 
 // ─── Apply Resubmission (called from public route) ──────────────────────────
 
+type MidCreationEmailResult = {
+  status: 'sent' | 'failed'
+  emailLogId: string
+  goLiveAvailableAt: string | null
+  error?: string
+}
+
+async function loadMidCreationCase(caseId: string, userId: string) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      merchantOwnerName: merchants.ownerFullName,
+      websiteCms: merchants.websiteCms,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.queueSlug !== MID_CREATION_QUEUE_SLUG) {
+    throw new AppError(
+      400,
+      'This action is only available for MID Creation cases.',
+    )
+  }
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can send MID credentials.')
+  }
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  return row
+}
+
+export async function sendMidCreationCredentialsEmail(
+  caseId: string,
+  userId: string,
+  input: SendMidCreationEmailInput,
+): Promise<MidCreationEmailResult> {
+  const db = getDb()
+  const caseRow = await loadMidCreationCase(caseId, userId)
+  const now = new Date()
+  const availableAt = new Date(
+    now.getTime() + MID_GO_LIVE_DELAY_HOURS * 60 * 60 * 1000,
+  )
+  const token = generatePublicTokenString()
+
+  const [tokenRow] = await db
+    .insert(midGoLiveTokens)
+    .values({
+      caseId,
+      token,
+      availableAt,
+      createdBy: userId,
+    })
+    .returning({ id: midGoLiveTokens.id })
+
+  if (!tokenRow) {
+    throw new AppError(500, 'Failed to issue Go-Live token.')
+  }
+
+  const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${token}`
+  const isShopify = caseRow.websiteCms === 'shopify'
+  const cardRate = isShopify ? '3.5%' : '3%'
+
+  const emailResult = await sendEmail({
+    to: input.email,
+    subject: `AssanPay merchant portal credentials for ${caseRow.merchantName}`,
+    template: 'mid-creation',
+    react: MidCreationEmail({
+      merchantName: caseRow.merchantName,
+      portalEmail: input.email,
+      portalPassword: input.password,
+      portalMid: input.portalMid,
+      merchantPortalUrl: MERCHANT_PORTAL_LOGIN_URL,
+      goLiveUrl,
+      availableAt: formatEmailDateTime(availableAt),
+    }),
+    caseId,
+    merchantId: caseRow.merchantId,
+    idempotencyKey: `mid-creation/${caseId}/${tokenRow.id}`,
+    metadata: {
+      tokenId: tokenRow.id,
+      availableAt: availableAt.toISOString(),
+      portalEmail: input.email,
+      portalMid: input.portalMid,
+      websiteCms: caseRow.websiteCms,
+      cardRate,
+    },
+  })
+
+  if (emailResult.status === 'failed') {
+    await db
+      .update(midGoLiveTokens)
+      .set({ consumedAt: new Date() })
+      .where(eq(midGoLiveTokens.id, tokenRow.id))
+  }
+
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action:
+      emailResult.status === 'sent'
+        ? 'mid_creation_email_sent'
+        : 'mid_creation_email_failed',
+    details: {
+      tokenId: tokenRow.id,
+      emailLogId: emailResult.emailLogId,
+      recipient: input.email,
+      portalMid: input.portalMid,
+      availableAt:
+        emailResult.status === 'sent' ? availableAt.toISOString() : null,
+      error: emailResult.error ?? null,
+    },
+  })
+
+  if (emailResult.status === 'failed') {
+    return {
+      status: 'failed',
+      emailLogId: emailResult.emailLogId,
+      goLiveAvailableAt: null,
+      error: emailResult.error,
+    }
+  }
+
+  return {
+    status: 'sent',
+    emailLogId: emailResult.emailLogId,
+    goLiveAvailableAt: availableAt.toISOString(),
+  }
+}
+
 type AgreementEmailResult = {
   status: 'sent' | 'failed'
   emailLogId: string
@@ -2949,4 +3484,217 @@ export async function getResubmissionContext(
     merchantOwnerName: merchant.ownerFullName,
     rejections,
   }
+}
+
+export type MidGoLiveContext = {
+  status: 'not_ready' | 'ready' | 'started'
+  caseNumber: string
+  merchantName: string
+  availableAt: string
+  liveCaseNumber: string | null
+}
+
+export async function getMidGoLiveContext(
+  token: string,
+): Promise<MidGoLiveContext> {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      tokenId: midGoLiveTokens.id,
+      availableAt: midGoLiveTokens.availableAt,
+      consumedAt: midGoLiveTokens.consumedAt,
+      liveCaseId: midGoLiveTokens.liveCaseId,
+      midCaseNumber: cases.caseNumber,
+      merchantName: merchants.businessName,
+    })
+    .from(midGoLiveTokens)
+    .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(midGoLiveTokens.token, token))
+    .limit(1)
+
+  if (!row) {
+    throw new AppError(404, 'Go-Live link not found.')
+  }
+
+  const isStarted = Boolean(row.consumedAt && row.liveCaseId)
+  const isReady = row.availableAt.getTime() <= Date.now()
+  const liveCase = row.liveCaseId
+    ? await db.query.cases.findFirst({
+        where: eq(cases.id, row.liveCaseId),
+        columns: { caseNumber: true },
+      })
+    : null
+
+  return {
+    status: isStarted ? 'started' : isReady ? 'ready' : 'not_ready',
+    caseNumber: row.midCaseNumber,
+    merchantName: row.merchantName,
+    availableAt: row.availableAt.toISOString(),
+    liveCaseNumber: liveCase?.caseNumber ?? null,
+  }
+}
+
+export async function activateMidGoLive(token: string) {
+  const db = getDb()
+
+  return db.transaction(async (tx) => {
+    const [tokenRow] = await tx
+      .select({
+        id: midGoLiveTokens.id,
+        caseId: midGoLiveTokens.caseId,
+        availableAt: midGoLiveTokens.availableAt,
+        consumedAt: midGoLiveTokens.consumedAt,
+        liveCaseId: midGoLiveTokens.liveCaseId,
+        merchantId: cases.merchantId,
+        midQueueId: cases.queueId,
+        midCaseNumber: cases.caseNumber,
+        midCaseStatus: cases.status,
+        merchantName: merchants.businessName,
+      })
+      .from(midGoLiveTokens)
+      .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
+      .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+      .where(eq(midGoLiveTokens.token, token))
+      .limit(1)
+
+    if (!tokenRow) {
+      throw new AppError(404, 'Go-Live link not found.')
+    }
+
+    if (tokenRow.consumedAt && tokenRow.liveCaseId) {
+      const liveCase = await tx.query.cases.findFirst({
+        where: eq(cases.id, tokenRow.liveCaseId),
+        columns: { caseNumber: true },
+      })
+      return {
+        success: true as const,
+        alreadyStarted: true,
+        caseNumber: tokenRow.midCaseNumber,
+        liveCaseId: tokenRow.liveCaseId,
+        liveCaseNumber: liveCase?.caseNumber ?? null,
+      }
+    }
+
+    if (tokenRow.consumedAt) {
+      throw new AppError(410, 'This Go-Live link has already been used.')
+    }
+
+    if (tokenRow.availableAt.getTime() > Date.now()) {
+      throw new AppError(425, 'This Go-Live link works after 72 hours only.')
+    }
+
+    const liveQueue = await tx.query.queues.findFirst({
+      where: eq(queues.slug, LIVE_QUEUE_SLUG),
+      columns: { id: true, name: true, slug: true, qcEnabled: true },
+    })
+    if (!liveQueue) {
+      throw new AppError(500, 'Live queue is not configured.')
+    }
+
+    const existingLiveCase = await tx.query.cases.findFirst({
+      where: and(
+        eq(cases.queueId, liveQueue.id),
+        eq(cases.merchantId, tokenRow.merchantId),
+      ),
+      columns: { id: true, caseNumber: true },
+    })
+
+    const now = new Date()
+    let liveCaseId = existingLiveCase?.id ?? null
+    let liveCaseNumber = existingLiveCase?.caseNumber ?? null
+
+    if (!existingLiveCase) {
+      const liveStages = await ensureQueueStages(tx, {
+        id: liveQueue.id,
+        name: liveQueue.name,
+        slug: liveQueue.slug,
+        qcEnabled: liveQueue.qcEnabled,
+      })
+      const initialStage = liveStages[0]
+      if (!initialStage) {
+        throw new AppError(500, 'No initial stage configured for Live queue.')
+      }
+
+      const caseNumber = await generateCaseNumber(tx, liveQueue.id)
+      const [createdLiveCase] = await tx
+        .insert(cases)
+        .values({
+          caseNumber,
+          queueId: liveQueue.id,
+          merchantId: tokenRow.merchantId,
+          ownerId: null,
+          currentStageId: initialStage.id,
+          status: 'new',
+          updatedAt: now,
+        })
+        .returning({ id: cases.id, caseNumber: cases.caseNumber })
+
+      if (!createdLiveCase) {
+        throw new AppError(500, 'Failed to create Live case.')
+      }
+
+      liveCaseId = createdLiveCase.id
+      liveCaseNumber = createdLiveCase.caseNumber
+
+      await tx.insert(caseHistory).values({
+        caseId: createdLiveCase.id,
+        actorId: null,
+        action: 'case_created_from_mid_go_live',
+        details: {
+          midCaseId: tokenRow.caseId,
+          midCaseNumber: tokenRow.midCaseNumber,
+          merchantName: tokenRow.merchantName,
+        },
+      })
+    }
+
+    const closedStage = await tx.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, tokenRow.midQueueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    await tx
+      .update(midGoLiveTokens)
+      .set({
+        consumedAt: now,
+        liveCaseId,
+      })
+      .where(eq(midGoLiveTokens.id, tokenRow.id))
+
+    if (tokenRow.midCaseStatus !== 'closed') {
+      await tx
+        .update(cases)
+        .set({
+          status: 'closed',
+          currentStageId: closedStage?.id ?? null,
+          closeOutcome: 'successful',
+          closeReason: null,
+          closedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(cases.id, tokenRow.caseId))
+    }
+
+    await tx.insert(caseHistory).values({
+      caseId: tokenRow.caseId,
+      actorId: null,
+      action: 'mid_go_live_started',
+      details: {
+        tokenId: tokenRow.id,
+        liveCaseId,
+        liveCaseNumber,
+      },
+    })
+
+    return {
+      success: true as const,
+      alreadyStarted: Boolean(existingLiveCase),
+      caseNumber: tokenRow.midCaseNumber,
+      liveCaseId,
+      liveCaseNumber,
+    }
+  })
 }

@@ -106,7 +106,36 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
     >
   }
 
-  if (queue.slug === 'sub-merchant-form') {
+  if (
+    queue.slug === 'sub-merchant-form' ||
+    queue.slug === 'live' ||
+    queue.slug === 'testing'
+  ) {
+    return [
+      {
+        name: defaultStageNames.new,
+        slug: 'new',
+        order: 1,
+        category: 'new',
+      },
+      {
+        name: defaultStageNames.in_progress,
+        slug: 'working',
+        order: 2,
+        category: 'in_progress',
+      },
+      {
+        name: defaultStageNames.closed,
+        slug: 'closed',
+        order: 3,
+        category: 'closed',
+      },
+    ] satisfies Array<
+      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
+    >
+  }
+
+  if (queue.slug === 'merchant-id') {
     return [
       {
         name: defaultStageNames.new,
@@ -269,7 +298,9 @@ export function getVisibleStagesForQueue(
   if (
     queueSlug !== 'documents-review' &&
     queueSlug !== 'sub-merchant-form' &&
-    queueSlug !== 'agreement'
+    queueSlug !== 'agreement' &&
+    queueSlug !== 'merchant-id' &&
+    queueSlug !== 'testing'
   ) {
     return stages
   }

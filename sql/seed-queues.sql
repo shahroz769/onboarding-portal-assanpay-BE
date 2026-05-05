@@ -1,5 +1,5 @@
 -- Seed script for queues and their case sequences.
--- Run this AFTER the migration that creates queues.prefix, cases, and queue_case_sequences tables.
+-- Run this after migrations.
 -- This is idempotent: it uses ON CONFLICT DO NOTHING.
 
 INSERT INTO queues (id, name, slug, prefix, created_at)
@@ -13,7 +13,6 @@ VALUES
   (gen_random_uuid(), 'Support Ticket', 'support-ticket', 'ST', now())
 ON CONFLICT (slug) DO NOTHING;
 
--- Insert sequence rows for each queue
 INSERT INTO queue_case_sequences (queue_id, last_number)
 SELECT id, 0 FROM queues
 WHERE slug IN ('documents-review', 'sub-merchant-form', 'agreement', 'merchant-id', 'testing', 'live', 'support-ticket')

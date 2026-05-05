@@ -651,6 +651,36 @@ export const emailLog = pgTable(
   }),
 )
 
+export const midGoLiveTokens = pgTable(
+  'mid_go_live_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    token: varchar('token', { length: 86 }).notNull().unique(),
+    availableAt: timestamp('available_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    liveCaseId: uuid('live_case_id').references(() => cases.id, {
+      onDelete: 'set null',
+    }),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    midGoLiveTokensCaseIdIdx: index('mid_go_live_tokens_case_id_idx').on(
+      table.caseId,
+    ),
+    midGoLiveTokensAvailableAtIdx: index(
+      'mid_go_live_tokens_available_at_idx',
+    ).on(table.availableAt),
+  }),
+)
+
 export const notifications = pgTable(
   'notifications',
   {
@@ -846,6 +876,8 @@ export type Queue = typeof queues.$inferSelect
 export type NewQueue = typeof queues.$inferInsert
 export type QueueStage = typeof queueStages.$inferSelect
 export type NewQueueStage = typeof queueStages.$inferInsert
+export type MidGoLiveToken = typeof midGoLiveTokens.$inferSelect
+export type NewMidGoLiveToken = typeof midGoLiveTokens.$inferInsert
 export type CaseFieldReview = typeof caseFieldReviews.$inferSelect
 export type NewCaseFieldReview = typeof caseFieldReviews.$inferInsert
 export type CaseComment = typeof caseComments.$inferSelect

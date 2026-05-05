@@ -12,8 +12,11 @@ import {
   createCaseSchema,
   createCommentSchema,
   listCasesQuerySchema,
+  markLiveLimitsAppliedSchema,
+  markTestingLimitsAppliedSchema,
   saveFieldReviewsSchema,
   sendAgreementEmailSchema,
+  sendMidCreationEmailSchema,
   selectSubMerchantFormSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
@@ -25,8 +28,11 @@ import type {
   CreateCaseInput,
   CreateCommentInput,
   ListCasesQuery,
+  MarkLiveLimitsAppliedInput,
+  MarkTestingLimitsAppliedInput,
   SaveFieldReviewsInput,
   SendAgreementEmailInput,
+  SendMidCreationEmailInput,
   SelectSubMerchantFormInput,
   UpdateCasePriorityInput,
   UpdateCaseStatusInput,
@@ -43,6 +49,8 @@ import {
   listCaseHistory,
   listCaseOwners,
   listCases,
+  markLiveLimitsApplied,
+  markTestingLimitsApplied,
   saveFieldReviews,
   selectSubMerchantForm,
   takeOwnership,
@@ -50,6 +58,7 @@ import {
   updateCaseStatus,
   sendForResubmission,
   sendAgreementForClientUpload,
+  sendMidCreationCredentialsEmail,
   sendSubMerchantFormEmail,
   uploadAgreementFinalAgreement,
   uploadSubMerchantFinalForm,
@@ -171,6 +180,30 @@ caseRoutes.patch('/:id/advance-stage', async (c) => {
 })
 
 // PUT /api/cases/:id/field-reviews — Save field reviews
+caseRoutes.post(
+  '/:id/testing/limits-applied',
+  zodValidator('json', markTestingLimitsAppliedSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as MarkTestingLimitsAppliedInput
+    const result = await markTestingLimitsApplied(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+caseRoutes.post(
+  '/:id/live/limits-applied',
+  zodValidator('json', markLiveLimitsAppliedSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as MarkLiveLimitsAppliedInput
+    const result = await markLiveLimitsApplied(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
 caseRoutes.put(
   '/:id/field-reviews',
   zodValidator('json', saveFieldReviewsSchema),
@@ -293,6 +326,19 @@ caseRoutes.post(
 )
 
 // GET /api/cases/:id/comments — List comments for a case
+// POST /api/cases/:id/mid-creation/send-mail - Send MID credentials and Go-Live link
+caseRoutes.post(
+  '/:id/mid-creation/send-mail',
+  zodValidator('json', sendMidCreationEmailSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SendMidCreationEmailInput
+    const result = await sendMidCreationCredentialsEmail(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
 caseRoutes.get('/:id/comments', async (c) => {
   const id = c.req.param('id')
   const result = await listCaseComments(id)

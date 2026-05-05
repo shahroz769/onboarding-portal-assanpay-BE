@@ -11,6 +11,7 @@ import { caseRoutes } from './modules/cases/cases.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
 import { agreementUploadRoutes } from './modules/merchants/public-agreement.routes'
+import { midGoLiveRoutes } from './modules/merchants/public-mid-go-live.routes'
 import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
 import { notificationRoutes } from './modules/notifications/notifications.routes'
 import { queueRoutes } from './modules/queues/queues.routes'
@@ -53,6 +54,7 @@ app.route('/api/auth', authRoutes)
 app.route('/api/public', merchantFormRoutes)
 app.route('/api/public/resubmission', resubmissionRoutes)
 app.route('/api/public/agreement', agreementUploadRoutes)
+app.route('/api/public/mid-go-live', midGoLiveRoutes)
 app.route('/api/merchants', merchantRoutes)
 app.route('/api/users', userRoutes)
 app.route('/api/queues', queueRoutes)
