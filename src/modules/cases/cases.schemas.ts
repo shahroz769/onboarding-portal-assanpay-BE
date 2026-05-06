@@ -295,3 +295,13 @@ export const markLiveLimitsAppliedSchema = z
 export type MarkLiveLimitsAppliedInput = z.infer<
   typeof markLiveLimitsAppliedSchema
 >
+
+export const saveWordpressWebsiteSchema = z
+  .object({
+    clonedWebsiteLink: z.string().trim().url().max(2048),
+  })
+  .strict()
+
+export type SaveWordpressWebsiteInput = z.infer<
+  typeof saveWordpressWebsiteSchema
+>

@@ -134,6 +134,27 @@
       "when": 1778058000000,
       "tag": "0018_mid_go_live_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778060400000,
+      "tag": "0019_testing_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1778103900000,
+      "tag": "0020_wordpress_website_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1778112000000,
+      "tag": "0021_dialogpay_card_queue",
+      "breakpoints": true
     }
   ]
 }

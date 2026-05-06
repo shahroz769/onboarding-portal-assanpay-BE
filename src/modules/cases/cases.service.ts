@@ -65,6 +65,7 @@ import type {
   MarkLiveLimitsAppliedInput,
   MarkTestingLimitsAppliedInput,
   SaveFieldReviewsInput,
+  SaveWordpressWebsiteInput,
   SelectSubMerchantFormInput,
   SendMidCreationEmailInput,
   UpdateCaseStatusInput,
@@ -94,8 +95,22 @@ const AGREEMENT_FILE_EXTENSIONS = SUB_MERCHANT_FINAL_FORM_EXTENSIONS
 const MID_CREATION_QUEUE_SLUG = 'merchant-id'
 const TESTING_QUEUE_SLUG = 'testing'
 const LIVE_QUEUE_SLUG = 'live'
+const WORDPRESS_WEBSITE_QUEUE_SLUG = 'wordpress-website'
+const WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX = 'wordpress_screenshot_'
 const MID_GO_LIVE_DELAY_HOURS = 72
 const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
+const MAX_WORDPRESS_SCREENSHOT_BYTES = 10 * 1024 * 1024
+const WORDPRESS_SCREENSHOT_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+])
+const WORDPRESS_SCREENSHOT_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+])
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -303,7 +318,68 @@ async function getLiveLimitsAppliedEntry(caseId: string) {
   return entry ?? null
 }
 
-async function getMidCreationPortalMid(merchantId: string): Promise<number | null> {
+async function getWordpressWebsiteDetails(caseId: string) {
+  const db = getDb()
+  const [savedEntry] = await db
+    .select({
+      createdAt: caseHistory.createdAt,
+      actorId: caseHistory.actorId,
+      actorName: users.name,
+      details: caseHistory.details,
+    })
+    .from(caseHistory)
+    .leftJoin(users, eq(caseHistory.actorId, users.id))
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        eq(caseHistory.action, 'wordpress_website_saved'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  const screenshotRows = await db
+    .select({
+      id: caseFiles.id,
+      originalName: caseFiles.originalName,
+      mimeType: caseFiles.mimeType,
+      sizeBytes: caseFiles.sizeBytes,
+      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      createdAt: caseFiles.createdAt,
+    })
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(caseFiles.fileKind, `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}%`),
+      ),
+    )
+    .orderBy(asc(caseFiles.fileKind))
+
+  const details = savedEntry?.details as {
+    clonedWebsiteLink?: unknown
+  } | null
+
+  return {
+    clonedWebsiteLink:
+      typeof details?.clonedWebsiteLink === 'string'
+        ? details.clonedWebsiteLink
+        : null,
+    savedAt: savedEntry?.createdAt?.toISOString() ?? null,
+    savedBy: savedEntry?.actorId
+      ? {
+          id: savedEntry.actorId,
+          name: savedEntry.actorName ?? 'Unknown',
+        }
+      : null,
+    screenshots: screenshotRows,
+  }
+}
+
+async function getMidCreationPortalMid(
+  merchantId: string,
+): Promise<number | null> {
   const db = getDb()
   const [entry] = await db
     .select({ details: caseHistory.details })
@@ -579,6 +655,21 @@ function validateSubMerchantFinalFormFile(file: File) {
     !SUB_MERCHANT_FINAL_FORM_MIME_TYPES.has(mimeType)
   ) {
     throw new AppError(400, 'Final Form must be a PDF, DOC, or DOCX file.')
+  }
+}
+
+function validateWordpressScreenshotFile(file: File) {
+  if (file.size > MAX_WORDPRESS_SCREENSHOT_BYTES) {
+    throw new AppError(400, 'Each screenshot must be 10 MB or smaller.')
+  }
+
+  const extension = getFileExtension(file.name)
+  const mimeType = file.type || 'application/octet-stream'
+  if (
+    !WORDPRESS_SCREENSHOT_EXTENSIONS.has(extension) ||
+    !WORDPRESS_SCREENSHOT_MIME_TYPES.has(mimeType)
+  ) {
+    throw new AppError(400, 'Screenshots must be JPG, PNG, or WEBP files.')
   }
 }
 
@@ -976,6 +1067,7 @@ export async function getCaseDetail(caseId: string) {
     agreement,
     testingLimitsAppliedEntry,
     liveLimitsAppliedEntry,
+    wordpressWebsiteDetails,
     midCreationPortalMid,
   ] = await Promise.all([
     db.query.queues.findFirst({
@@ -1076,6 +1168,7 @@ export async function getCaseDetail(caseId: string) {
       .then((rows) => rows[0] ?? null),
     getTestingLimitsAppliedEntry(caseId),
     getLiveLimitsAppliedEntry(caseId),
+    getWordpressWebsiteDetails(caseId),
     getMidCreationPortalMid(caseData.merchantId),
   ])
 
@@ -1267,8 +1360,7 @@ export async function getCaseDetail(caseId: string) {
       portalMid: midCreationPortalMid,
     },
     live: {
-      limitsAppliedAt:
-        liveLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
+      limitsAppliedAt: liveLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
       limitsAppliedBy: liveLimitsAppliedEntry?.actorId
         ? {
             id: liveLimitsAppliedEntry.actorId,
@@ -1276,6 +1368,7 @@ export async function getCaseDetail(caseId: string) {
           }
         : null,
     },
+    wordpressWebsite: wordpressWebsiteDetails,
     owner: caseData.ownerId
       ? { id: caseData.ownerId, name: caseData.ownerName ?? 'Unknown' }
       : null,
@@ -1606,6 +1699,36 @@ export async function advanceStage(caseId: string, userId: string) {
         400,
         'Confirm live limits were applied before closing this case.',
       )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
+  } else if (queue?.slug === WORDPRESS_WEBSITE_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'WordPress Website cases can only be closed successfully from working.',
+      )
+    }
+
+    const details = await getWordpressWebsiteDetails(caseId)
+    if (!details.clonedWebsiteLink) {
+      throw new AppError(
+        400,
+        'Save the cloned WordPress website link before closing this case.',
+      )
+    }
+
+    if (details.screenshots.length === 0) {
+      throw new AppError(400, 'Upload screenshots before closing this case.')
     }
 
     targetStage = await db.query.queueStages.findFirst({
@@ -2055,6 +2178,187 @@ export async function markLiveLimitsApplied(
       name: actor?.name ?? 'Unknown',
     },
   }
+}
+
+async function loadWordpressWebsiteCase(caseId: string, userId: string) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      currentStageId: cases.currentStageId,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      businessWebsite: merchants.businessWebsite,
+      queueId: cases.queueId,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (row.queueSlug !== WORDPRESS_WEBSITE_QUEUE_SLUG) {
+    throw new AppError(
+      400,
+      'This action is only available for WordPress Website cases.',
+    )
+  }
+
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can update this case.')
+  }
+
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  return row
+}
+
+export async function saveWordpressWebsiteCase(
+  caseId: string,
+  userId: string,
+  input: SaveWordpressWebsiteInput & {
+    screenshots: File[]
+  },
+) {
+  const db = getDb()
+  const caseRow = await loadWordpressWebsiteCase(caseId, userId)
+
+  if (input.screenshots.length === 0) {
+    throw new AppError(400, 'At least one screenshot is required.')
+  }
+
+  if (input.screenshots.length > 30) {
+    throw new AppError(400, 'Upload no more than 30 screenshots.')
+  }
+
+  for (const screenshot of input.screenshots) {
+    validateWordpressScreenshotFile(screenshot)
+  }
+
+  const existingFiles = await db
+    .select()
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(caseFiles.fileKind, `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}%`),
+      ),
+    )
+
+  const storage = new GoogleDriveStorageProvider()
+  const folder = await storage.createMerchantFolder(
+    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
+  )
+
+  const uploadedScreenshots = await Promise.all(
+    input.screenshots.map((file, index) =>
+      storage
+        .uploadFile(folder.folderId, {
+          fileName: `wordpress-page-${String(index + 1).padStart(2, '0')}-${file.name}`,
+          mimeType: file.type,
+          file,
+        })
+        .then((uploaded) => ({ file, uploaded, index })),
+    ),
+  )
+
+  const now = new Date()
+  const saved = await db.transaction(async (tx) => {
+    const savedFiles: Array<typeof caseFiles.$inferSelect> = []
+
+    for (const { file, uploaded, index } of uploadedScreenshots) {
+      const [savedFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: file.name,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!savedFile) {
+        throw new AppError(500, 'Failed to save screenshot.')
+      }
+
+      savedFiles.push(savedFile)
+    }
+
+    const keptKinds = new Set(savedFiles.map((file) => file.fileKind))
+    const staleFiles = existingFiles.filter(
+      (file) => !keptKinds.has(file.fileKind),
+    )
+    if (staleFiles.length > 0) {
+      await tx.delete(caseFiles).where(
+        inArray(
+          caseFiles.id,
+          staleFiles.map((file) => file.id),
+        ),
+      )
+    }
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'wordpress_website_saved',
+      details: {
+        businessWebsite: caseRow.businessWebsite,
+        clonedWebsiteLink: input.clonedWebsiteLink,
+        screenshots: savedFiles.length,
+      },
+      createdAt: now,
+    })
+
+    return {
+      clonedWebsiteLink: input.clonedWebsiteLink,
+      savedAt: now.toISOString(),
+      screenshots: savedFiles,
+    }
+  })
+
+  const replacedFileIds = new Set(
+    uploadedScreenshots.map(({ uploaded }) => uploaded.fileId),
+  )
+  for (const oldFile of existingFiles) {
+    if (!replacedFileIds.has(oldFile.googleDriveFileId)) {
+      await storage.deleteFile(oldFile.googleDriveFileId).catch((error) => {
+        console.error('[wordpress-website.cleanup]', error)
+      })
+    }
+  }
+
+  return saved
 }
 
 export async function listCaseComments(caseId: string) {

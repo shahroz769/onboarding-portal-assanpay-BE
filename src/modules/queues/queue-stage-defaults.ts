@@ -41,7 +41,12 @@ function getStatusForStage(
     return 'awaiting_client'
   }
 
-  if (normalizedSlug === 'pending' || normalizedName === 'pending') {
+  if (
+    normalizedSlug === 'pending' ||
+    normalizedSlug.includes('pending') ||
+    normalizedName === 'pending' ||
+    normalizedName.includes('pending')
+  ) {
     return 'pending'
   }
 
@@ -65,6 +70,8 @@ function getStatusForStage(
     case 'closed':
       return 'closed'
   }
+
+  return 'working'
 }
 
 function stageMatchesStatus(
@@ -109,7 +116,8 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
   if (
     queue.slug === 'sub-merchant-form' ||
     queue.slug === 'live' ||
-    queue.slug === 'testing'
+    queue.slug === 'testing' ||
+    queue.slug === 'wordpress-website'
   ) {
     return [
       {
@@ -128,6 +136,49 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
         name: defaultStageNames.closed,
         slug: 'closed',
         order: 3,
+        category: 'closed',
+      },
+    ] satisfies Array<
+      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
+    >
+  }
+
+  if (queue.slug === 'dialogpay-card') {
+    return [
+      {
+        name: defaultStageNames.new,
+        slug: 'new',
+        order: 1,
+        category: 'new',
+      },
+      {
+        name: defaultStageNames.in_progress,
+        slug: 'working',
+        order: 2,
+        category: 'in_progress',
+      },
+      {
+        name: 'Merchant Pending',
+        slug: 'merchant_pending',
+        order: 3,
+        category: 'in_progress',
+      },
+      {
+        name: 'Docs Upload',
+        slug: 'docs_upload',
+        order: 4,
+        category: 'in_progress',
+      },
+      {
+        name: 'Docs Pending',
+        slug: 'docs_pending',
+        order: 5,
+        category: 'in_progress',
+      },
+      {
+        name: defaultStageNames.closed,
+        slug: 'closed',
+        order: 6,
         category: 'closed',
       },
     ] satisfies Array<
@@ -300,7 +351,9 @@ export function getVisibleStagesForQueue(
     queueSlug !== 'sub-merchant-form' &&
     queueSlug !== 'agreement' &&
     queueSlug !== 'merchant-id' &&
-    queueSlug !== 'testing'
+    queueSlug !== 'testing' &&
+    queueSlug !== 'wordpress-website' &&
+    queueSlug !== 'dialogpay-card'
   ) {
     return stages
   }
@@ -308,7 +361,16 @@ export function getVisibleStagesForQueue(
   const allowedStageSlugs =
     queueSlug === 'documents-review' || queueSlug === 'agreement'
       ? new Set(['new', 'working', 'awaiting_client', 'closed'])
-      : new Set(['new', 'working', 'closed'])
+      : queueSlug === 'dialogpay-card'
+        ? new Set([
+            'new',
+            'working',
+            'merchant_pending',
+            'docs_upload',
+            'docs_pending',
+            'closed',
+          ])
+        : new Set(['new', 'working', 'closed'])
 
   return stages.filter((stage) => allowedStageSlugs.has(stage.slug))
 }

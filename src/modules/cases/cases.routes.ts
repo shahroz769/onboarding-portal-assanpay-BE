@@ -15,6 +15,7 @@ import {
   markLiveLimitsAppliedSchema,
   markTestingLimitsAppliedSchema,
   saveFieldReviewsSchema,
+  saveWordpressWebsiteSchema,
   sendAgreementEmailSchema,
   sendMidCreationEmailSchema,
   selectSubMerchantFormSchema,
@@ -31,6 +32,7 @@ import type {
   MarkLiveLimitsAppliedInput,
   MarkTestingLimitsAppliedInput,
   SaveFieldReviewsInput,
+  SaveWordpressWebsiteInput,
   SendAgreementEmailInput,
   SendMidCreationEmailInput,
   SelectSubMerchantFormInput,
@@ -52,6 +54,7 @@ import {
   markLiveLimitsApplied,
   markTestingLimitsApplied,
   saveFieldReviews,
+  saveWordpressWebsiteCase,
   selectSubMerchantForm,
   takeOwnership,
   updateCasePriority,
@@ -203,6 +206,43 @@ caseRoutes.post(
     return c.json(result)
   },
 )
+
+caseRoutes.post('/:id/wordpress-website', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const clonedWebsiteLink = formData.get('clonedWebsiteLink')
+  const screenshots = formData
+    .getAll('screenshots')
+    .filter((value): value is File => value instanceof File)
+
+  const parsedInput = saveWordpressWebsiteSchema.safeParse({
+    clonedWebsiteLink,
+  })
+
+  if (!parsedInput.success) {
+    throw new AppError(
+      400,
+      'A valid cloned WordPress website link is required.',
+    )
+  }
+
+  const input: SaveWordpressWebsiteInput = parsedInput.data
+
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await saveWordpressWebsiteCase(id, auth.userId, {
+    ...input,
+    screenshots,
+  })
+  return c.json(result)
+})
 
 caseRoutes.put(
   '/:id/field-reviews',
