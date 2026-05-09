@@ -27,10 +27,12 @@ import {
   queueCaseSequences,
   queueStages,
   subMerchantFormDetails,
+  userQueueAccess,
   users,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
+import type { SessionUser } from '../../types/auth'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   ensureQueueStages,
@@ -47,6 +49,11 @@ import { DocumentResubmissionEmail } from '../email/templates/document-resubmiss
 import { SubMerchantFormEmail } from '../email/templates/sub-merchant-form'
 import { AgreementEmail } from '../email/templates/agreement'
 import { MidCreationEmail } from '../email/templates/mid-creation'
+import {
+  getConfiguredAgreementDraftForMerchantType,
+  getLimitsAndMdrSettings,
+  getLinkDeadlineSettings,
+} from '../configuration/configuration.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
@@ -74,7 +81,6 @@ import {
   AGREEMENT_CLIENT_FILE_KIND,
   AGREEMENT_FINAL_FILE_KIND,
   AGREEMENT_QUEUE_SLUG,
-  getAgreementDraftForMerchantType,
 } from './agreement.config'
 import {
   SUB_MERCHANT_FINAL_FORM_KIND,
@@ -97,7 +103,6 @@ const TESTING_QUEUE_SLUG = 'testing'
 const LIVE_QUEUE_SLUG = 'live'
 const WORDPRESS_WEBSITE_QUEUE_SLUG = 'wordpress-website'
 const WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX = 'wordpress_screenshot_'
-const MID_GO_LIVE_DELAY_HOURS = 72
 const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
 const MAX_WORDPRESS_SCREENSHOT_BYTES = 10 * 1024 * 1024
 const WORDPRESS_SCREENSHOT_MIME_TYPES = new Set([
@@ -111,6 +116,96 @@ const WORDPRESS_SCREENSHOT_EXTENSIONS = new Set([
   '.png',
   '.webp',
 ])
+
+async function getAgentQueueAccess(userId: string) {
+  const user = await getDb().query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { roleType: true, queueViewScope: true },
+  })
+
+  if (!user || user.roleType !== 'agent') {
+    return null
+  }
+
+  const rows = await getDb()
+    .select({
+      queueId: userQueueAccess.queueId,
+      accessType: userQueueAccess.accessType,
+    })
+    .from(userQueueAccess)
+    .where(eq(userQueueAccess.userId, userId))
+
+  return {
+    viewScope: user.queueViewScope,
+    viewQueueIds: rows
+      .filter((row) => row.accessType === 'view')
+      .map((row) => row.queueId),
+    workQueueIds: rows
+      .filter((row) => row.accessType === 'work')
+      .map((row) => row.queueId),
+  }
+}
+
+async function assertCanViewCase(caseId: string, actor?: SessionUser) {
+  if (!actor || actor.roleType !== 'agent') return
+
+  const access = await getAgentQueueAccess(actor.userId)
+  if (!access || access.viewScope === 'all') return
+
+  const caseRow = await getDb().query.cases.findFirst({
+    where: eq(cases.id, caseId),
+    columns: { queueId: true },
+  })
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (!access.viewQueueIds.includes(caseRow.queueId)) {
+    throw new AppError(403, 'You do not have access to this queue.')
+  }
+}
+
+async function assertCanWorkCase(caseId: string, userId: string) {
+  const access = await getAgentQueueAccess(userId)
+  if (!access) return
+
+  const caseRow = await getDb().query.cases.findFirst({
+    where: eq(cases.id, caseId),
+    columns: { queueId: true },
+  })
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (!access.workQueueIds.includes(caseRow.queueId)) {
+    throw new AppError(403, 'You do not have working access to this queue.')
+  }
+}
+
+async function assertOwnerCanWorkCases(
+  ownerId: string | null,
+  caseIds: string[],
+) {
+  if (!ownerId) return
+
+  const access = await getAgentQueueAccess(ownerId)
+  if (!access) return
+
+  const rows = await getDb()
+    .select({ queueId: cases.queueId })
+    .from(cases)
+    .where(inArray(cases.id, caseIds))
+
+  const workQueueIds = new Set(access.workQueueIds)
+  if (rows.some((row) => !workQueueIds.has(row.queueId))) {
+    throw new AppError(
+      403,
+      'Selected owner does not have working access to one or more queues.',
+    )
+  }
+}
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -418,11 +513,24 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
     // Verify queue exists
     const queue = await tx.query.queues.findFirst({
       where: eq(queues.id, input.queueId),
-      columns: { id: true, name: true, slug: true, qcEnabled: true },
+      columns: {
+        id: true,
+        name: true,
+        slug: true,
+        qcEnabled: true,
+        isActive: true,
+      },
     })
 
     if (!queue) {
       throw new AppError(404, 'Queue not found.')
+    }
+
+    if (!queue.isActive) {
+      throw new AppError(
+        409,
+        'This queue is inactive. Case creation is disabled.',
+      )
     }
 
     const stages = await ensureQueueStages(tx, {
@@ -489,9 +597,19 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
 
 // ─── List Cases ─────────────────────────────────────────────────────────────
 
-export async function listCases(query: ListCasesQuery) {
+export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
   const db = getDb()
   const conditions = []
+  const access =
+    actor?.roleType === 'agent' ? await getAgentQueueAccess(actor.userId) : null
+
+  if (access?.viewScope === 'selected') {
+    if (access.viewQueueIds.length === 0) {
+      conditions.push(sql`false`)
+    } else {
+      conditions.push(inArray(cases.queueId, access.viewQueueIds))
+    }
+  }
 
   if (query.search) {
     const term = `%${query.search}%`
@@ -501,7 +619,14 @@ export async function listCases(query: ListCasesQuery) {
   }
 
   if (query.queueId) {
-    conditions.push(eq(cases.queueId, query.queueId))
+    if (
+      access?.viewScope === 'selected' &&
+      !access.viewQueueIds.includes(query.queueId)
+    ) {
+      conditions.push(sql`false`)
+    } else {
+      conditions.push(eq(cases.queueId, query.queueId))
+    }
   }
 
   if (query.ownerId) {
@@ -734,6 +859,8 @@ export async function bulkAssignCases(
     throw new AppError(404, 'One or more cases were not found.')
   }
 
+  await assertOwnerCanWorkCases(ownerId, uniqueCaseIds)
+
   const historyEntries = existingCases
     .filter((caseRecord) => caseRecord.ownerId !== ownerId)
     .map((caseRecord) => ({
@@ -908,6 +1035,8 @@ export async function assignCase(
     throw new AppError(404, 'User not found.')
   }
 
+  await assertOwnerCanWorkCases(ownerId, [caseId])
+
   const [updated] = await db.transaction(async (tx) => {
     const updatedRows = await tx
       .update(cases)
@@ -1023,8 +1152,9 @@ export async function cascadeMerchantPriority(
 
 // ─── Get Case Detail ────────────────────────────────────────────────────────
 
-export async function getCaseDetail(caseId: string) {
+export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const db = getDb()
+  await assertCanViewCase(caseId, actor)
 
   // Get case with joins
   const caseRow = await db
@@ -1207,7 +1337,9 @@ export async function getCaseDetail(caseId: string) {
 
   let agreementRecord = agreement
   if (!agreementRecord && queue.slug === AGREEMENT_QUEUE_SLUG) {
-    const draft = getAgreementDraftForMerchantType(merchant.merchantType)
+    const draft = await getConfiguredAgreementDraftForMerchantType(
+      merchant.merchantType,
+    )
     const [createdAgreement] = await db
       .insert(agreementCaseDetails)
       .values({
@@ -1379,6 +1511,7 @@ export async function getCaseDetail(caseId: string) {
 
 export async function takeOwnership(caseId: string, userId: string) {
   const db = getDb()
+  await assertCanWorkCase(caseId, userId)
   const actor = await db.query.users.findFirst({
     where: eq(users.id, userId),
     columns: { name: true },
@@ -2678,7 +2811,12 @@ export async function sendForResubmission(
   }
 
   // 5. Issue token
-  const issued = await issueToken(caseId, userId)
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const issued = await issueToken(
+    caseId,
+    userId,
+    linkDeadlines.documentsReviewResubmissionHours,
+  )
 
   const preparedAt = new Date()
 
@@ -3180,8 +3318,12 @@ export async function sendMidCreationCredentialsEmail(
   const db = getDb()
   const caseRow = await loadMidCreationCase(caseId, userId)
   const now = new Date()
+  const [linkDeadlines, limitsAndMdr] = await Promise.all([
+    getLinkDeadlineSettings(),
+    getLimitsAndMdrSettings(),
+  ])
   const availableAt = new Date(
-    now.getTime() + MID_GO_LIVE_DELAY_HOURS * 60 * 60 * 1000,
+    now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
   )
   const token = generatePublicTokenString()
 
@@ -3201,7 +3343,9 @@ export async function sendMidCreationCredentialsEmail(
 
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${token}`
   const isShopify = caseRow.websiteCms === 'shopify'
-  const cardRate = isShopify ? '3.5%' : '3%'
+  const cardRate = isShopify
+    ? `${limitsAndMdr.rates.cardShopify}%`
+    : `${limitsAndMdr.rates.cardDefault}%`
 
   const emailResult = await sendEmail({
     to: input.email,
@@ -3215,6 +3359,15 @@ export async function sendMidCreationCredentialsEmail(
       merchantPortalUrl: MERCHANT_PORTAL_LOGIN_URL,
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
+      goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+      testingLimits: limitsAndMdr.testing,
+      rates: {
+        eWallets: limitsAndMdr.rates.eWallets,
+        card: isShopify
+          ? limitsAndMdr.rates.cardShopify
+          : limitsAndMdr.rates.cardDefault,
+        payout: limitsAndMdr.rates.payout,
+      },
     }),
     caseId,
     merchantId: caseRow.merchantId,
@@ -3226,6 +3379,8 @@ export async function sendMidCreationCredentialsEmail(
       portalMid: input.portalMid,
       websiteCms: caseRow.websiteCms,
       cardRate,
+      limitsAndMdr,
+      goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
     },
   })
 
@@ -3337,7 +3492,7 @@ async function ensureAgreementDetails(
   caseId: string,
   merchantType: string,
 ) {
-  const draft = getAgreementDraftForMerchantType(merchantType)
+  const draft = await getConfiguredAgreementDraftForMerchantType(merchantType)
   const now = new Date()
   const [details] = await tx
     .insert(agreementCaseDetails)
@@ -3520,7 +3675,12 @@ export async function sendAgreementForClientUpload(
     throw new AppError(409, 'This case has already been sent to the client.')
   }
 
-  const issued = await issueToken(caseId, userId)
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const issued = await issueToken(
+    caseId,
+    userId,
+    linkDeadlines.agreementLinkHours,
+  )
   const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
   const emailResult = await sendEmail({
     to: caseRow.merchantSubmitterEmail,
@@ -3890,10 +4050,19 @@ export async function activateMidGoLive(token: string) {
 
     const liveQueue = await tx.query.queues.findFirst({
       where: eq(queues.slug, LIVE_QUEUE_SLUG),
-      columns: { id: true, name: true, slug: true, qcEnabled: true },
+      columns: {
+        id: true,
+        name: true,
+        slug: true,
+        qcEnabled: true,
+        isActive: true,
+      },
     })
     if (!liveQueue) {
       throw new AppError(500, 'Live queue is not configured.')
+    }
+    if (!liveQueue.isActive) {
+      throw new AppError(409, 'Live queue is inactive. Go-Live is disabled.')
     }
 
     const existingLiveCase = await tx.query.cases.findFirst({

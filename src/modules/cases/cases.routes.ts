@@ -89,7 +89,7 @@ caseRoutes.get('/owners', async (c) => {
 // GET /api/cases — List cases (all authenticated users)
 caseRoutes.get('/', zodValidator('query', listCasesQuerySchema), async (c) => {
   const query = c.req.valid('query' as never) as ListCasesQuery
-  const result = await listCases(query)
+  const result = await listCases(query, c.var.auth)
   return c.json(result)
 })
 
@@ -162,7 +162,7 @@ caseRoutes.patch(
 // GET /api/cases/:id — Get case detail (all authenticated)
 caseRoutes.get('/:id', async (c) => {
   const id = c.req.param('id')
-  const result = await getCaseDetail(id)
+  const result = await getCaseDetail(id, c.var.auth)
   return c.json(result)
 })
 

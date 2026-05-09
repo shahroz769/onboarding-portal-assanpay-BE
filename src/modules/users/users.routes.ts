@@ -5,12 +5,19 @@ import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
 import type { AppEnv } from '../../types/auth'
 import { createUserSchema } from '../auth/auth.schemas'
-import { updateUserSchema, userIdParamSchema } from './users.schemas'
 import {
+  bulkUserStatusSchema,
+  listUsersQuerySchema,
+  updateUserSchema,
+  userIdParamSchema,
+} from './users.schemas'
+import {
+  bulkUpdateUserStatus,
   createUser,
   deactivateUser,
   getUserById,
   listUsers,
+  sendResetPassword,
   updateUser,
 } from './users.service'
 
@@ -18,10 +25,42 @@ export const userRoutes = new Hono<AppEnv>()
 
 userRoutes.use('*', requireAuth)
 
-userRoutes.get('/', requireRoles('admin', 'supervisor'), async (c) => {
-  const users = await listUsers()
-  return c.json({ users })
-})
+userRoutes.get(
+  '/',
+  zodValidator('query', listUsersQuerySchema),
+  requireRoles('admin', 'supervisor'),
+  async (c) => {
+    const query = c.req.valid('query')
+    const users = await listUsers(query)
+    return c.json({ users })
+  },
+)
+
+userRoutes.post(
+  '/bulk-status',
+  zodValidator('json', bulkUserStatusSchema),
+  requireRoles('admin', 'supervisor'),
+  async (c) => {
+    const input = c.req.valid('json')
+    const result = await bulkUpdateUserStatus(
+      c.var.auth,
+      input.ids,
+      input.status,
+    )
+    return c.json(result)
+  },
+)
+
+userRoutes.post(
+  '/:id/reset-password',
+  zodValidator('param', userIdParamSchema),
+  requireRoles('admin', 'supervisor'),
+  async (c) => {
+    const { id } = c.req.valid('param')
+    const result = await sendResetPassword(c.var.auth, id)
+    return c.json(result)
+  },
+)
 
 userRoutes.get(
   '/:id',

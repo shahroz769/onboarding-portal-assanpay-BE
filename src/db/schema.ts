@@ -20,10 +20,23 @@ import {
 export const roleTypeEnum = pgEnum('role_type', [
   'admin',
   'supervisor',
-  'employee',
+  'agent',
 ])
 
 export const userStatusEnum = pgEnum('user_status', ['active', 'inactive'])
+export const userGenderEnum = pgEnum('user_gender', ['male', 'female'])
+export const queueViewScopeEnum = pgEnum('queue_view_scope', [
+  'all',
+  'selected',
+])
+export const userQueueAccessTypeEnum = pgEnum('user_queue_access_type', [
+  'view',
+  'work',
+])
+export const passwordTokenPurposeEnum = pgEnum('password_token_purpose', [
+  'invite',
+  'reset',
+])
 
 export const refreshTokenStatusEnum = pgEnum('refresh_token_status', [
   'active',
@@ -105,36 +118,21 @@ export const merchantDocumentTypeEnum = pgEnum('merchant_document_type', [
   'by_laws_rules_regulations',
 ])
 
-export const accessPolicies = pgTable('access_policies', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: varchar('name', { length: 120 }).notNull().unique(),
-  description: text('description'),
-  isActive: boolean('is_active').default(true).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-})
-
 export const users = pgTable(
   'users',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     name: varchar('name', { length: 120 }).notNull(),
     email: varchar('email', { length: 255 }).notNull().unique(),
-    username: varchar('employee_id', { length: 64 }).notNull().unique(),
-    passwordHash: text('password_hash').notNull(),
+    username: varchar('username', { length: 64 }).notNull().unique(),
+    gender: userGenderEnum('gender').default('male').notNull(),
+    passwordHash: text('password_hash'),
     roleType: roleTypeEnum('role_type').notNull(),
     status: userStatusEnum('status').default('active').notNull(),
+    queueViewScope: queueViewScopeEnum('queue_view_scope')
+      .default('all')
+      .notNull(),
     sessionVersion: integer('session_version').default(0).notNull(),
-    accessPolicyId: uuid('access_policy_id').references(
-      () => accessPolicies.id,
-      {
-        onDelete: 'set null',
-      },
-    ),
     createdByUserId: uuid('created_by_user_id'),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -147,7 +145,7 @@ export const users = pgTable(
   },
   (table) => ({
     usersEmailIdx: index('users_email_idx').on(table.email),
-    usersUsernameIdx: index('users_employee_id_idx').on(table.username),
+    usersUsernameIdx: index('users_username_idx').on(table.username),
   }),
 )
 
@@ -167,10 +165,63 @@ export const queues = pgTable('queues', {
   slug: varchar('slug', { length: 120 }).notNull().unique(),
   prefix: varchar('prefix', { length: 4 }).notNull().unique(),
   qcEnabled: boolean('qc_enabled').default(false).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
 })
+
+export const configurationSettings = pgTable('configuration_settings', {
+  key: varchar('key', { length: 120 }).primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+})
+
+export const agreementDraftTemplates = pgTable('agreement_draft_templates', {
+  businessType: varchar('business_type', { length: 120 }).primaryKey(),
+  label: varchar('label', { length: 160 }).notNull(),
+  originalName: varchar('original_name', { length: 255 }).notNull(),
+  mimeType: varchar('mime_type', { length: 128 }).notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  googleDriveFileId: varchar('google_drive_file_id', {
+    length: 255,
+  }).notNull(),
+  googleDriveWebViewLink: text('google_drive_web_view_link').notNull(),
+  googleDriveDownloadLink: text('google_drive_download_link'),
+  googleDriveFolderId: varchar('google_drive_folder_id', {
+    length: 255,
+  }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+})
+
+export const subMerchantDraftTemplates = pgTable(
+  'sub_merchant_draft_templates',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 160 }).notNull().unique(),
+    originalName: varchar('original_name', { length: 255 }).notNull(),
+    mimeType: varchar('mime_type', { length: 128 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    googleDriveFileId: varchar('google_drive_file_id', {
+      length: 255,
+    }).notNull(),
+    googleDriveWebViewLink: text('google_drive_web_view_link').notNull(),
+    googleDriveDownloadLink: text('google_drive_download_link'),
+    googleDriveFolderId: varchar('google_drive_folder_id', {
+      length: 255,
+    }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+)
 
 export const stageCategoryEnum = pgEnum('stage_category', [
   'new',
@@ -208,24 +259,59 @@ export const queueStages = pgTable(
   }),
 )
 
-export const policyQueues = pgTable(
-  'policy_queues',
+export const userQueueAccess = pgTable(
+  'user_queue_access',
   {
-    policyId: uuid('policy_id')
+    userId: uuid('user_id')
       .notNull()
-      .references(() => accessPolicies.id, { onDelete: 'cascade' }),
+      .references(() => users.id, { onDelete: 'cascade' }),
     queueId: uuid('queue_id')
       .notNull()
       .references(() => queues.id, { onDelete: 'cascade' }),
+    accessType: userQueueAccessTypeEnum('access_type').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => ({
-    policyQueuesPk: primaryKey({
-      columns: [table.policyId, table.queueId],
-      name: 'policy_queues_pk',
+    userQueueAccessPk: primaryKey({
+      columns: [table.userId, table.queueId, table.accessType],
+      name: 'user_queue_access_pk',
     }),
+    userQueueAccessUserIdx: index('user_queue_access_user_idx').on(
+      table.userId,
+    ),
+    userQueueAccessQueueIdx: index('user_queue_access_queue_idx').on(
+      table.queueId,
+    ),
+  }),
+)
+
+export const userPasswordTokens = pgTable(
+  'user_password_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    purpose: passwordTokenPurposeEnum('purpose').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    userPasswordTokensUserIdx: index('user_password_tokens_user_idx').on(
+      table.userId,
+    ),
+    userPasswordTokensTokenHashIdx: index(
+      'user_password_tokens_token_hash_idx',
+    ).on(table.tokenHash),
   }),
 )
 
@@ -866,6 +952,8 @@ export const agreementCaseDetails = pgTable(
 
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
+export type UserQueueAccess = typeof userQueueAccess.$inferSelect
+export type UserPasswordToken = typeof userPasswordTokens.$inferSelect
 export type Merchant = typeof merchants.$inferSelect
 export type NewMerchant = typeof merchants.$inferInsert
 export type MerchantDocument = typeof merchantDocuments.$inferSelect
@@ -874,6 +962,15 @@ export type Case = typeof cases.$inferSelect
 export type NewCase = typeof cases.$inferInsert
 export type Queue = typeof queues.$inferSelect
 export type NewQueue = typeof queues.$inferInsert
+export type ConfigurationSetting = typeof configurationSettings.$inferSelect
+export type NewConfigurationSetting = typeof configurationSettings.$inferInsert
+export type AgreementDraftTemplate = typeof agreementDraftTemplates.$inferSelect
+export type NewAgreementDraftTemplate =
+  typeof agreementDraftTemplates.$inferInsert
+export type SubMerchantDraftTemplate =
+  typeof subMerchantDraftTemplates.$inferSelect
+export type NewSubMerchantDraftTemplate =
+  typeof subMerchantDraftTemplates.$inferInsert
 export type QueueStage = typeof queueStages.$inferSelect
 export type NewQueueStage = typeof queueStages.$inferInsert
 export type MidGoLiveToken = typeof midGoLiveTokens.$inferSelect

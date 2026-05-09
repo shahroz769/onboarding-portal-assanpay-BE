@@ -21,6 +21,18 @@ export type MidCreationEmailProps = {
   merchantPortalUrl: string
   goLiveUrl: string
   availableAt: string
+  goLiveAvailabilityHours?: number
+  testingLimits?: {
+    collectionMin: number
+    collectionMax: number
+    disbursementMin: number
+    disbursementMax: number
+  }
+  rates?: {
+    eWallets: number
+    card: number
+    payout: number
+  }
 }
 
 export function MidCreationEmail({
@@ -30,6 +42,18 @@ export function MidCreationEmail({
   merchantPortalUrl,
   goLiveUrl,
   availableAt,
+  goLiveAvailabilityHours = 72,
+  testingLimits = {
+    collectionMin: 10,
+    collectionMax: 100,
+    disbursementMin: 1000,
+    disbursementMax: 50000,
+  },
+  rates = {
+    eWallets: 2.5,
+    card: 3,
+    payout: 0,
+  },
 }: MidCreationEmailProps) {
   return (
     <Html>
@@ -76,10 +100,12 @@ export function MidCreationEmail({
                 Testing Limits Per Transaction
               </Text>
               <Text className="mb-0 mt-3 text-sm text-gray-800">
-                Collection: 10-100
+                Collection: {testingLimits.collectionMin}-
+                {testingLimits.collectionMax}
               </Text>
               <Text className="m-0 text-sm text-gray-800">
-                Disbursement: 1000-50,000
+                Disbursement: {testingLimits.disbursementMin}-
+                {testingLimits.disbursementMax}
               </Text>
             </Section>
 
@@ -88,11 +114,13 @@ export function MidCreationEmail({
                 Applicable Rates
               </Text>
               <Text className="mb-0 mt-3 text-sm text-gray-800">
-                E-Wallets &amp; QR: 2.5% + Tax
+                E-Wallets &amp; QR: {rates.eWallets}% + Tax
               </Text>
-              <Text className="m-0 text-sm text-gray-800">Card: 3% + Tax</Text>
               <Text className="m-0 text-sm text-gray-800">
-                Bank Settlement: 0%
+                Card: {rates.card}% + Tax
+              </Text>
+              <Text className="m-0 text-sm text-gray-800">
+                Bank Settlement: {rates.payout}%
               </Text>
             </Section>
 
@@ -103,10 +131,10 @@ export function MidCreationEmail({
               Go-Live
             </Heading>
             <Text className="text-base text-gray-800">
-              The Go-Live button works after 72 hours only. It unlocks on{' '}
-              <strong>{availableAt}</strong>. Before that time, the link will
-              show these instructions only. After it unlocks, selecting Go-Live
-              starts the live activation process.
+              The Go-Live button works after {goLiveAvailabilityHours} hours
+              only. It unlocks on <strong>{availableAt}</strong>. Before that
+              time, the link will show these instructions only. After it
+              unlocks, selecting Go-Live starts the live activation process.
             </Text>
 
             <Section className="mt-6 text-center">
@@ -144,6 +172,7 @@ MidCreationEmail.PreviewProps = {
   merchantPortalUrl: 'https://merchant.assanpay.com/login',
   goLiveUrl: 'https://app.example.com/onboarding-form/go-live/abc123',
   availableAt: 'May 8, 2026, 12:00 PM',
+  goLiveAvailabilityHours: 72,
 } satisfies MidCreationEmailProps
 
 export default MidCreationEmail

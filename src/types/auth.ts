@@ -1,4 +1,4 @@
-export const roleTypes = ['admin', 'supervisor', 'employee'] as const
+export const roleTypes = ['admin', 'supervisor', 'agent'] as const
 
 export type RoleType = (typeof roleTypes)[number]
 

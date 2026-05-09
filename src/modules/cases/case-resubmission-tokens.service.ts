@@ -26,11 +26,13 @@ function generateTokenString(): string {
 export async function issueToken(
   caseId: string,
   createdByUserId: string,
+  ttlHours?: number,
 ): Promise<IssuedToken> {
   const db = getDb()
   const tokenString = generateTokenString()
   const expiresAt = new Date(
-    Date.now() + env.RESUBMISSION_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
+    Date.now() +
+      (ttlHours ?? env.RESUBMISSION_TOKEN_TTL_DAYS * 24) * 60 * 60 * 1000,
   )
 
   const [row] = await db

@@ -8,6 +8,7 @@ import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
 import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
+import { configurationRoutes } from './modules/configuration/configuration.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
 import { agreementUploadRoutes } from './modules/merchants/public-agreement.routes'
@@ -59,6 +60,7 @@ app.route('/api/merchants', merchantRoutes)
 app.route('/api/users', userRoutes)
 app.route('/api/queues', queueRoutes)
 app.route('/api/cases', caseRoutes)
+app.route('/api/configuration', configurationRoutes)
 app.route('/api/notifications', notificationRoutes)
 
 async function purgeExpiredRefreshTokens() {

@@ -2,7 +2,7 @@ import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
-import { refreshTokens, users } from '../../db/schema'
+import { refreshTokens, userPasswordTokens, users } from '../../db/schema'
 import {
   signAccessToken,
   signRefreshToken,
@@ -11,11 +11,12 @@ import {
 import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
 import type { RoleType, SessionUser } from '../../types/auth'
+import { getLinkDeadlineSettings } from '../configuration/configuration.service'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
-  admin: ['supervisor', 'employee'],
-  supervisor: ['employee'],
-  employee: [],
+  admin: ['supervisor', 'agent'],
+  supervisor: ['agent'],
+  agent: [],
 }
 
 function getRefreshTokenExpiresAt() {
@@ -24,15 +25,34 @@ function getRefreshTokenExpiresAt() {
   return expiresAt
 }
 
+async function getPasswordTokenExpiresAt(purpose: 'invite' | 'reset') {
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const expiresAt = new Date()
+  expiresAt.setHours(
+    expiresAt.getHours() +
+      (purpose === 'invite'
+        ? linkDeadlines.newPasswordSetHours
+        : linkDeadlines.passwordResetHours),
+  )
+  return expiresAt
+}
+
+function generatePublicTokenString(): string {
+  const bytes = new Uint8Array(64)
+  crypto.getRandomValues(bytes)
+  return Buffer.from(bytes).toString('base64url')
+}
+
 function sanitizeUser(user: typeof users.$inferSelect) {
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     username: user.username,
+    gender: user.gender,
     roleType: user.roleType,
     status: user.status,
-    accessPolicyId: user.accessPolicyId,
+    queueViewScope: user.queueViewScope,
     createdByUserId: user.createdByUserId,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
@@ -145,6 +165,10 @@ export async function login(input: {
 
   if (!user) {
     throw new AppError(401, 'Invalid email or password.')
+  }
+
+  if (!user.passwordHash) {
+    throw new AppError(401, 'Set your password before logging in.')
   }
 
   const passwordMatches = await Bun.password.verify(
@@ -276,6 +300,119 @@ export function canCreateRole(actorRole: RoleType, targetRole: RoleType) {
   return roleCreationRules[actorRole].includes(targetRole)
 }
 
+export async function issuePasswordToken(input: {
+  userId: string
+  purpose: 'invite' | 'reset'
+  createdBy?: string | null
+}) {
+  const token = generatePublicTokenString()
+  const tokenHash = await hashToken(token)
+  const expiresAt = await getPasswordTokenExpiresAt(input.purpose)
+
+  await getDb().transaction(async (tx) => {
+    await tx
+      .update(userPasswordTokens)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(userPasswordTokens.userId, input.userId),
+          eq(userPasswordTokens.purpose, input.purpose),
+          isNull(userPasswordTokens.consumedAt),
+        ),
+      )
+
+    await tx.insert(userPasswordTokens).values({
+      userId: input.userId,
+      tokenHash,
+      purpose: input.purpose,
+      expiresAt,
+      createdBy: input.createdBy ?? null,
+    })
+  })
+
+  return { token, expiresAt }
+}
+
+async function loadValidPasswordToken(token: string) {
+  const tokenHash = await hashToken(token)
+  const [row] = await getDb()
+    .select({
+      tokenId: userPasswordTokens.id,
+      purpose: userPasswordTokens.purpose,
+      expiresAt: userPasswordTokens.expiresAt,
+      userId: users.id,
+      name: users.name,
+      email: users.email,
+      status: users.status,
+      deletedAt: users.deletedAt,
+    })
+    .from(userPasswordTokens)
+    .innerJoin(users, eq(userPasswordTokens.userId, users.id))
+    .where(
+      and(
+        eq(userPasswordTokens.tokenHash, tokenHash),
+        isNull(userPasswordTokens.consumedAt),
+        gt(userPasswordTokens.expiresAt, new Date()),
+      ),
+    )
+    .limit(1)
+
+  if (!row || row.deletedAt || row.status !== 'active') {
+    throw new AppError(410, 'This password link is expired or invalid.')
+  }
+
+  return row
+}
+
+export async function getPasswordTokenContext(token: string) {
+  const row = await loadValidPasswordToken(token)
+
+  return {
+    name: row.name,
+    email: row.email,
+    purpose: row.purpose,
+    expiresAt: row.expiresAt,
+  }
+}
+
+export async function setPasswordWithToken(input: {
+  token: string
+  password: string
+}) {
+  const row = await loadValidPasswordToken(input.token)
+  const passwordHash = await Bun.password.hash(input.password)
+
+  const [updatedUser] = await getDb().transaction(async (tx) => {
+    const [updated] = await tx
+      .update(users)
+      .set({
+        passwordHash,
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, row.userId))
+      .returning()
+
+    await tx
+      .update(userPasswordTokens)
+      .set({ consumedAt: new Date() })
+      .where(eq(userPasswordTokens.id, row.tokenId))
+
+    await tx
+      .update(refreshTokens)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(eq(refreshTokens.userId, row.userId))
+
+    return [updated]
+  })
+
+  if (!updatedUser) {
+    throw new AppError(500, 'Failed to set password.')
+  }
+
+  return sanitizeUser(updatedUser)
+}
+
 export async function createManagedUser(
   actor: SessionUser,
   input: {
@@ -284,7 +421,7 @@ export async function createManagedUser(
     username: string
     password: string
     roleType: RoleType
-    accessPolicyId?: string
+    gender?: 'male' | 'female'
   },
 ) {
   if (!canCreateRole(actor.roleType, input.roleType)) {
@@ -304,10 +441,10 @@ export async function createManagedUser(
       name: input.name,
       email: input.email,
       username: input.username,
+      gender: input.gender ?? 'male',
       passwordHash,
       roleType: input.roleType,
       status: 'active',
-      accessPolicyId: input.accessPolicyId,
       createdByUserId: actor.userId,
     })
     .returning()

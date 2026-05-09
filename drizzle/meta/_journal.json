@@ -155,6 +155,20 @@
       "when": 1778112000000,
       "tag": "0021_dialogpay_card_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1778323200000,
+      "tag": "0022_user_queue_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1778371200000,
+      "tag": "0023_configuration",
+      "breakpoints": true
     }
   ]
 }

@@ -4,21 +4,26 @@ import { getDb } from '../../db/client'
 import { queues, queueCaseSequences } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { ensureQueueStages } from './queue-stage-defaults'
-import type { CreateQueueInput } from './queues.schemas'
+import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
 
-export async function listQueues() {
+export async function listQueues(options: { includeInactive?: boolean } = {}) {
   const db = getDb()
 
-  const rows = await db
+  const query = db
     .select({
       id: queues.id,
       name: queues.name,
       slug: queues.slug,
       prefix: queues.prefix,
+      qcEnabled: queues.qcEnabled,
+      isActive: queues.isActive,
       createdAt: queues.createdAt,
     })
     .from(queues)
-    .orderBy(queues.name)
+
+  const rows = await (options.includeInactive
+    ? query.orderBy(queues.name)
+    : query.where(eq(queues.isActive, true)).orderBy(queues.name))
 
   return rows
 }
@@ -57,9 +62,37 @@ export async function createQueue(input: CreateQueueInput) {
       name: created.name,
       slug: created.slug,
       prefix: created.prefix,
+      qcEnabled: created.qcEnabled,
+      isActive: created.isActive,
       createdAt: created.createdAt,
     }
   })
+}
+
+export async function updateQueueStatus(
+  id: string,
+  input: UpdateQueueStatusInput,
+) {
+  const db = getDb()
+  const [updated] = await db
+    .update(queues)
+    .set({ isActive: input.isActive })
+    .where(eq(queues.id, id))
+    .returning({
+      id: queues.id,
+      name: queues.name,
+      slug: queues.slug,
+      prefix: queues.prefix,
+      qcEnabled: queues.qcEnabled,
+      isActive: queues.isActive,
+      createdAt: queues.createdAt,
+    })
+
+  if (!updated) {
+    throw new AppError(404, 'Queue not found.')
+  }
+
+  return updated
 }
 
 export async function getQueueById(id: string) {

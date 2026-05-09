@@ -4,9 +4,9 @@ import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
-import { createQueueSchema  } from './queues.schemas'
-import type {CreateQueueInput} from './queues.schemas';
-import { createQueue, listQueues } from './queues.service'
+import { createQueueSchema, updateQueueStatusSchema } from './queues.schemas'
+import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
+import { createQueue, listQueues, updateQueueStatus } from './queues.service'
 
 export const queueRoutes = new Hono<AppEnv>()
 
@@ -15,7 +15,9 @@ queueRoutes.use('*', requireAuth)
 
 // GET /api/queues — List all queues (all authenticated users)
 queueRoutes.get('/', async (c) => {
-  const result = await listQueues()
+  const result = await listQueues({
+    includeInactive: c.req.query('includeInactive') === 'true',
+  })
   return c.json(result)
 })
 
@@ -28,5 +30,17 @@ queueRoutes.post(
     const input = c.req.valid('json' as never) as CreateQueueInput
     const result = await createQueue(input)
     return c.json(result, 201)
+  },
+)
+
+queueRoutes.patch(
+  '/:id/status',
+  requireRoles('admin'),
+  zodValidator('json', updateQueueStatusSchema),
+  async (c) => {
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as UpdateQueueStatusInput
+    const result = await updateQueueStatus(id, input)
+    return c.json(result)
   },
 )

@@ -21,3 +21,11 @@ export const createQueueSchema = z
   .strict()
 
 export type CreateQueueInput = z.infer<typeof createQueueSchema>
+
+export const updateQueueStatusSchema = z
+  .object({
+    isActive: z.boolean(),
+  })
+  .strict()
+
+export type UpdateQueueStatusInput = z.infer<typeof updateQueueStatusSchema>

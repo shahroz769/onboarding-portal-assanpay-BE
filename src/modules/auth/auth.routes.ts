@@ -6,8 +6,20 @@ import { rateLimiter } from 'hono-rate-limiter'
 import { env } from '../../config/env'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
-import { loginSchema, registerAdminSchema } from './auth.schemas'
-import { login, logout, refreshSession, registerAdmin } from './auth.service'
+import {
+  loginSchema,
+  passwordTokenParamSchema,
+  registerAdminSchema,
+  setPasswordSchema,
+} from './auth.schemas'
+import {
+  getPasswordTokenContext,
+  login,
+  logout,
+  refreshSession,
+  registerAdmin,
+  setPasswordWithToken,
+} from './auth.service'
 
 const REFRESH_COOKIE_NAME = 'refresh_token'
 
@@ -108,3 +120,23 @@ authRoutes.post('/logout', async (c) => {
 
   return c.json({ success: true })
 })
+
+authRoutes.get(
+  '/password-token/:token',
+  zodValidator('param', passwordTokenParamSchema),
+  async (c) => {
+    const { token } = c.req.valid('param')
+    const context = await getPasswordTokenContext(token)
+    return c.json(context)
+  },
+)
+
+authRoutes.post(
+  '/set-password',
+  zodValidator('json', setPasswordSchema),
+  async (c) => {
+    const input = c.req.valid('json')
+    const user = await setPasswordWithToken(input)
+    return c.json({ user })
+  },
+)
