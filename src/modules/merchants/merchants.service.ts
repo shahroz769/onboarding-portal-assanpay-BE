@@ -17,6 +17,7 @@ import { cases, merchantDocuments, merchants } from '../../db/schema'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
+import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -306,6 +307,8 @@ export async function createMerchantSubmission(
             )
             .returning()
         : []
+
+      await triggerStartCasesForMerchant(tx, merchantId)
 
       return {
         merchant: createdMerchant,

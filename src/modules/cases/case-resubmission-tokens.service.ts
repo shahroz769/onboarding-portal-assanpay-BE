@@ -26,14 +26,14 @@ function generateTokenString(): string {
 export async function issueToken(
   caseId: string,
   createdByUserId: string,
-  ttlHours?: number,
+  ttlHours?: number | null,
 ): Promise<IssuedToken> {
   const db = getDb()
   const tokenString = generateTokenString()
-  const expiresAt = new Date(
-    Date.now() +
-      (ttlHours ?? env.RESUBMISSION_TOKEN_TTL_DAYS * 24) * 60 * 60 * 1000,
-  )
+  const expiresAt =
+    ttlHours == null
+      ? new Date(Date.UTC(9999, 11, 31)) // no expiry
+      : new Date(Date.now() + ttlHours * 60 * 60 * 1000)
 
   const [row] = await db
     .insert(caseResubmissionTokens)

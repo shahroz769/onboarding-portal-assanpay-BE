@@ -2,6 +2,7 @@ export const SUB_MERCHANT_FORM_QUEUE_SLUG = 'sub-merchant-form'
 export const SUB_MERCHANT_FORM_QUEUE_NAME = 'EP Sub-Merchant Form'
 export const SUB_MERCHANT_FORM_QUEUE_PREFIX = 'SM'
 export const SUB_MERCHANT_FINAL_FORM_KIND = 'sub_merchant_final_form'
+export const SUB_MERCHANT_EMAIL_PROOF_KIND = 'sub_merchant_email_proof'
 
 export const SUB_MERCHANT_FORM_OPTIONS = [
   {

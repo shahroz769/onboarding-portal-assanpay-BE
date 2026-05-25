@@ -203,6 +203,7 @@ export const subMerchantDraftTemplates = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     name: varchar('name', { length: 160 }).notNull().unique(),
+    sellerCode: varchar('seller_code', { length: 80 }).notNull(),
     originalName: varchar('original_name', { length: 255 }).notNull(),
     mimeType: varchar('mime_type', { length: 128 }).notNull(),
     sizeBytes: integer('size_bytes').notNull(),
@@ -612,6 +613,36 @@ export const caseFieldReviews = pgTable(
   }),
 )
 
+export const documentReviewDetails = pgTable(
+  'document_review_details',
+  {
+    caseId: uuid('case_id')
+      .primaryKey()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    subMerchantId: uuid('sub_merchant_id')
+      .notNull()
+      .references(() => subMerchantDraftTemplates.id, { onDelete: 'restrict' }),
+    subMerchantName: varchar('sub_merchant_name', { length: 160 }).notNull(),
+    selectedBy: uuid('selected_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    documentReviewDetailsSubMerchantIdx: index(
+      'document_review_details_sub_merchant_idx',
+    ).on(table.subMerchantId),
+    documentReviewDetailsSelectedByIdx: index(
+      'document_review_details_selected_by_idx',
+    ).on(table.selectedBy),
+  }),
+)
+
 export const caseComments = pgTable(
   'case_comments',
   {
@@ -664,6 +695,122 @@ export const caseHistory = pgTable(
     caseHistoryCreatedAtIdx: index('case_history_created_at_idx').on(
       table.createdAt,
     ),
+  }),
+)
+
+export const caseFlowStartRules = pgTable(
+  'case_flow_start_rules',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    targetQueueId: uuid('target_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    order: integer('order').default(1).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFlowStartRulesTargetQueueUnique: uniqueIndex(
+      'case_flow_start_rules_target_queue_unique',
+    ).on(table.targetQueueId),
+    caseFlowStartRulesOrderIdx: index('case_flow_start_rules_order_idx').on(
+      table.order,
+    ),
+  }),
+)
+
+export const caseFlowCloseTriggers = pgTable(
+  'case_flow_close_triggers',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sourceQueueId: uuid('source_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    targetQueueId: uuid('target_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    order: integer('order').default(1).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFlowCloseTriggersSourceTargetUnique: uniqueIndex(
+      'case_flow_close_triggers_source_target_unique',
+    ).on(table.sourceQueueId, table.targetQueueId),
+    caseFlowCloseTriggersSourceOrderIdx: index(
+      'case_flow_close_triggers_source_order_idx',
+    ).on(table.sourceQueueId, table.order),
+  }),
+)
+
+export const caseFlowCloseBlockers = pgTable(
+  'case_flow_close_blockers',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    blockedQueueId: uuid('blocked_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    prerequisiteQueueId: uuid('prerequisite_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFlowCloseBlockersBlockedPrerequisiteUnique: uniqueIndex(
+      'case_flow_close_blockers_blocked_prerequisite_unique',
+    ).on(table.blockedQueueId, table.prerequisiteQueueId),
+    caseFlowCloseBlockersBlockedIdx: index(
+      'case_flow_close_blockers_blocked_idx',
+    ).on(table.blockedQueueId),
+  }),
+)
+
+export const caseLinks = pgTable(
+  'case_links',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    parentCaseId: uuid('parent_case_id').references(() => cases.id, {
+      onDelete: 'set null',
+    }),
+    childCaseId: uuid('child_case_id')
+      .notNull()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    triggerType: varchar('trigger_type', { length: 40 }).notNull(),
+    sourceQueueId: uuid('source_queue_id').references(() => queues.id, {
+      onDelete: 'set null',
+    }),
+    targetQueueId: uuid('target_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseLinksParentIdx: index('case_links_parent_idx').on(table.parentCaseId),
+    caseLinksChildIdx: uniqueIndex('case_links_child_unique').on(
+      table.childCaseId,
+    ),
+    caseLinksMerchantIdx: index('case_links_merchant_idx').on(table.merchantId),
   }),
 )
 
@@ -977,10 +1124,20 @@ export type MidGoLiveToken = typeof midGoLiveTokens.$inferSelect
 export type NewMidGoLiveToken = typeof midGoLiveTokens.$inferInsert
 export type CaseFieldReview = typeof caseFieldReviews.$inferSelect
 export type NewCaseFieldReview = typeof caseFieldReviews.$inferInsert
+export type DocumentReviewDetails = typeof documentReviewDetails.$inferSelect
+export type NewDocumentReviewDetails = typeof documentReviewDetails.$inferInsert
 export type CaseComment = typeof caseComments.$inferSelect
 export type NewCaseComment = typeof caseComments.$inferInsert
 export type CaseHistory = typeof caseHistory.$inferSelect
 export type NewCaseHistory = typeof caseHistory.$inferInsert
+export type CaseFlowStartRule = typeof caseFlowStartRules.$inferSelect
+export type NewCaseFlowStartRule = typeof caseFlowStartRules.$inferInsert
+export type CaseFlowCloseTrigger = typeof caseFlowCloseTriggers.$inferSelect
+export type NewCaseFlowCloseTrigger = typeof caseFlowCloseTriggers.$inferInsert
+export type CaseFlowCloseBlocker = typeof caseFlowCloseBlockers.$inferSelect
+export type NewCaseFlowCloseBlocker = typeof caseFlowCloseBlockers.$inferInsert
+export type CaseLink = typeof caseLinks.$inferSelect
+export type NewCaseLink = typeof caseLinks.$inferInsert
 export type Notification = typeof notifications.$inferSelect
 export type NewNotification = typeof notifications.$inferInsert
 export type CaseResubmissionToken = typeof caseResubmissionTokens.$inferSelect

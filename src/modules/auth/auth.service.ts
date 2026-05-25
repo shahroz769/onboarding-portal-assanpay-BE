@@ -27,13 +27,15 @@ function getRefreshTokenExpiresAt() {
 
 async function getPasswordTokenExpiresAt(purpose: 'invite' | 'reset') {
   const linkDeadlines = await getLinkDeadlineSettings()
+  const hours =
+    purpose === 'invite'
+      ? linkDeadlines.newPasswordSetHours
+      : linkDeadlines.passwordResetHours
+  if (hours == null) {
+    return new Date(Date.UTC(9999, 11, 31)) // no expiry
+  }
   const expiresAt = new Date()
-  expiresAt.setHours(
-    expiresAt.getHours() +
-      (purpose === 'invite'
-        ? linkDeadlines.newPasswordSetHours
-        : linkDeadlines.passwordResetHours),
-  )
+  expiresAt.setHours(expiresAt.getHours() + hours)
   return expiresAt
 }
 

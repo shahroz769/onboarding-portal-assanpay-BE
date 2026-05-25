@@ -1,9 +1,13 @@
-import { eq } from 'drizzle-orm'
+import { asc, eq, inArray } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
   agreementDraftTemplates,
+  caseFlowCloseBlockers,
+  caseFlowCloseTriggers,
+  caseFlowStartRules,
   configurationSettings,
+  queues,
   subMerchantDraftTemplates,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
@@ -12,17 +16,22 @@ import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchan
 import {
   BUSINESS_TYPE_OPTIONS,
   businessTypeSchema,
+  emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
+  updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
 import type {
   BusinessType,
+  EmailSendingModeSettings,
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
+  UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
 const LIMITS_AND_MDR_KEY = 'limits-and-mdr'
 const LINK_DEADLINES_KEY = 'link-deadlines'
+const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
 const MAX_DRAFT_BYTES = 5 * 1024 * 1024
 const DRAFT_MIME_TYPES = new Set([
   'application/pdf',
@@ -57,6 +66,11 @@ export const defaultLinkDeadlineSettings: LinkDeadlineSettings = {
   agreementLinkHours: 72,
   documentsReviewResubmissionHours: 72,
   goLiveAvailabilityHours: 72,
+}
+
+export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
+  autoEnabled: true,
+  manualEnabled: true,
 }
 
 async function readSetting<T>(
@@ -123,18 +137,41 @@ export async function updateLinkDeadlineSettings(input: LinkDeadlineSettings) {
   return value
 }
 
+export function getEmailSendingModeSettings() {
+  return readSetting(
+    EMAIL_SENDING_MODE_KEY,
+    defaultEmailSendingModeSettings,
+    emailSendingModeSettingsSchema,
+  )
+}
+
+export async function updateEmailSendingModeSettings(
+  input: EmailSendingModeSettings,
+) {
+  const value = emailSendingModeSettingsSchema.parse(input)
+  await writeSetting(EMAIL_SENDING_MODE_KEY, value)
+  return value
+}
+
 export async function getConfigurationOverview() {
-  const [limitsAndMdr, linkDeadlines, agreementDrafts, subMerchants] =
-    await Promise.all([
-      getLimitsAndMdrSettings(),
-      getLinkDeadlineSettings(),
-      listAgreementDrafts(),
-      listSubMerchantDrafts(),
-    ])
+  const [
+    limitsAndMdr,
+    linkDeadlines,
+    emailSendingMode,
+    agreementDrafts,
+    subMerchants,
+  ] = await Promise.all([
+    getLimitsAndMdrSettings(),
+    getLinkDeadlineSettings(),
+    getEmailSendingModeSettings(),
+    listAgreementDrafts(),
+    listSubMerchantDrafts(),
+  ])
 
   return {
     limitsAndMdr,
     linkDeadlines,
+    emailSendingMode,
     agreementDrafts,
     subMerchants,
     businessTypes: BUSINESS_TYPE_OPTIONS,
@@ -238,6 +275,7 @@ export async function listSubMerchantDrafts() {
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
+    sellerCode: row.sellerCode,
     originalName: row.originalName,
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
@@ -251,11 +289,16 @@ export async function listSubMerchantDrafts() {
 
 export async function createSubMerchantDraft(input: {
   name: string
+  sellerCode: string
   file: File
 }) {
   const name = input.name.trim()
+  const sellerCode = input.sellerCode.trim()
   if (!name) {
     throw new AppError(400, 'Sub-merchant name is required.')
+  }
+  if (!sellerCode) {
+    throw new AppError(400, 'Seller Code is required.')
   }
 
   const uploaded = await uploadConfigurationDraft({
@@ -265,6 +308,7 @@ export async function createSubMerchantDraft(input: {
 
   await getDb().insert(subMerchantDraftTemplates).values({
     name,
+    sellerCode,
     originalName: uploaded.fileName,
     mimeType: uploaded.mimeType,
     sizeBytes: uploaded.sizeBytes,
@@ -276,6 +320,143 @@ export async function createSubMerchantDraft(input: {
   })
 
   return listSubMerchantDrafts()
+}
+
+export async function getCaseFlowConfiguration() {
+  const [queueRows, startRules, closeTriggers, closeBlockers] =
+    await Promise.all([
+      getDb()
+        .select({
+          id: queues.id,
+          name: queues.name,
+          slug: queues.slug,
+          prefix: queues.prefix,
+          isActive: queues.isActive,
+        })
+        .from(queues)
+        .orderBy(queues.name),
+      getDb()
+        .select({
+          id: caseFlowStartRules.id,
+          targetQueueId: caseFlowStartRules.targetQueueId,
+          order: caseFlowStartRules.order,
+          isActive: caseFlowStartRules.isActive,
+        })
+        .from(caseFlowStartRules)
+        .orderBy(
+          asc(caseFlowStartRules.order),
+          asc(caseFlowStartRules.createdAt),
+        ),
+      getDb()
+        .select({
+          id: caseFlowCloseTriggers.id,
+          sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
+          targetQueueId: caseFlowCloseTriggers.targetQueueId,
+          order: caseFlowCloseTriggers.order,
+          isActive: caseFlowCloseTriggers.isActive,
+        })
+        .from(caseFlowCloseTriggers)
+        .orderBy(
+          asc(caseFlowCloseTriggers.sourceQueueId),
+          asc(caseFlowCloseTriggers.order),
+          asc(caseFlowCloseTriggers.createdAt),
+        ),
+      getDb()
+        .select({
+          id: caseFlowCloseBlockers.id,
+          blockedQueueId: caseFlowCloseBlockers.blockedQueueId,
+          prerequisiteQueueId: caseFlowCloseBlockers.prerequisiteQueueId,
+          isActive: caseFlowCloseBlockers.isActive,
+        })
+        .from(caseFlowCloseBlockers)
+        .orderBy(
+          asc(caseFlowCloseBlockers.blockedQueueId),
+          asc(caseFlowCloseBlockers.createdAt),
+        ),
+    ])
+
+  return {
+    queues: queueRows,
+    startRules,
+    closeTriggers,
+    closeBlockers,
+  }
+}
+
+export async function updateCaseFlowConfiguration(
+  input: UpdateCaseFlowConfigurationInput,
+) {
+  const value = updateCaseFlowConfigurationSchema.parse(input)
+  await assertReferencedQueuesExist(value)
+  const now = new Date()
+
+  await getDb().transaction(async (tx) => {
+    await tx.delete(caseFlowCloseBlockers)
+    await tx.delete(caseFlowCloseTriggers)
+    await tx.delete(caseFlowStartRules)
+
+    if (value.startRules.length > 0) {
+      await tx.insert(caseFlowStartRules).values(
+        value.startRules.map((rule) => ({
+          targetQueueId: rule.targetQueueId,
+          order: rule.order,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })),
+      )
+    }
+
+    if (value.closeTriggers.length > 0) {
+      await tx.insert(caseFlowCloseTriggers).values(
+        value.closeTriggers.map((rule) => ({
+          sourceQueueId: rule.sourceQueueId,
+          targetQueueId: rule.targetQueueId,
+          order: rule.order,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })),
+      )
+    }
+
+    if (value.closeBlockers.length > 0) {
+      await tx.insert(caseFlowCloseBlockers).values(
+        value.closeBlockers.map((rule) => ({
+          blockedQueueId: rule.blockedQueueId,
+          prerequisiteQueueId: rule.prerequisiteQueueId,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })),
+      )
+    }
+  })
+
+  return getCaseFlowConfiguration()
+}
+
+async function assertReferencedQueuesExist(
+  input: UpdateCaseFlowConfigurationInput,
+) {
+  const queueIds = new Set<string>()
+  for (const rule of input.startRules) queueIds.add(rule.targetQueueId)
+  for (const rule of input.closeTriggers) {
+    queueIds.add(rule.sourceQueueId)
+    queueIds.add(rule.targetQueueId)
+  }
+  for (const rule of input.closeBlockers) {
+    queueIds.add(rule.blockedQueueId)
+    queueIds.add(rule.prerequisiteQueueId)
+  }
+
+  if (queueIds.size === 0) return
+
+  const existingRows = await getDb()
+    .select({ id: queues.id })
+    .from(queues)
+    .where(inArray(queues.id, Array.from(queueIds)))
+
+  if (existingRows.length !== queueIds.size) {
+    throw new AppError(400, 'One or more selected queues do not exist.')
+  }
 }
 
 async function uploadConfigurationDraft(input: {

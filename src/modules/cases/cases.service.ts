@@ -6,6 +6,7 @@ import {
   gt,
   ilike,
   inArray,
+  isNull,
   lt,
   or,
   sql,
@@ -15,8 +16,10 @@ import { getDb } from '../../db/client'
 import {
   agreementCaseDetails,
   caseComments,
+  caseLinks,
   caseFiles,
   caseFieldReviews,
+  documentReviewDetails,
   caseHistory,
   caseResubmissionTokens,
   cases,
@@ -27,6 +30,7 @@ import {
   queueCaseSequences,
   queueStages,
   subMerchantFormDetails,
+  subMerchantDraftTemplates,
   userQueueAccess,
   users,
 } from '../../db/schema'
@@ -46,14 +50,18 @@ import {
 } from '../notifications/notifications.service'
 import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
-import { SubMerchantFormEmail } from '../email/templates/sub-merchant-form'
 import { AgreementEmail } from '../email/templates/agreement'
 import { MidCreationEmail } from '../email/templates/mid-creation'
 import {
   getConfiguredAgreementDraftForMerchantType,
+  getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
 } from '../configuration/configuration.service'
+import {
+  assertCloseBlockersSatisfied,
+  triggerCasesAfterSuccessfulClose,
+} from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
@@ -71,7 +79,9 @@ import type {
   ListCasesQuery,
   MarkLiveLimitsAppliedInput,
   MarkTestingLimitsAppliedInput,
+  SaveDocumentReviewSubMerchantInput,
   SaveFieldReviewsInput,
+  SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
   SelectSubMerchantFormInput,
   SendMidCreationEmailInput,
@@ -83,9 +93,9 @@ import {
   AGREEMENT_QUEUE_SLUG,
 } from './agreement.config'
 import {
+  SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
   SUB_MERCHANT_FORM_QUEUE_SLUG,
-  getSubMerchantFormOption,
 } from './sub-merchant-form.config'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
@@ -100,10 +110,32 @@ const AGREEMENT_FILE_MIME_TYPES = SUB_MERCHANT_FINAL_FORM_MIME_TYPES
 const AGREEMENT_FILE_EXTENSIONS = SUB_MERCHANT_FINAL_FORM_EXTENSIONS
 const MID_CREATION_QUEUE_SLUG = 'merchant-id'
 const TESTING_QUEUE_SLUG = 'testing'
+const PHYSICAL_AGREEMENT_QUEUE_SLUG = 'physical-agreement'
 const LIVE_QUEUE_SLUG = 'live'
 const WORDPRESS_WEBSITE_QUEUE_SLUG = 'wordpress-website'
 const WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX = 'wordpress_screenshot_'
+const WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX =
+  'wordpress_sub_merchant_logo_screenshot_'
 const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
+const RESUBMISSION_EMAIL_PROOF_KIND = 'resubmission_email_proof'
+const AGREEMENT_EMAIL_PROOF_KIND = 'agreement_email_proof'
+const MID_CREATION_EMAIL_PROOF_KIND = 'mid_creation_email_proof'
+const EMAIL_PROOF_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
+const MAX_PHYSICAL_AGREEMENT_BYTES = 10 * 1024 * 1024
+const PHYSICAL_AGREEMENT_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+])
+const PHYSICAL_AGREEMENT_EXTENSIONS = new Set([
+  '.pdf',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+])
 const MAX_WORDPRESS_SCREENSHOT_BYTES = 10 * 1024 * 1024
 const WORDPRESS_SCREENSHOT_MIME_TYPES = new Set([
   'image/jpeg',
@@ -452,6 +484,28 @@ async function getWordpressWebsiteDetails(caseId: string) {
     )
     .orderBy(asc(caseFiles.fileKind))
 
+  const subMerchantLogoScreenshotRows = await db
+    .select({
+      id: caseFiles.id,
+      originalName: caseFiles.originalName,
+      mimeType: caseFiles.mimeType,
+      sizeBytes: caseFiles.sizeBytes,
+      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      createdAt: caseFiles.createdAt,
+    })
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(
+          caseFiles.fileKind,
+          `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}%`,
+        ),
+      ),
+    )
+    .orderBy(asc(caseFiles.fileKind))
+
   const details = savedEntry?.details as {
     clonedWebsiteLink?: unknown
   } | null
@@ -469,7 +523,211 @@ async function getWordpressWebsiteDetails(caseId: string) {
         }
       : null,
     screenshots: screenshotRows,
+    subMerchantLogoScreenshots: subMerchantLogoScreenshotRows,
   }
+}
+
+async function getLatestWordpressWebsiteDetailsForMerchant(merchantId: string) {
+  const [latestWordpressCase] = await getDb()
+    .select({
+      caseId: cases.id,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(caseHistory, eq(caseHistory.caseId, cases.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(queues.slug, WORDPRESS_WEBSITE_QUEUE_SLUG),
+        eq(caseHistory.action, 'wordpress_website_saved'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  return latestWordpressCase
+    ? getWordpressWebsiteDetails(latestWordpressCase.caseId)
+    : null
+}
+
+async function getDocumentReviewDetails(caseId: string) {
+  const [details] = await getDb()
+    .select({
+      subMerchantId: documentReviewDetails.subMerchantId,
+      subMerchantName: documentReviewDetails.subMerchantName,
+      selectedAt: documentReviewDetails.updatedAt,
+      selectedById: documentReviewDetails.selectedBy,
+      selectedByName: users.name,
+    })
+    .from(documentReviewDetails)
+    .leftJoin(users, eq(documentReviewDetails.selectedBy, users.id))
+    .where(eq(documentReviewDetails.caseId, caseId))
+    .limit(1)
+
+  if (!details) return null
+
+  return {
+    subMerchantId: details.subMerchantId,
+    subMerchantName: details.subMerchantName,
+    selectedAt: details.selectedAt.toISOString(),
+    selectedBy: details.selectedById
+      ? {
+          id: details.selectedById,
+          name: details.selectedByName ?? 'Unknown',
+        }
+      : null,
+  }
+}
+
+async function getLatestDocumentReviewDetailsForMerchant(merchantId: string) {
+  const [details] = await getDb()
+    .select({
+      subMerchantId: documentReviewDetails.subMerchantId,
+      subMerchantName: documentReviewDetails.subMerchantName,
+      selectedAt: documentReviewDetails.updatedAt,
+      selectedById: documentReviewDetails.selectedBy,
+      selectedByName: users.name,
+    })
+    .from(documentReviewDetails)
+    .innerJoin(cases, eq(documentReviewDetails.caseId, cases.id))
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .leftJoin(users, eq(documentReviewDetails.selectedBy, users.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(queues.slug, 'documents-review'),
+      ),
+    )
+    .orderBy(desc(documentReviewDetails.updatedAt))
+    .limit(1)
+
+  if (!details) return null
+
+  return {
+    subMerchantId: details.subMerchantId,
+    subMerchantName: details.subMerchantName,
+    selectedAt: details.selectedAt.toISOString(),
+    selectedBy: details.selectedById
+      ? {
+          id: details.selectedById,
+          name: details.selectedByName ?? 'Unknown',
+        }
+      : null,
+  }
+}
+
+async function getSubMerchantFormDetails(caseId: string) {
+  const rows = await getDb()
+    .select({
+      subMerchantKey: subMerchantFormDetails.subMerchantKey,
+      subMerchantName: subMerchantFormDetails.subMerchantName,
+      draftUrl: subMerchantFormDetails.draftUrl,
+      emailStatus: subMerchantFormDetails.emailStatus,
+      emailLogId: subMerchantFormDetails.emailLogId,
+      emailSentAt: subMerchantFormDetails.emailSentAt,
+      emailRecipient: subMerchantFormDetails.emailRecipient,
+      finalFormId: caseFiles.id,
+      finalFormOriginalName: caseFiles.originalName,
+      finalFormMimeType: caseFiles.mimeType,
+      finalFormSizeBytes: caseFiles.sizeBytes,
+      finalFormGoogleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      finalFormGoogleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      finalFormCreatedAt: caseFiles.createdAt,
+    })
+    .from(subMerchantFormDetails)
+    .leftJoin(
+      caseFiles,
+      eq(subMerchantFormDetails.finalFormFileId, caseFiles.id),
+    )
+    .where(eq(subMerchantFormDetails.caseId, caseId))
+    .limit(1)
+
+  const row = rows[0]
+  if (!row) return null
+
+  const [subMerchant, emailProof] = await Promise.all([
+    getDb().query.subMerchantDraftTemplates.findFirst({
+      where: eq(subMerchantDraftTemplates.id, row.subMerchantKey),
+      columns: { sellerCode: true },
+    }),
+    getDb().query.caseFiles.findFirst({
+      where: and(
+        eq(caseFiles.caseId, caseId),
+        eq(caseFiles.fileKind, SUB_MERCHANT_EMAIL_PROOF_KIND),
+      ),
+    }),
+  ])
+
+  return {
+    ...row,
+    sellerCode: subMerchant?.sellerCode ?? null,
+    emailProofId: emailProof?.id ?? null,
+    emailProofOriginalName: emailProof?.originalName ?? null,
+    emailProofMimeType: emailProof?.mimeType ?? null,
+    emailProofSizeBytes: emailProof?.sizeBytes ?? null,
+    emailProofGoogleDriveWebViewLink:
+      emailProof?.googleDriveWebViewLink ?? null,
+    emailProofGoogleDriveDownloadLink:
+      emailProof?.googleDriveDownloadLink ?? null,
+    emailProofCreatedAt: emailProof?.createdAt ?? null,
+  }
+}
+
+async function ensureInheritedSubMerchantFormDetails(input: {
+  caseId: string
+  merchantId: string
+  actorId?: string | null
+}) {
+  const db = getDb()
+  const existing = await getSubMerchantFormDetails(input.caseId)
+  if (existing) return existing
+
+  const documentReviewDetail = await getLatestDocumentReviewDetailsForMerchant(
+    input.merchantId,
+  )
+  if (!documentReviewDetail) return null
+
+  const subMerchant = await db.query.subMerchantDraftTemplates.findFirst({
+    where: eq(subMerchantDraftTemplates.id, documentReviewDetail.subMerchantId),
+    columns: {
+      id: true,
+      name: true,
+      googleDriveWebViewLink: true,
+    },
+  })
+
+  if (!subMerchant) return null
+
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(subMerchantFormDetails)
+      .values({
+        caseId: input.caseId,
+        subMerchantKey: subMerchant.id,
+        subMerchantName: subMerchant.name,
+        draftUrl: subMerchant.googleDriveWebViewLink,
+        emailStatus: 'not_sent',
+        emailLogId: null,
+        emailSentAt: null,
+        emailRecipient: null,
+        updatedAt: now,
+      })
+      .onConflictDoNothing()
+
+    await tx.insert(caseHistory).values({
+      caseId: input.caseId,
+      actorId: input.actorId ?? null,
+      action: 'sub_merchant_inherited',
+      details: {
+        subMerchantKey: subMerchant.id,
+        subMerchantName: subMerchant.name,
+      },
+      createdAt: now,
+    })
+  })
+
+  return getSubMerchantFormDetails(input.caseId)
 }
 
 async function getMidCreationPortalMid(
@@ -483,7 +741,10 @@ async function getMidCreationPortalMid(
     .where(
       and(
         eq(cases.merchantId, merchantId),
-        eq(caseHistory.action, 'mid_creation_email_sent'),
+        inArray(caseHistory.action, [
+          'mid_creation_saved',
+          'mid_creation_email_sent',
+        ]),
       ),
     )
     .orderBy(desc(caseHistory.createdAt))
@@ -944,7 +1205,7 @@ export async function updateCaseStatus(
 
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
-    columns: { id: true, status: true },
+    columns: { id: true, status: true, merchantId: true, queueId: true },
   })
 
   if (!existing) {
@@ -979,16 +1240,25 @@ export async function updateCaseStatus(
     updateData.closedAt = null
   }
 
-  const [updated] = await db
-    .update(cases)
-    .set(updateData)
-    .where(eq(cases.id, caseId))
-    .returning({
-      id: cases.id,
-      status: cases.status,
-      closedAt: cases.closedAt,
-      updatedAt: cases.updatedAt,
-    })
+  const [updated] = await db.transaction(async (tx) => {
+    if (input.status === 'closed') {
+      await assertCloseBlockersSatisfied(tx, {
+        merchantId: existing.merchantId,
+        queueId: existing.queueId,
+      })
+    }
+
+    return tx
+      .update(cases)
+      .set(updateData)
+      .where(eq(cases.id, caseId))
+      .returning({
+        id: cases.id,
+        status: cases.status,
+        closedAt: cases.closedAt,
+        updatedAt: cases.updatedAt,
+      })
+  })
 
   if (!updated) {
     throw new AppError(500, 'Failed to update case status.')
@@ -1198,6 +1468,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     testingLimitsAppliedEntry,
     liveLimitsAppliedEntry,
     wordpressWebsiteDetails,
+    merchantWordpressWebsiteDetails,
+    caseDocumentReviewDetail,
+    merchantDocumentReviewDetail,
     midCreationPortalMid,
   ] = await Promise.all([
     db.query.queues.findFirst({
@@ -1243,31 +1516,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .orderBy(desc(caseHistory.createdAt))
       .limit(1)
       .then((rows: Array<{ createdAt: Date }>) => rows[0] ?? null),
-    db
-      .select({
-        subMerchantKey: subMerchantFormDetails.subMerchantKey,
-        subMerchantName: subMerchantFormDetails.subMerchantName,
-        draftUrl: subMerchantFormDetails.draftUrl,
-        emailStatus: subMerchantFormDetails.emailStatus,
-        emailLogId: subMerchantFormDetails.emailLogId,
-        emailSentAt: subMerchantFormDetails.emailSentAt,
-        emailRecipient: subMerchantFormDetails.emailRecipient,
-        finalFormId: caseFiles.id,
-        finalFormOriginalName: caseFiles.originalName,
-        finalFormMimeType: caseFiles.mimeType,
-        finalFormSizeBytes: caseFiles.sizeBytes,
-        finalFormGoogleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-        finalFormGoogleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-        finalFormCreatedAt: caseFiles.createdAt,
-      })
-      .from(subMerchantFormDetails)
-      .leftJoin(
-        caseFiles,
-        eq(subMerchantFormDetails.finalFormFileId, caseFiles.id),
-      )
-      .where(eq(subMerchantFormDetails.caseId, caseId))
-      .limit(1)
-      .then((rows) => rows[0] ?? null),
+    getSubMerchantFormDetails(caseId),
     db
       .select({
         businessType: agreementCaseDetails.businessType,
@@ -1299,6 +1548,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     getTestingLimitsAppliedEntry(caseId),
     getLiveLimitsAppliedEntry(caseId),
     getWordpressWebsiteDetails(caseId),
+    getLatestWordpressWebsiteDetailsForMerchant(caseData.merchantId),
+    getDocumentReviewDetails(caseId),
+    getLatestDocumentReviewDetailsForMerchant(caseData.merchantId),
     getMidCreationPortalMid(caseData.merchantId),
   ])
 
@@ -1392,6 +1644,30 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         ),
       })
     : null
+  const physicalAgreement =
+    queue.slug === PHYSICAL_AGREEMENT_QUEUE_SLUG
+      ? await db.query.caseFiles.findFirst({
+          where: and(
+            eq(caseFiles.caseId, caseId),
+            eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
+          ),
+        })
+      : null
+  const documentReviewDetail =
+    queue.slug === WORDPRESS_WEBSITE_QUEUE_SLUG
+      ? merchantDocumentReviewDetail
+      : caseDocumentReviewDetail
+  const resolvedWordpressWebsiteDetails =
+    queue.slug === SUB_MERCHANT_FORM_QUEUE_SLUG
+      ? (merchantWordpressWebsiteDetails ?? wordpressWebsiteDetails)
+      : wordpressWebsiteDetails
+  const subMerchantFormRecord =
+    queue.slug === SUB_MERCHANT_FORM_QUEUE_SLUG
+      ? await ensureInheritedSubMerchantFormDetails({
+          caseId,
+          merchantId: caseData.merchantId,
+        })
+      : subMerchantForm
 
   return {
     case: {
@@ -1416,26 +1692,40 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     merchant,
     documents,
     fieldReviews,
-    subMerchantForm: subMerchantForm
+    subMerchantForm: subMerchantFormRecord
       ? {
-          subMerchantKey: subMerchantForm.subMerchantKey,
-          subMerchantName: subMerchantForm.subMerchantName,
-          draftUrl: subMerchantForm.draftUrl,
-          emailStatus: subMerchantForm.emailStatus,
-          emailLogId: subMerchantForm.emailLogId,
-          emailSentAt: subMerchantForm.emailSentAt,
-          emailRecipient: subMerchantForm.emailRecipient,
-          finalForm: subMerchantForm.finalFormId
+          subMerchantKey: subMerchantFormRecord.subMerchantKey,
+          subMerchantName: subMerchantFormRecord.subMerchantName,
+          sellerCode: subMerchantFormRecord.sellerCode,
+          draftUrl: subMerchantFormRecord.draftUrl,
+          emailStatus: subMerchantFormRecord.emailStatus,
+          emailLogId: subMerchantFormRecord.emailLogId,
+          emailSentAt: subMerchantFormRecord.emailSentAt,
+          emailRecipient: subMerchantFormRecord.emailRecipient,
+          finalForm: subMerchantFormRecord.finalFormId
             ? {
-                id: subMerchantForm.finalFormId,
-                originalName: subMerchantForm.finalFormOriginalName,
-                mimeType: subMerchantForm.finalFormMimeType,
-                sizeBytes: subMerchantForm.finalFormSizeBytes,
+                id: subMerchantFormRecord.finalFormId,
+                originalName: subMerchantFormRecord.finalFormOriginalName,
+                mimeType: subMerchantFormRecord.finalFormMimeType,
+                sizeBytes: subMerchantFormRecord.finalFormSizeBytes,
                 googleDriveWebViewLink:
-                  subMerchantForm.finalFormGoogleDriveWebViewLink,
+                  subMerchantFormRecord.finalFormGoogleDriveWebViewLink,
                 googleDriveDownloadLink:
-                  subMerchantForm.finalFormGoogleDriveDownloadLink,
-                createdAt: subMerchantForm.finalFormCreatedAt,
+                  subMerchantFormRecord.finalFormGoogleDriveDownloadLink,
+                createdAt: subMerchantFormRecord.finalFormCreatedAt,
+              }
+            : null,
+          emailProof: subMerchantFormRecord.emailProofId
+            ? {
+                id: subMerchantFormRecord.emailProofId,
+                originalName: subMerchantFormRecord.emailProofOriginalName,
+                mimeType: subMerchantFormRecord.emailProofMimeType,
+                sizeBytes: subMerchantFormRecord.emailProofSizeBytes,
+                googleDriveWebViewLink:
+                  subMerchantFormRecord.emailProofGoogleDriveWebViewLink,
+                googleDriveDownloadLink:
+                  subMerchantFormRecord.emailProofGoogleDriveDownloadLink,
+                createdAt: subMerchantFormRecord.emailProofCreatedAt,
               }
             : null,
         }
@@ -1478,6 +1768,17 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             : null,
         }
       : null,
+    physicalAgreement: physicalAgreement
+      ? {
+          id: physicalAgreement.id,
+          originalName: physicalAgreement.originalName,
+          mimeType: physicalAgreement.mimeType,
+          sizeBytes: physicalAgreement.sizeBytes,
+          googleDriveWebViewLink: physicalAgreement.googleDriveWebViewLink,
+          googleDriveDownloadLink: physicalAgreement.googleDriveDownloadLink,
+          createdAt: physicalAgreement.createdAt,
+        }
+      : null,
     latestResubmissionRequestedAt:
       latestResubmissionEntry?.createdAt?.toISOString() ?? null,
     testing: {
@@ -1500,7 +1801,8 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
           }
         : null,
     },
-    wordpressWebsite: wordpressWebsiteDetails,
+    wordpressWebsite: resolvedWordpressWebsiteDetails,
+    documentReview: documentReviewDetail,
     owner: caseData.ownerId
       ? { id: caseData.ownerId, name: caseData.ownerName ?? 'Unknown' }
       : null,
@@ -1664,6 +1966,11 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
+    const documentReviewDetail = await getDocumentReviewDetails(caseId)
+    if (!documentReviewDetail?.subMerchantName) {
+      throw new AppError(400, 'Select a sub-merchant before closing this case.')
+    }
+
     targetStage = await db.query.queueStages.findFirst({
       where: and(
         eq(queueStages.queueId, caseData.queueId),
@@ -1682,28 +1989,27 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
-    const details = await db
-      .select({
-        caseId: subMerchantFormDetails.caseId,
-        finalFormFileId: subMerchantFormDetails.finalFormFileId,
-        emailStatus: subMerchantFormDetails.emailStatus,
-      })
-      .from(subMerchantFormDetails)
-      .where(eq(subMerchantFormDetails.caseId, caseId))
-      .limit(1)
+    const details = await ensureInheritedSubMerchantFormDetails({
+      caseId,
+      merchantId: caseData.merchantId,
+      actorId: userId,
+    })
 
-    if (!details[0]) {
-      throw new AppError(400, 'Select a sub-merchant before closing this case.')
+    if (!details) {
+      throw new AppError(
+        400,
+        'Select a sub-merchant in the document review case before closing this case.',
+      )
     }
 
-    if (!details[0].finalFormFileId) {
+    if (!details.finalFormId) {
       throw new AppError(400, 'Upload the Final Form before closing this case.')
     }
 
-    if (details[0].emailStatus !== 'sent') {
+    if (details.emailStatus !== 'sent' || !details.emailProofId) {
       throw new AppError(
         400,
-        'Send the Final Form email before closing this case.',
+        'Upload the sent-email screenshot before closing this case.',
       )
     }
 
@@ -1761,25 +2067,9 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
-    const [emailSentEntry] = await db
-      .select({
-        id: caseHistory.id,
-      })
-      .from(caseHistory)
-      .where(
-        and(
-          eq(caseHistory.caseId, caseId),
-          eq(caseHistory.action, 'mid_creation_email_sent'),
-        ),
-      )
-      .orderBy(desc(caseHistory.createdAt))
-      .limit(1)
-
-    if (!emailSentEntry) {
-      throw new AppError(
-        400,
-        'Send the MID credentials email before closing this case.',
-      )
+    const portalMid = await getMidCreationPortalMid(caseData.merchantId)
+    if (!portalMid) {
+      throw new AppError(400, 'Save the Portal MID before closing this case.')
     }
 
     targetStage = await db.query.queueStages.findFirst({
@@ -1805,6 +2095,37 @@ export async function advanceStage(caseId: string, userId: string) {
       throw new AppError(
         400,
         'Confirm testing limits were applied before closing this case.',
+      )
+    }
+
+    targetStage = await db.query.queueStages.findFirst({
+      where: and(
+        eq(queueStages.queueId, caseData.queueId),
+        eq(queueStages.category, 'closed'),
+      ),
+    })
+
+    if (!targetStage) {
+      throw new AppError(500, 'No closed stage configured.')
+    }
+  } else if (queue?.slug === PHYSICAL_AGREEMENT_QUEUE_SLUG) {
+    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
+      throw new AppError(
+        400,
+        'Physical Agreement cases can only be closed successfully from working.',
+      )
+    }
+
+    const physicalAgreement = await db.query.caseFiles.findFirst({
+      where: and(
+        eq(caseFiles.caseId, caseId),
+        eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
+      ),
+    })
+    if (!physicalAgreement) {
+      throw new AppError(
+        400,
+        'Upload the physical signed agreement copy before closing this case.',
       )
     }
 
@@ -1864,6 +2185,13 @@ export async function advanceStage(caseId: string, userId: string) {
       throw new AppError(400, 'Upload screenshots before closing this case.')
     }
 
+    if (details.subMerchantLogoScreenshots.length === 0) {
+      throw new AppError(
+        400,
+        'Upload the sub-merchant website logo screenshot before closing this case.',
+      )
+    }
+
     targetStage = await db.query.queueStages.findFirst({
       where: and(
         eq(queueStages.queueId, caseData.queueId),
@@ -1921,6 +2249,13 @@ export async function advanceStage(caseId: string, userId: string) {
   const action =
     targetStage.category === 'closed' ? 'closed_successful' : 'stage_advanced'
   const [updated] = await db.transaction(async (tx) => {
+    if (targetStage.category === 'closed') {
+      await assertCloseBlockersSatisfied(tx, {
+        merchantId: caseData.merchantId,
+        queueId: caseData.queueId,
+      })
+    }
+
     const updatedRows = await tx
       .update(cases)
       .set(updateData)
@@ -1936,6 +2271,14 @@ export async function advanceStage(caseId: string, userId: string) {
         toStage: targetStage.name,
       },
     })
+
+    if (targetStage.category === 'closed') {
+      await triggerCasesAfterSuccessfulClose(tx, {
+        id: caseId,
+        merchantId: caseData.merchantId,
+        queueId: caseData.queueId,
+      })
+    }
 
     return updatedRows
   })
@@ -2042,6 +2385,105 @@ export async function saveFieldReviews(
 }
 
 // ─── Close Unsuccessful ─────────────────────────────────────────────────────
+
+export async function saveDocumentReviewSubMerchant(
+  caseId: string,
+  userId: string,
+  input: SaveDocumentReviewSubMerchantInput,
+) {
+  const db = getDb()
+  const [caseRow] = await db
+    .select({
+      id: cases.id,
+      ownerId: cases.ownerId,
+      currentStageId: cases.currentStageId,
+      status: cases.status,
+      queueSlug: queues.slug,
+      caseNumber: cases.caseNumber,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (caseRow.queueSlug !== 'documents-review') {
+    throw new AppError(
+      400,
+      'Sub-merchant selection is only available for document review cases.',
+    )
+  }
+
+  if (caseRow.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can select the sub-merchant.')
+  }
+
+  if (caseRow.status !== 'working' || !caseRow.currentStageId) {
+    throw new AppError(
+      400,
+      'Sub-merchant can only be selected while the case is working.',
+    )
+  }
+
+  const subMerchant = await db.query.subMerchantDraftTemplates.findFirst({
+    where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
+    columns: { id: true, name: true },
+  })
+
+  if (!subMerchant) {
+    throw new AppError(400, 'Invalid sub-merchant selection.')
+  }
+
+  const now = new Date()
+  const [details] = await db.transaction(async (tx) => {
+    const [upserted] = await tx
+      .insert(documentReviewDetails)
+      .values({
+        caseId,
+        subMerchantId: subMerchant.id,
+        subMerchantName: subMerchant.name,
+        selectedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: documentReviewDetails.caseId,
+        set: {
+          subMerchantId: subMerchant.id,
+          subMerchantName: subMerchant.name,
+          selectedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'document_review_sub_merchant_selected',
+      details: {
+        subMerchantId: subMerchant.id,
+        subMerchantName: subMerchant.name,
+        caseNumber: caseRow.caseNumber,
+      },
+      createdAt: now,
+    })
+
+    return [upserted]
+  })
+
+  if (!details) {
+    throw new AppError(500, 'Failed to save sub-merchant selection.')
+  }
+
+  return {
+    subMerchantId: details.subMerchantId,
+    subMerchantName: details.subMerchantName,
+    selectedAt: details.updatedAt.toISOString(),
+  }
+}
 
 export async function closeUnsuccessful(
   caseId: string,
@@ -2313,6 +2755,71 @@ export async function markLiveLimitsApplied(
   }
 }
 
+export async function saveMidCreationDetails(
+  caseId: string,
+  userId: string,
+  input: SaveMidCreationDetailsInput,
+) {
+  const db = getDb()
+  const [caseRow] = await db
+    .select({
+      id: cases.id,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      currentStageId: cases.currentStageId,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (caseRow.queueSlug !== MID_CREATION_QUEUE_SLUG) {
+    throw new AppError(
+      400,
+      'This action is only available for MID Creation cases.',
+    )
+  }
+
+  if (caseRow.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can save MID details.')
+  }
+
+  if (caseRow.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  const currentStage = caseRow.currentStageId
+    ? await db.query.queueStages.findFirst({
+        where: eq(queueStages.id, caseRow.currentStageId),
+      })
+    : null
+
+  if (!currentStage || currentStage.category !== 'in_progress') {
+    throw new AppError(400, 'MID details can only be saved in working.')
+  }
+
+  const savedAt = new Date()
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'mid_creation_saved',
+    details: {
+      portalMid: input.portalMid,
+    },
+    createdAt: savedAt,
+  })
+
+  return {
+    portalMid: input.portalMid,
+    savedAt: savedAt.toISOString(),
+  }
+}
+
 async function loadWordpressWebsiteCase(caseId: string, userId: string) {
   const db = getDb()
   const [row] = await db
@@ -2361,20 +2868,38 @@ export async function saveWordpressWebsiteCase(
   userId: string,
   input: SaveWordpressWebsiteInput & {
     screenshots: File[]
+    subMerchantLogoScreenshots: File[]
   },
 ) {
   const db = getDb()
   const caseRow = await loadWordpressWebsiteCase(caseId, userId)
 
   if (input.screenshots.length === 0) {
-    throw new AppError(400, 'At least one screenshot is required.')
+    throw new AppError(400, 'At least one page screenshot is required.')
+  }
+
+  if (input.subMerchantLogoScreenshots.length === 0) {
+    throw new AppError(
+      400,
+      'At least one sub-merchant website logo screenshot is required.',
+    )
   }
 
   if (input.screenshots.length > 30) {
-    throw new AppError(400, 'Upload no more than 30 screenshots.')
+    throw new AppError(400, 'Upload no more than 30 page screenshots.')
+  }
+
+  if (input.subMerchantLogoScreenshots.length > 30) {
+    throw new AppError(
+      400,
+      'Upload no more than 30 sub-merchant logo screenshots.',
+    )
   }
 
   for (const screenshot of input.screenshots) {
+    validateWordpressScreenshotFile(screenshot)
+  }
+  for (const screenshot of input.subMerchantLogoScreenshots) {
     validateWordpressScreenshotFile(screenshot)
   }
 
@@ -2385,6 +2910,19 @@ export async function saveWordpressWebsiteCase(
       and(
         eq(caseFiles.caseId, caseId),
         ilike(caseFiles.fileKind, `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}%`),
+      ),
+    )
+
+  const existingLogoFiles = await db
+    .select()
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(
+          caseFiles.fileKind,
+          `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}%`,
+        ),
       ),
     )
 
@@ -2404,10 +2942,22 @@ export async function saveWordpressWebsiteCase(
         .then((uploaded) => ({ file, uploaded, index })),
     ),
   )
+  const uploadedLogoScreenshots = await Promise.all(
+    input.subMerchantLogoScreenshots.map((file, index) =>
+      storage
+        .uploadFile(folder.folderId, {
+          fileName: `sub-merchant-logo-${String(index + 1).padStart(2, '0')}-${file.name}`,
+          mimeType: file.type,
+          file,
+        })
+        .then((uploaded) => ({ file, uploaded, index })),
+    ),
+  )
 
   const now = new Date()
   const saved = await db.transaction(async (tx) => {
     const savedFiles: Array<typeof caseFiles.$inferSelect> = []
+    const savedLogoFiles: Array<typeof caseFiles.$inferSelect> = []
 
     for (const { file, uploaded, index } of uploadedScreenshots) {
       const [savedFile] = await tx
@@ -2448,6 +2998,45 @@ export async function saveWordpressWebsiteCase(
       savedFiles.push(savedFile)
     }
 
+    for (const { file, uploaded, index } of uploadedLogoScreenshots) {
+      const [savedFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: file.name,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!savedFile) {
+        throw new AppError(500, 'Failed to save sub-merchant logo screenshot.')
+      }
+
+      savedLogoFiles.push(savedFile)
+    }
+
     const keptKinds = new Set(savedFiles.map((file) => file.fileKind))
     const staleFiles = existingFiles.filter(
       (file) => !keptKinds.has(file.fileKind),
@@ -2460,6 +3049,18 @@ export async function saveWordpressWebsiteCase(
         ),
       )
     }
+    const keptLogoKinds = new Set(savedLogoFiles.map((file) => file.fileKind))
+    const staleLogoFiles = existingLogoFiles.filter(
+      (file) => !keptLogoKinds.has(file.fileKind),
+    )
+    if (staleLogoFiles.length > 0) {
+      await tx.delete(caseFiles).where(
+        inArray(
+          caseFiles.id,
+          staleLogoFiles.map((file) => file.id),
+        ),
+      )
+    }
 
     await tx.insert(caseHistory).values({
       caseId,
@@ -2469,6 +3070,7 @@ export async function saveWordpressWebsiteCase(
         businessWebsite: caseRow.businessWebsite,
         clonedWebsiteLink: input.clonedWebsiteLink,
         screenshots: savedFiles.length,
+        subMerchantLogoScreenshots: savedLogoFiles.length,
       },
       createdAt: now,
     })
@@ -2477,13 +3079,16 @@ export async function saveWordpressWebsiteCase(
       clonedWebsiteLink: input.clonedWebsiteLink,
       savedAt: now.toISOString(),
       screenshots: savedFiles,
+      subMerchantLogoScreenshots: savedLogoFiles,
     }
   })
 
   const replacedFileIds = new Set(
-    uploadedScreenshots.map(({ uploaded }) => uploaded.fileId),
+    [...uploadedScreenshots, ...uploadedLogoScreenshots].map(
+      ({ uploaded }) => uploaded.fileId,
+    ),
   )
-  for (const oldFile of existingFiles) {
+  for (const oldFile of [...existingFiles, ...existingLogoFiles]) {
     if (!replacedFileIds.has(oldFile.googleDriveFileId)) {
       await storage.deleteFile(oldFile.googleDriveFileId).catch((error) => {
         console.error('[wordpress-website.cleanup]', error)
@@ -2660,6 +3265,7 @@ function getRejectionLabel(
 }
 
 function formatExpiryDate(date: Date): string {
+  if (date.getFullYear() >= 9999) return 'no expiry'
   return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'long',
     timeZone: 'UTC',
@@ -2678,10 +3284,774 @@ function formatEmailDateTime(date: Date): string {
   }).format(date)
 }
 
+// ─── Email mode guards ────────────────────────────────────────────────────────
+
+async function assertAutoEmailEnabled(): Promise<void> {
+  const mode = await getEmailSendingModeSettings()
+  if (!mode.autoEnabled) {
+    throw new AppError(
+      403,
+      'Automatic email sending is disabled. Use the manual email workflow.',
+    )
+  }
+}
+
+async function assertManualEmailEnabled(): Promise<void> {
+  const mode = await getEmailSendingModeSettings()
+  if (!mode.manualEnabled) {
+    throw new AppError(
+      403,
+      'Manual email sending is disabled. Use the automatic email workflow.',
+    )
+  }
+}
+
+// ─── Email proof upload helper ────────────────────────────────────────────────
+
+function validateEmailProofFile(file: File) {
+  if (file.size > 10 * 1024 * 1024) {
+    throw new AppError(400, 'Screenshot must be 10 MB or smaller.')
+  }
+  const mimeType = file.type || 'application/octet-stream'
+  if (!EMAIL_PROOF_MIME_TYPES.has(mimeType)) {
+    throw new AppError(400, 'Screenshot must be a JPEG, PNG, or WebP image.')
+  }
+}
+
+async function uploadEmailProofFile(
+  caseId: string,
+  userId: string,
+  file: File,
+  fileKind: string,
+  caseNumber: string,
+  merchantName: string,
+) {
+  const db = getDb()
+  const storage = new GoogleDriveStorageProvider()
+  const folder = await storage.createMerchantFolder(
+    buildCaseUploadFolderName(caseNumber, merchantName),
+  )
+  const uploaded = await storage.uploadFile(folder.folderId, {
+    fileName: file.name,
+    mimeType: file.type,
+    file,
+  })
+
+  const now = new Date()
+  const [savedFile] = await db
+    .insert(caseFiles)
+    .values({
+      caseId,
+      fileKind,
+      originalName: file.name,
+      mimeType: uploaded.mimeType,
+      sizeBytes: uploaded.sizeBytes,
+      googleDriveFileId: uploaded.fileId,
+      googleDriveWebViewLink: uploaded.webViewLink,
+      googleDriveDownloadLink: uploaded.downloadLink,
+      googleDriveFolderId: uploaded.folderId,
+      uploadedBy: userId,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [caseFiles.caseId, caseFiles.fileKind],
+      set: {
+        originalName: file.name,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        uploadedBy: userId,
+        updatedAt: now,
+      },
+    })
+    .returning()
+
+  if (!savedFile) {
+    throw new AppError(500, 'Failed to save email proof screenshot.')
+  }
+
+  return { savedFile, uploaded }
+}
+
+// ─── Resubmission email preview & manual confirm ──────────────────────────────
+
+export type ResubmissionEmailPreviewResult = {
+  recipient: string
+  subject: string
+  body: string
+  tokenId: string
+  tokenExpiresAt: string
+}
+
+export async function getResubmissionEmailPreview(
+  caseId: string,
+  userId: string,
+): Promise<ResubmissionEmailPreviewResult> {
+  await assertManualEmailEnabled()
+  const db = getDb()
+
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      queueSlug: queues.slug,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      merchantOwnerName: merchants.ownerFullName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.queueSlug !== 'documents-review') {
+    throw new AppError(400, 'Resubmission is only available for documents-review cases.')
+  }
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can send for resubmission.')
+  }
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage to send for resubmission.')
+  }
+  if (!row.merchantSubmitterEmail) {
+    throw new AppError(400, 'No submitter email is on file for this merchant.')
+  }
+
+  const rejectedReviews = await db
+    .select({ fieldName: caseFieldReviews.fieldName, remarks: caseFieldReviews.remarks })
+    .from(caseFieldReviews)
+    .where(and(eq(caseFieldReviews.caseId, caseId), eq(caseFieldReviews.status, 'rejected')))
+
+  if (rejectedReviews.length === 0) {
+    throw new AppError(400, 'There are no rejected fields to send for resubmission.')
+  }
+
+  const docIds = rejectedReviews
+    .map((r) => getDocumentIdFromFieldName(r.fieldName))
+    .filter((id): id is string => id !== null)
+  const documentTypeById = new Map<string, string>()
+  if (docIds.length > 0) {
+    const docs = await db
+      .select({ id: merchantDocuments.id, documentType: merchantDocuments.documentType })
+      .from(merchantDocuments)
+      .where(inArray(merchantDocuments.id, docIds))
+    for (const d of docs) documentTypeById.set(d.id, d.documentType)
+  }
+
+  const rejections = rejectedReviews.map((review) => ({
+    label: getRejectionLabel(review.fieldName, documentTypeById),
+    remarks: review.remarks,
+  }))
+
+  // Reuse an unconsumed pending token for this case if it exists
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const minExpiry = new Date(Date.now() + 60 * 60 * 1000) // must be valid for at least 1h
+  const existingToken = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+      gt(caseResubmissionTokens.expiresAt, minExpiry),
+    ),
+    orderBy: [desc(caseResubmissionTokens.createdAt)],
+  })
+
+  const issued = existingToken
+    ? { token: existingToken.token, tokenId: existingToken.id, expiresAt: existingToken.expiresAt }
+    : await issueToken(caseId, userId, linkDeadlines.documentsReviewResubmissionHours)
+
+  const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
+  const subject = 'Action required to update your onboarding submission'
+  const body = buildResubmissionEmailBody({
+    merchantName: row.merchantName,
+    ownerName: row.merchantOwnerName,
+    rejections,
+    resubmissionUrl,
+    expiresAt: formatExpiryDate(issued.expiresAt),
+  })
+
+  return {
+    recipient: row.merchantSubmitterEmail,
+    subject,
+    body,
+    tokenId: issued.tokenId,
+    tokenExpiresAt: issued.expiresAt.toISOString(),
+  }
+}
+
+function buildResubmissionEmailBody(params: {
+  merchantName: string
+  ownerName: string
+  rejections: Array<{ label: string; remarks: string | null }>
+  resubmissionUrl: string
+  expiresAt: string
+}): string {
+  const { merchantName, ownerName, rejections, resubmissionUrl, expiresAt } = params
+  const itemLines = rejections
+    .map((r) => `• ${r.label}${r.remarks ? `\n  ${r.remarks}` : ''}`)
+    .join('\n')
+  return `Hi ${ownerName},
+
+We've reviewed the onboarding submission for ${merchantName} and need a few items updated before we can move forward.
+
+Items to update:
+${itemLines}
+
+Please use the secure link below to update your submission:
+${resubmissionUrl}
+
+This link expires ${expiresAt}.
+
+If you have any questions, please reply to this email.
+
+Best regards,
+AssanPay Onboarding Team`
+}
+
+export type ManualEmailResult = {
+  status: 'sent'
+  fileId: string
+}
+
+export async function confirmResubmissionEmailManual(
+  caseId: string,
+  userId: string,
+  input: { tokenId: string; file: File },
+): Promise<ManualEmailResult> {
+  await assertManualEmailEnabled()
+  const db = getDb()
+  validateEmailProofFile(input.file)
+
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      queueId: cases.queueId,
+      currentStageId: cases.currentStageId,
+      queueSlug: queues.slug,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      merchantOwnerName: merchants.ownerFullName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.ownerId !== userId) throw new AppError(403, 'Only the case owner can confirm this.')
+  if (row.status !== 'working') throw new AppError(400, 'The case must be in the working stage.')
+  if (!row.merchantSubmitterEmail) throw new AppError(400, 'No submitter email on file.')
+
+  const tokenRow = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.id, input.tokenId),
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+    ),
+  })
+  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
+
+  const rejectedReviews = await db
+    .select({ fieldName: caseFieldReviews.fieldName, remarks: caseFieldReviews.remarks })
+    .from(caseFieldReviews)
+    .where(and(eq(caseFieldReviews.caseId, caseId), eq(caseFieldReviews.status, 'rejected')))
+
+  const docIds = rejectedReviews
+    .map((r) => getDocumentIdFromFieldName(r.fieldName))
+    .filter((id): id is string => id !== null)
+  const documentTypeById = new Map<string, string>()
+  if (docIds.length > 0) {
+    const docs = await db
+      .select({ id: merchantDocuments.id, documentType: merchantDocuments.documentType })
+      .from(merchantDocuments)
+      .where(inArray(merchantDocuments.id, docIds))
+    for (const d of docs) documentTypeById.set(d.id, d.documentType)
+  }
+  const rejectedFieldNames = rejectedReviews.map((r) => r.fieldName)
+  const rejectedFieldLabels = rejectedReviews.map((r) =>
+    getRejectionLabel(r.fieldName, documentTypeById),
+  )
+
+  const stages = await ensureQueueStages(db, {
+    id: row.queueId,
+    name: 'Documents Review',
+    slug: row.queueSlug,
+    qcEnabled: false,
+  })
+  const awaitingStage = stages.find((s) => s.slug === 'awaiting_client') ?? null
+  if (!awaitingStage) throw new AppError(500, 'No awaiting_client stage configured.')
+
+  const [reservedCase] = await db
+    .update(cases)
+    .set({ status: 'awaiting_client', currentStageId: awaitingStage.id, updatedAt: new Date() })
+    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+    .returning({ id: cases.id })
+  if (!reservedCase) throw new AppError(409, 'This case has already been sent for resubmission.')
+
+  const { savedFile } = await uploadEmailProofFile(
+    caseId,
+    userId,
+    input.file,
+    RESUBMISSION_EMAIL_PROOF_KIND,
+    row.caseNumber,
+    row.merchantName,
+  )
+
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'rejections_prepared',
+      details: {
+        total: rejectedFieldNames.length,
+        rejected: rejectedFieldNames.length,
+        approved: 0,
+        rejectedFields: rejectedFieldNames,
+        rejectedFieldLabels,
+      },
+    })
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'resubmission_email_sent_manual',
+      details: {
+        tokenId: input.tokenId,
+        expiresAt: tokenRow.expiresAt.toISOString(),
+        rejectedFields: rejectedFieldNames,
+        rejectedFieldLabels,
+        recipient: row.merchantSubmitterEmail,
+        screenshotFileId: savedFile.id,
+        manual: true,
+      },
+      createdAt: now,
+    })
+  })
+
+  return { status: 'sent', fileId: savedFile.id }
+}
+
+// ─── Agreement email preview & manual confirm ────────────────────────────────
+
+export type AgreementEmailPreviewResult = {
+  recipient: string
+  subject: string
+  body: string
+  tokenId: string
+  tokenExpiresAt: string
+}
+
+export async function getAgreementEmailPreview(
+  caseId: string,
+  userId: string,
+  input: { remarks?: string | null } = {},
+): Promise<AgreementEmailPreviewResult> {
+  await assertManualEmailEnabled()
+  const db = getDb()
+  const caseRow = await loadAgreementCase(caseId, userId)
+
+  if (!caseRow.merchantSubmitterEmail) {
+    throw new AppError(400, 'No submitter email is on file for this merchant.')
+  }
+
+  const details = await db.query.agreementCaseDetails.findFirst({
+    where: eq(agreementCaseDetails.caseId, caseId),
+  })
+  if (!details?.finalAgreementFileId) {
+    throw new AppError(400, 'Upload the Final Agreement before sending mail.')
+  }
+
+  const remarks = input.remarks?.trim() || null
+  if (details.clientAgreementFileId && !remarks) {
+    throw new AppError(400, 'Remarks are required when asking the client to resubmit the agreement.')
+  }
+
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
+  const existingToken = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+      gt(caseResubmissionTokens.expiresAt, minExpiry),
+    ),
+    orderBy: [desc(caseResubmissionTokens.createdAt)],
+  })
+
+  const issued = existingToken
+    ? { token: existingToken.token, tokenId: existingToken.id, expiresAt: existingToken.expiresAt }
+    : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
+
+  const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
+  const subject = `Agreement for ${caseRow.merchantName}`
+  const body = buildAgreementEmailBody({
+    merchantName: caseRow.merchantName,
+    ownerName: caseRow.merchantOwnerName,
+    agreementUrl,
+    expiresAt: formatExpiryDate(issued.expiresAt),
+    remarks,
+  })
+
+  return {
+    recipient: caseRow.merchantSubmitterEmail,
+    subject,
+    body,
+    tokenId: issued.tokenId,
+    tokenExpiresAt: issued.expiresAt.toISOString(),
+  }
+}
+
+function buildAgreementEmailBody(params: {
+  merchantName: string
+  ownerName: string
+  agreementUrl: string
+  expiresAt: string
+  remarks: string | null
+}): string {
+  const { merchantName, ownerName, agreementUrl, expiresAt, remarks } = params
+  let body = `Hi ${ownerName},
+
+Please review and sign the agreement for ${merchantName} using the secure link below:`
+
+  if (remarks) {
+    body += `\n\nAdditional notes from our team:\n${remarks}`
+  }
+
+  body += `\n\nAgreement link:\n${agreementUrl}\n\nThis link expires ${expiresAt}.
+
+If you have any questions, please reply to this email.
+
+Best regards,
+AssanPay Onboarding Team`
+
+  return body
+}
+
+export async function confirmAgreementEmailManual(
+  caseId: string,
+  userId: string,
+  input: { tokenId: string; remarks?: string | null; file: File },
+): Promise<ManualEmailResult> {
+  await assertManualEmailEnabled()
+  const db = getDb()
+  validateEmailProofFile(input.file)
+
+  const caseRow = await loadAgreementCase(caseId, userId)
+  if (!caseRow.merchantSubmitterEmail) {
+    throw new AppError(400, 'No submitter email is on file for this merchant.')
+  }
+
+  const details = await db.query.agreementCaseDetails.findFirst({
+    where: eq(agreementCaseDetails.caseId, caseId),
+  })
+  if (!details?.finalAgreementFileId) {
+    throw new AppError(400, 'Upload the Final Agreement before confirming.')
+  }
+
+  const tokenRow = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.id, input.tokenId),
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+    ),
+  })
+  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
+
+  const awaitingStage = await db.query.queueStages.findFirst({
+    where: and(
+      eq(queueStages.queueId, caseRow.queueId),
+      eq(queueStages.slug, 'awaiting_client'),
+    ),
+  })
+  if (!awaitingStage) throw new AppError(500, 'No awaiting_client stage configured.')
+
+  const [reservedCase] = await db
+    .update(cases)
+    .set({ status: 'awaiting_client', currentStageId: awaitingStage.id, updatedAt: new Date() })
+    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+    .returning({ id: cases.id })
+  if (!reservedCase) throw new AppError(409, 'This case has already been sent to the client.')
+
+  const { savedFile } = await uploadEmailProofFile(
+    caseId,
+    userId,
+    input.file,
+    AGREEMENT_EMAIL_PROOF_KIND,
+    caseRow.caseNumber,
+    caseRow.merchantName,
+  )
+
+  const remarks = input.remarks?.trim() || null
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    await tx
+      .update(agreementCaseDetails)
+      .set({
+        emailStatus: 'sent',
+        emailSentAt: now,
+        emailRecipient: caseRow.merchantSubmitterEmail,
+        lastRejectionRemarks: remarks,
+        updatedAt: now,
+      })
+      .where(eq(agreementCaseDetails.caseId, caseId))
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'agreement_email_sent_manual',
+      details: {
+        tokenId: input.tokenId,
+        expiresAt: tokenRow.expiresAt.toISOString(),
+        recipient: caseRow.merchantSubmitterEmail,
+        remarks,
+        screenshotFileId: savedFile.id,
+        manual: true,
+      },
+      createdAt: now,
+    })
+  })
+
+  return { status: 'sent', fileId: savedFile.id }
+}
+
+// ─── Mid-creation email preview & manual confirm ─────────────────────────────
+
+export type MidCreationEmailPreviewResult = {
+  recipient: string
+  subject: string
+  body: string
+  tokenId: string
+  goLiveAvailableAt: string
+}
+
+export async function getMidCreationEmailPreview(
+  caseId: string,
+  userId: string,
+  input: SendMidCreationEmailInput,
+): Promise<MidCreationEmailPreviewResult> {
+  await assertManualEmailEnabled()
+  const caseRow = await loadMidCreationCase(caseId, userId)
+  const db = getDb()
+
+  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
+  if (!savedPortalMid) {
+    throw new AppError(400, 'Save the Portal MID in MID Creation before sending credentials.')
+  }
+  if (savedPortalMid !== input.portalMid) {
+    throw new AppError(400, 'Credentials must use the saved Portal MID.')
+  }
+
+  const [linkDeadlines, limitsAndMdr] = await Promise.all([
+    getLinkDeadlineSettings(),
+    getLimitsAndMdrSettings(),
+  ])
+
+  const now = new Date()
+  const availableAt =
+    linkDeadlines.goLiveAvailabilityHours == null
+      ? now // immediately available when no delay configured
+      : new Date(
+          now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
+        )
+
+  // Reuse an unconsumed pending go-live token
+  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
+  const existingToken = await db.query.midGoLiveTokens.findFirst({
+    where: and(
+      eq(midGoLiveTokens.caseId, caseId),
+      isNull(midGoLiveTokens.consumedAt),
+      gt(midGoLiveTokens.availableAt, minExpiry),
+    ),
+    orderBy: [desc(midGoLiveTokens.createdAt)],
+  })
+
+  let tokenId: string
+  let goLiveToken: string
+  let resolvedAvailableAt: Date
+
+  if (existingToken) {
+    tokenId = existingToken.id
+    goLiveToken = existingToken.token
+    resolvedAvailableAt = existingToken.availableAt
+  } else {
+    const token = generatePublicTokenString()
+    resolvedAvailableAt = availableAt
+    const [tokenRow] = await db
+      .insert(midGoLiveTokens)
+      .values({ caseId, token, availableAt, createdBy: userId })
+      .returning({ id: midGoLiveTokens.id })
+    if (!tokenRow) throw new AppError(500, 'Failed to issue Go-Live token.')
+    tokenId = tokenRow.id
+    goLiveToken = token
+  }
+
+  const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
+  const isShopify = caseRow.websiteCms === 'shopify'
+  const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
+  const body = buildMidCreationEmailBody({
+    merchantName: caseRow.merchantName,
+    portalEmail: input.email,
+    portalPassword: input.password,
+    portalMid: String(input.portalMid),
+    merchantPortalUrl: MERCHANT_PORTAL_LOGIN_URL,
+    goLiveUrl,
+    availableAt: formatEmailDateTime(resolvedAvailableAt),
+    goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+    testingLimits: limitsAndMdr.testing,
+    cardRate: isShopify
+      ? `${limitsAndMdr.rates.cardShopify}%`
+      : `${limitsAndMdr.rates.cardDefault}%`,
+    eWalletsRate: `${limitsAndMdr.rates.eWallets}%`,
+    payoutRate: `${limitsAndMdr.rates.payout}%`,
+  })
+
+  return {
+    recipient: input.email,
+    subject,
+    body,
+    tokenId,
+    goLiveAvailableAt: resolvedAvailableAt.toISOString(),
+  }
+}
+
+function buildMidCreationEmailBody(params: {
+  merchantName: string
+  portalEmail: string
+  portalPassword: string
+  portalMid: string
+  merchantPortalUrl: string
+  goLiveUrl: string
+  availableAt: string
+  goLiveAvailabilityHours: number | null
+  testingLimits: { transactionLimit: number; dailyLimit: number; monthlyLimit: number }
+  cardRate: string
+  eWalletsRate: string
+  payoutRate: string
+}): string {
+  const {
+    merchantName,
+    portalEmail,
+    portalPassword,
+    portalMid,
+    merchantPortalUrl,
+    goLiveUrl,
+    availableAt,
+    goLiveAvailabilityHours,
+    testingLimits,
+    cardRate,
+    eWalletsRate,
+    payoutRate,
+  } = params
+  const goLiveAvailabilityLabel =
+    goLiveAvailabilityHours == null ? 'immediately' : `after ${goLiveAvailabilityHours}h`
+  return `AssanPay Merchant Portal Credentials for ${merchantName}
+
+Portal Login: ${merchantPortalUrl}
+Email: ${portalEmail}
+Password: ${portalPassword}
+MID: ${portalMid}
+
+Testing Limits:
+• Per Transaction: PKR ${testingLimits.transactionLimit.toLocaleString()}
+• Daily: PKR ${testingLimits.dailyLimit.toLocaleString()}
+• Monthly: PKR ${testingLimits.monthlyLimit.toLocaleString()}
+
+Rates:
+• Card: ${cardRate}
+• eWallets: ${eWalletsRate}
+• Payout: ${payoutRate}
+
+Go-Live Link (available ${goLiveAvailabilityLabel}):
+${goLiveUrl}
+Available at: ${availableAt}
+
+Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.
+
+Please keep your credentials secure and do not share them with anyone.
+
+Best regards,
+AssanPay Onboarding Team`
+}
+
+export async function confirmMidCreationEmailManual(
+  caseId: string,
+  userId: string,
+  input: SendMidCreationEmailInput & { tokenId: string; file: File },
+): Promise<ManualEmailResult> {
+  await assertManualEmailEnabled()
+  validateEmailProofFile(input.file)
+  const caseRow = await loadMidCreationCase(caseId, userId)
+  const db = getDb()
+
+  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
+  if (!savedPortalMid) {
+    throw new AppError(400, 'Save the Portal MID in MID Creation before sending credentials.')
+  }
+  if (savedPortalMid !== input.portalMid) {
+    throw new AppError(400, 'Credentials must use the saved Portal MID.')
+  }
+
+  const tokenRow = await db.query.midGoLiveTokens.findFirst({
+    where: and(
+      eq(midGoLiveTokens.id, input.tokenId),
+      eq(midGoLiveTokens.caseId, caseId),
+      isNull(midGoLiveTokens.consumedAt),
+    ),
+  })
+  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
+
+  const { savedFile } = await uploadEmailProofFile(
+    caseId,
+    userId,
+    input.file,
+    MID_CREATION_EMAIL_PROOF_KIND,
+    caseRow.caseNumber,
+    caseRow.merchantName,
+  )
+
+  const now = new Date()
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'mid_creation_email_sent_manual',
+    details: {
+      tokenId: input.tokenId,
+      availableAt: tokenRow.availableAt.toISOString(),
+      recipient: input.email,
+      portalMid: input.portalMid,
+      screenshotFileId: savedFile.id,
+      manual: true,
+    },
+    createdAt: now,
+  })
+
+  await db.transaction((tx) =>
+    ensurePhysicalAgreementCaseForMerchant(tx, {
+      merchantId: caseRow.merchantId,
+      parentCaseId: caseId,
+      sourceQueueId: caseRow.queueId,
+    }),
+  )
+
+  return { status: 'sent', fileId: savedFile.id }
+}
+
 export async function sendForResubmission(
   caseId: string,
   userId: string,
 ): Promise<SendForResubmissionResult> {
+  await assertAutoEmailEnabled()
   const db = getDb()
 
   // 1. Load case with queue/merchant info
@@ -2919,12 +4289,6 @@ export async function sendForResubmission(
 
 // ─── EP Sub-Merchant Form ───────────────────────────────────────────────────
 
-type SubMerchantFormEmailResult = {
-  status: 'sent' | 'failed'
-  emailLogId: string
-  error?: string
-}
-
 async function loadSubMerchantFormCase(caseId: string, userId: string) {
   const db = getDb()
   const [row] = await db
@@ -2977,9 +4341,16 @@ export async function selectSubMerchantForm(
 ) {
   const db = getDb()
   const caseRow = await loadSubMerchantFormCase(caseId, userId)
-  const option = getSubMerchantFormOption(input.subMerchantKey)
+  const subMerchant = await db.query.subMerchantDraftTemplates.findFirst({
+    where: eq(subMerchantDraftTemplates.id, input.subMerchantKey),
+    columns: {
+      id: true,
+      name: true,
+      googleDriveWebViewLink: true,
+    },
+  })
 
-  if (!option) {
+  if (!subMerchant) {
     throw new AppError(400, 'Invalid sub-merchant selection.')
   }
 
@@ -2989,9 +4360,9 @@ export async function selectSubMerchantForm(
       .insert(subMerchantFormDetails)
       .values({
         caseId,
-        subMerchantKey: option.key,
-        subMerchantName: option.name,
-        draftUrl: option.draftUrl,
+        subMerchantKey: subMerchant.id,
+        subMerchantName: subMerchant.name,
+        draftUrl: subMerchant.googleDriveWebViewLink,
         emailStatus: 'not_sent',
         emailLogId: null,
         emailSentAt: null,
@@ -3001,9 +4372,9 @@ export async function selectSubMerchantForm(
       .onConflictDoUpdate({
         target: subMerchantFormDetails.caseId,
         set: {
-          subMerchantKey: option.key,
-          subMerchantName: option.name,
-          draftUrl: option.draftUrl,
+          subMerchantKey: subMerchant.id,
+          subMerchantName: subMerchant.name,
+          draftUrl: subMerchant.googleDriveWebViewLink,
           emailStatus: 'not_sent',
           emailLogId: null,
           emailSentAt: null,
@@ -3018,8 +4389,8 @@ export async function selectSubMerchantForm(
       actorId: userId,
       action: 'sub_merchant_selected',
       details: {
-        subMerchantKey: option.key,
-        subMerchantName: option.name,
+        subMerchantKey: subMerchant.id,
+        subMerchantName: subMerchant.name,
         caseNumber: caseRow.caseNumber,
       },
     })
@@ -3040,22 +4411,35 @@ export async function uploadSubMerchantFinalForm(
 ) {
   const db = getDb()
   const caseRow = await loadSubMerchantFormCase(caseId, userId)
-  const option = getSubMerchantFormOption(input.subMerchantKey)
-
-  if (!option) {
-    throw new AppError(400, 'Invalid sub-merchant selection.')
-  }
-
   const file = input.file
   validateSubMerchantFinalFormFile(file)
 
-  const details = await db.query.subMerchantFormDetails.findFirst({
-    where: eq(subMerchantFormDetails.caseId, caseId),
+  const details = await ensureInheritedSubMerchantFormDetails({
+    caseId,
+    merchantId: caseRow.merchantId,
+    actorId: userId,
   })
 
-  const existingFile = details?.finalFormFileId
+  if (!details) {
+    throw new AppError(
+      400,
+      'Select a sub-merchant in the document review case before uploading the Final Form.',
+    )
+  }
+
+  if (
+    input.subMerchantKey.trim() &&
+    input.subMerchantKey !== details.subMerchantKey
+  ) {
+    throw new AppError(
+      400,
+      'Final Form must be uploaded for the inherited sub-merchant.',
+    )
+  }
+
+  const existingFile = details.finalFormId
     ? await db.query.caseFiles.findFirst({
-        where: eq(caseFiles.id, details.finalFormFileId),
+        where: eq(caseFiles.id, details.finalFormId),
       })
     : null
 
@@ -3075,9 +4459,9 @@ export async function uploadSubMerchantFinalForm(
       .insert(subMerchantFormDetails)
       .values({
         caseId,
-        subMerchantKey: option.key,
-        subMerchantName: option.name,
-        draftUrl: option.draftUrl,
+        subMerchantKey: details.subMerchantKey,
+        subMerchantName: details.subMerchantName,
+        draftUrl: details.draftUrl,
         emailStatus: 'not_sent',
         emailLogId: null,
         emailSentAt: null,
@@ -3087,9 +4471,9 @@ export async function uploadSubMerchantFinalForm(
       .onConflictDoUpdate({
         target: subMerchantFormDetails.caseId,
         set: {
-          subMerchantKey: option.key,
-          subMerchantName: option.name,
-          draftUrl: option.draftUrl,
+          subMerchantKey: details.subMerchantKey,
+          subMerchantName: details.subMerchantName,
+          draftUrl: details.draftUrl,
           emailStatus: 'not_sent',
           emailLogId: null,
           emailSentAt: null,
@@ -3152,7 +4536,7 @@ export async function uploadSubMerchantFinalForm(
       details: {
         fileName: file.name,
         sizeBytes: uploaded.sizeBytes,
-        subMerchantName: option.name,
+        subMerchantName: details.subMerchantName,
       },
     })
 
@@ -3168,68 +4552,93 @@ export async function uploadSubMerchantFinalForm(
   return savedFile
 }
 
-export async function sendSubMerchantFormEmail(
+export async function uploadSubMerchantEmailProof(
   caseId: string,
   userId: string,
-): Promise<SubMerchantFormEmailResult> {
+  input: { file: File },
+) {
   const db = getDb()
   const caseRow = await loadSubMerchantFormCase(caseId, userId)
+  const file = input.file
+  validateWordpressScreenshotFile(file)
 
-  if (!caseRow.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
-
-  const [details] = await db
-    .select({
-      subMerchantName: subMerchantFormDetails.subMerchantName,
-      finalFormFileId: subMerchantFormDetails.finalFormFileId,
-      finalFormUrl: caseFiles.googleDriveWebViewLink,
-      finalFormGoogleDriveFileId: caseFiles.googleDriveFileId,
-    })
-    .from(subMerchantFormDetails)
-    .leftJoin(
-      caseFiles,
-      eq(subMerchantFormDetails.finalFormFileId, caseFiles.id),
-    )
-    .where(eq(subMerchantFormDetails.caseId, caseId))
-    .limit(1)
-
-  if (!details) {
-    throw new AppError(400, 'Select a sub-merchant before sending email.')
-  }
-
-  if (!details.finalFormFileId || !details.finalFormUrl) {
-    throw new AppError(400, 'Upload the Final Form before sending email.')
-  }
-
-  const emailResult = await sendEmail({
-    to: caseRow.merchantSubmitterEmail,
-    subject: `Final sub-merchant form for ${caseRow.merchantName}`,
-    template: 'sub-merchant-form',
-    react: SubMerchantFormEmail({
-      merchantName: caseRow.merchantName,
-      ownerName: caseRow.merchantOwnerName,
-      subMerchantName: details.subMerchantName,
-      finalFormUrl: details.finalFormUrl,
-    }),
+  const details = await ensureInheritedSubMerchantFormDetails({
     caseId,
     merchantId: caseRow.merchantId,
-    idempotencyKey: `sub-merchant-form/${caseId}/${details.finalFormGoogleDriveFileId}`,
-    metadata: {
-      subMerchantName: details.subMerchantName,
-      finalFormFileId: details.finalFormFileId,
-    },
+    actorId: userId,
+  })
+
+  if (!details) {
+    throw new AppError(
+      400,
+      'Select a sub-merchant in the document review case before uploading proof.',
+    )
+  }
+
+  if (!details.finalFormId) {
+    throw new AppError(400, 'Upload the Final Form before uploading proof.')
+  }
+
+  const existingFile = await db.query.caseFiles.findFirst({
+    where: and(
+      eq(caseFiles.caseId, caseId),
+      eq(caseFiles.fileKind, SUB_MERCHANT_EMAIL_PROOF_KIND),
+    ),
+  })
+
+  const storage = new GoogleDriveStorageProvider()
+  const folder = await storage.createMerchantFolder(
+    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
+  )
+  const uploaded = await storage.uploadFile(folder.folderId, {
+    fileName: file.name,
+    mimeType: file.type,
+    file,
   })
 
   const now = new Date()
-  await db.transaction(async (tx) => {
+  const [savedFile] = await db.transaction(async (tx) => {
+    const [caseFile] = await tx
+      .insert(caseFiles)
+      .values({
+        caseId,
+        fileKind: SUB_MERCHANT_EMAIL_PROOF_KIND,
+        originalName: file.name,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        uploadedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [caseFiles.caseId, caseFiles.fileKind],
+        set: {
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!caseFile) {
+      throw new AppError(500, 'Failed to save email proof.')
+    }
+
     await tx
       .update(subMerchantFormDetails)
       .set({
-        emailStatus: emailResult.status,
-        emailLogId: emailResult.emailLogId,
-        emailSentAt: emailResult.status === 'sent' ? now : null,
-        emailRecipient: caseRow.merchantSubmitterEmail,
+        emailStatus: 'sent',
+        emailSentAt: now,
+        emailRecipient: 'Manual Gmail',
         updatedAt: now,
       })
       .where(eq(subMerchantFormDetails.caseId, caseId))
@@ -3237,31 +4646,25 @@ export async function sendSubMerchantFormEmail(
     await tx.insert(caseHistory).values({
       caseId,
       actorId: userId,
-      action:
-        emailResult.status === 'sent'
-          ? 'sub_merchant_form_email_sent'
-          : 'sub_merchant_form_email_failed',
+      action: 'sub_merchant_manual_email_proof_uploaded',
       details: {
-        emailLogId: emailResult.emailLogId,
-        recipient: caseRow.merchantSubmitterEmail,
+        fileName: file.name,
+        sizeBytes: uploaded.sizeBytes,
         subMerchantName: details.subMerchantName,
-        error: emailResult.error ?? null,
       },
+      createdAt: now,
     })
+
+    return [caseFile]
   })
 
-  if (emailResult.status === 'failed') {
-    return {
-      status: 'failed',
-      emailLogId: emailResult.emailLogId,
-      error: emailResult.error,
-    }
+  if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
+    await storage.deleteFile(existingFile.googleDriveFileId).catch((error) => {
+      console.error('[sub-merchant-form.email-proof.cleanup]', error)
+    })
   }
 
-  return {
-    status: 'sent',
-    emailLogId: emailResult.emailLogId,
-  }
+  return savedFile
 }
 
 // ─── Apply Resubmission (called from public route) ──────────────────────────
@@ -3281,6 +4684,7 @@ async function loadMidCreationCase(caseId: string, userId: string) {
       caseNumber: cases.caseNumber,
       ownerId: cases.ownerId,
       status: cases.status,
+      queueId: cases.queueId,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
@@ -3294,14 +4698,11 @@ async function loadMidCreationCase(caseId: string, userId: string) {
     .limit(1)
 
   if (!row) throw new AppError(404, 'Case not found.')
-  if (row.queueSlug !== MID_CREATION_QUEUE_SLUG) {
-    throw new AppError(
-      400,
-      'This action is only available for MID Creation cases.',
-    )
+  if (row.queueSlug !== TESTING_QUEUE_SLUG) {
+    throw new AppError(400, 'This action is only available for Testing cases.')
   }
   if (row.ownerId !== userId) {
-    throw new AppError(403, 'Only the case owner can send MID credentials.')
+    throw new AppError(403, 'Only the case owner can send credentials.')
   }
   if (row.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
@@ -3315,16 +4716,31 @@ export async function sendMidCreationCredentialsEmail(
   userId: string,
   input: SendMidCreationEmailInput,
 ): Promise<MidCreationEmailResult> {
+  await assertAutoEmailEnabled()
   const db = getDb()
   const caseRow = await loadMidCreationCase(caseId, userId)
+  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
+  if (!savedPortalMid) {
+    throw new AppError(
+      400,
+      'Save the Portal MID in MID Creation before sending credentials.',
+    )
+  }
+  if (savedPortalMid !== input.portalMid) {
+    throw new AppError(400, 'Credentials must use the saved Portal MID.')
+  }
+
   const now = new Date()
   const [linkDeadlines, limitsAndMdr] = await Promise.all([
     getLinkDeadlineSettings(),
     getLimitsAndMdrSettings(),
   ])
-  const availableAt = new Date(
-    now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
-  )
+  const availableAt =
+    linkDeadlines.goLiveAvailabilityHours == null
+      ? now
+      : new Date(
+          now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
+        )
   const token = generatePublicTokenString()
 
   const [tokenRow] = await db
@@ -3391,6 +4807,16 @@ export async function sendMidCreationCredentialsEmail(
       .where(eq(midGoLiveTokens.id, tokenRow.id))
   }
 
+  if (emailResult.status === 'sent') {
+    await db.transaction((tx) =>
+      ensurePhysicalAgreementCaseForMerchant(tx, {
+        merchantId: caseRow.merchantId,
+        parentCaseId: caseId,
+        sourceQueueId: caseRow.queueId,
+      }),
+    )
+  }
+
   await db.insert(caseHistory).values({
     caseId,
     actorId: userId,
@@ -3445,6 +4871,147 @@ function validateAgreementFile(file: File) {
   ) {
     throw new AppError(400, 'Agreement must be a PDF, DOC, or DOCX file.')
   }
+}
+
+function validatePhysicalAgreementFile(file: File) {
+  if (file.size > MAX_PHYSICAL_AGREEMENT_BYTES) {
+    throw new AppError(400, 'Physical agreement copy must be 10 MB or smaller.')
+  }
+
+  const extension = getFileExtension(file.name)
+  const mimeType = file.type || 'application/octet-stream'
+  if (
+    !PHYSICAL_AGREEMENT_EXTENSIONS.has(extension) ||
+    !PHYSICAL_AGREEMENT_MIME_TYPES.has(mimeType)
+  ) {
+    throw new AppError(
+      400,
+      'Physical agreement copy must be a PDF, JPG, PNG, or WebP file.',
+    )
+  }
+}
+
+async function loadPhysicalAgreementCase(caseId: string, userId: string) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      merchantName: merchants.businessName,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.queueSlug !== PHYSICAL_AGREEMENT_QUEUE_SLUG) {
+    throw new AppError(
+      400,
+      'This action is only available for Physical Agreement cases.',
+    )
+  }
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can upload the agreement copy.')
+  }
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  return row
+}
+
+async function ensurePhysicalAgreementCaseForMerchant(
+  tx: DbTransaction,
+  input: { merchantId: string; parentCaseId: string; sourceQueueId: string },
+) {
+  const queue = await tx.query.queues.findFirst({
+    where: eq(queues.slug, PHYSICAL_AGREEMENT_QUEUE_SLUG),
+    columns: {
+      id: true,
+      name: true,
+      slug: true,
+      qcEnabled: true,
+      isActive: true,
+    },
+  })
+  if (!queue) {
+    throw new AppError(500, 'Physical Agreement queue is not configured.')
+  }
+  if (!queue.isActive) {
+    throw new AppError(409, 'Physical Agreement queue is inactive.')
+  }
+
+  const existing = await tx.query.cases.findFirst({
+    where: and(eq(cases.merchantId, input.merchantId), eq(cases.queueId, queue.id)),
+    columns: { id: true, caseNumber: true },
+  })
+  if (existing) return existing
+
+  const stages = await ensureQueueStages(tx, {
+    id: queue.id,
+    name: queue.name,
+    slug: queue.slug,
+    qcEnabled: queue.qcEnabled,
+  })
+  const initialStage = stages[0]
+  if (!initialStage) {
+    throw new AppError(500, 'No initial stage configured for Physical Agreement queue.')
+  }
+
+  const merchant = await tx.query.merchants.findFirst({
+    where: eq(merchants.id, input.merchantId),
+    columns: { businessName: true, priority: true },
+  })
+  if (!merchant) throw new AppError(404, 'Merchant not found.')
+
+  const now = new Date()
+  const caseNumber = await generateCaseNumber(tx, queue.id)
+  const [created] = await tx
+    .insert(cases)
+    .values({
+      caseNumber,
+      queueId: queue.id,
+      merchantId: input.merchantId,
+      ownerId: null,
+      currentStageId: initialStage.id,
+      status: 'new',
+      priority: merchant.priority,
+      updatedAt: now,
+    })
+    .returning({ id: cases.id, caseNumber: cases.caseNumber })
+
+  if (!created) {
+    throw new AppError(500, 'Failed to create Physical Agreement case.')
+  }
+
+  await tx.insert(caseHistory).values({
+    caseId: created.id,
+    actorId: null,
+    action: 'case_created_from_mid_go_live_email',
+    details: {
+      parentCaseId: input.parentCaseId,
+      sourceQueueId: input.sourceQueueId,
+      targetQueueId: queue.id,
+      targetQueueName: queue.name,
+      merchantName: merchant.businessName,
+    },
+  })
+
+  await tx.insert(caseLinks).values({
+    parentCaseId: input.parentCaseId,
+    childCaseId: created.id,
+    merchantId: input.merchantId,
+    triggerType: 'case_close',
+    sourceQueueId: input.sourceQueueId,
+    targetQueueId: queue.id,
+  })
+
+  return created
 }
 
 async function loadAgreementCase(caseId: string, userId: string) {
@@ -3622,11 +5189,95 @@ export async function uploadAgreementFinalAgreement(
   return savedFile
 }
 
+export async function uploadPhysicalAgreementCopy(
+  caseId: string,
+  userId: string,
+  input: { file: File },
+) {
+  const db = getDb()
+  const caseRow = await loadPhysicalAgreementCase(caseId, userId)
+  const file = input.file
+  validatePhysicalAgreementFile(file)
+
+  const existingFile = await db.query.caseFiles.findFirst({
+    where: and(
+      eq(caseFiles.caseId, caseId),
+      eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
+    ),
+  })
+
+  const storage = new GoogleDriveStorageProvider()
+  const folder = await storage.createMerchantFolder(
+    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
+  )
+  const uploaded = await storage.uploadFile(folder.folderId, {
+    fileName: file.name,
+    mimeType: file.type,
+    file,
+  })
+
+  const now = new Date()
+  const [savedFile] = await db.transaction(async (tx) => {
+    const [caseFile] = await tx
+      .insert(caseFiles)
+      .values({
+        caseId,
+        fileKind: PHYSICAL_AGREEMENT_FILE_KIND,
+        originalName: file.name,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        uploadedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [caseFiles.caseId, caseFiles.fileKind],
+        set: {
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!caseFile) {
+      throw new AppError(500, 'Failed to save physical agreement copy.')
+    }
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'physical_agreement_uploaded',
+      details: { fileName: file.name, sizeBytes: uploaded.sizeBytes },
+    })
+
+    return [caseFile]
+  })
+
+  if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
+    await storage.deleteFile(existingFile.googleDriveFileId).catch((error) => {
+      console.error('[physical-agreement.cleanup]', error)
+    })
+  }
+
+  return savedFile
+}
+
 export async function sendAgreementForClientUpload(
   caseId: string,
   userId: string,
   input: { remarks?: string | null } = {},
 ): Promise<AgreementEmailResult> {
+  await assertAutoEmailEnabled()
   const db = getDb()
   const caseRow = await loadAgreementCase(caseId, userId)
 
@@ -4046,6 +5697,24 @@ export async function activateMidGoLive(token: string) {
 
     if (tokenRow.availableAt.getTime() > Date.now()) {
       throw new AppError(425, 'This Go-Live link works after 72 hours only.')
+    }
+
+    const [physicalAgreementCase] = await tx
+      .select({ id: cases.id })
+      .from(cases)
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .where(
+        and(
+          eq(cases.merchantId, tokenRow.merchantId),
+          eq(queues.slug, PHYSICAL_AGREEMENT_QUEUE_SLUG),
+          eq(cases.status, 'closed'),
+          eq(cases.closeOutcome, 'successful'),
+        ),
+      )
+      .limit(1)
+
+    if (!physicalAgreementCase) {
+      throw new AppError(409, 'Submit Physical copy of agreement to go live')
     }
 
     const liveQueue = await tx.query.queues.findFirst({

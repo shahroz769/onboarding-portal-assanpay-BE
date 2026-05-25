@@ -37,8 +37,7 @@ export async function sendEmail(
   const db = getDb()
   const fromAddress = input.from ?? env.EMAIL_FROM
   const replyTo = input.replyTo ?? env.EMAIL_REPLY_TO
-  const testRecipientOverride =
-    Bun.env.NODE_ENV !== 'production' ? env.EMAIL_TEST_TO : undefined
+  const testRecipientOverride = env.EMAIL_TEST_TO
   const toAddress = testRecipientOverride ?? input.to
 
   // 1. Pre-create the log row in `queued` state

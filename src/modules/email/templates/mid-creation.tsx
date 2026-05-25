@@ -1,17 +1,16 @@
 /** @jsxImportSource react */
 import {
-  Body,
-  Button,
-  Container,
-  Head,
-  Heading,
-  Hr,
-  Html,
-  Preview,
-  Section,
-  Tailwind,
-  Text,
-} from '@react-email/components'
+  ButtonRow,
+  CTAButton,
+  Divider,
+  EmailShell,
+  H2,
+  KeyRow,
+  LinkFallback,
+  Panel,
+  Paragraph,
+  SectionLabel,
+} from './_brand'
 
 export type MidCreationEmailProps = {
   merchantName: string
@@ -21,7 +20,7 @@ export type MidCreationEmailProps = {
   merchantPortalUrl: string
   goLiveUrl: string
   availableAt: string
-  goLiveAvailabilityHours?: number
+  goLiveAvailabilityHours?: number | null
   testingLimits?: {
     collectionMin: number
     collectionMax: number
@@ -39,6 +38,7 @@ export function MidCreationEmail({
   merchantName,
   portalEmail,
   portalPassword,
+  portalMid,
   merchantPortalUrl,
   goLiveUrl,
   availableAt,
@@ -56,111 +56,76 @@ export function MidCreationEmail({
   },
 }: MidCreationEmailProps) {
   return (
-    <Html>
-      <Head />
-      <Preview>AssanPay merchant portal credentials for {merchantName}</Preview>
-      <Tailwind>
-        <Body className="bg-gray-50 font-sans">
-          <Container className="mx-auto my-10 max-w-xl rounded-lg bg-white p-6">
-            <Heading className="m-0 text-2xl font-semibold text-gray-900">
-              Merchant portal credentials
-            </Heading>
+    <EmailShell
+      preview={`Your AssanPay merchant portal is ready — ${merchantName}`}
+      eyebrow="Merchant portal access"
+      title="Your testing environment is live"
+      intro={`Welcome aboard, ${merchantName}. Your AssanPay merchant testing environment has been provisioned — sign in to start running test transactions.`}
+    >
+      <Panel tone="cream">
+        <SectionLabel>Login credentials</SectionLabel>
+        <KeyRow label="Portal email" value={portalEmail} mono />
+        <KeyRow label="Temporary password" value={portalPassword} mono />
+        <KeyRow label="MID" value={String(portalMid)} mono />
+      </Panel>
 
-            <Text className="mt-6 text-base text-gray-800">
-              Hi {merchantName},
-            </Text>
-            <Text className="text-base text-gray-800">
-              Your AssanPay merchant testing environment has been provisioned.
-              Use the credentials below to sign in and begin testing.
-            </Text>
+      <ButtonRow>
+        <CTAButton href={merchantPortalUrl}>Open merchant portal</CTAButton>
+      </ButtonRow>
 
-            <Section className="mt-6 rounded-md border border-gray-200 bg-gray-50 p-4">
-              <Text className="m-0 text-sm font-semibold text-gray-900">
-                Login Credentials
-              </Text>
-              <Text className="mb-0 mt-3 text-sm text-gray-800">
-                Email: {portalEmail}
-              </Text>
-              <Text className="m-0 text-sm text-gray-800">
-                Password: {portalPassword}
-              </Text>
-            </Section>
+      <Divider />
 
-            <Section className="mt-6 text-center">
-              <Button
-                href={merchantPortalUrl}
-                className="box-border rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white"
-              >
-                Open merchant portal
-              </Button>
-            </Section>
+      <Panel tone="plain">
+        <SectionLabel>Testing limits · per transaction</SectionLabel>
+        <KeyRow
+          label="Collection"
+          value={`${testingLimits.collectionMin.toLocaleString()} – ${testingLimits.collectionMax.toLocaleString()}`}
+        />
+        <KeyRow
+          label="Disbursement"
+          value={`${testingLimits.disbursementMin.toLocaleString()} – ${testingLimits.disbursementMax.toLocaleString()}`}
+        />
+      </Panel>
 
-            <Section className="mt-6 rounded-md border border-gray-200 bg-gray-50 p-4">
-              <Text className="m-0 text-sm font-semibold text-gray-900">
-                Testing Limits Per Transaction
-              </Text>
-              <Text className="mb-0 mt-3 text-sm text-gray-800">
-                Collection: {testingLimits.collectionMin}-
-                {testingLimits.collectionMax}
-              </Text>
-              <Text className="m-0 text-sm text-gray-800">
-                Disbursement: {testingLimits.disbursementMin}-
-                {testingLimits.disbursementMax}
-              </Text>
-            </Section>
+      <Panel tone="plain">
+        <SectionLabel>Applicable rates</SectionLabel>
+        <KeyRow label="E-wallets & QR" value={`${rates.eWallets}% + tax`} />
+        <KeyRow label="Card" value={`${rates.card}% + tax`} />
+        <KeyRow label="Bank settlement" value={`${rates.payout}%`} />
+      </Panel>
 
-            <Section className="mt-6 rounded-md border border-gray-200 bg-gray-50 p-4">
-              <Text className="m-0 text-sm font-semibold text-gray-900">
-                Applicable Rates
-              </Text>
-              <Text className="mb-0 mt-3 text-sm text-gray-800">
-                E-Wallets &amp; QR: {rates.eWallets}% + Tax
-              </Text>
-              <Text className="m-0 text-sm text-gray-800">
-                Card: {rates.card}% + Tax
-              </Text>
-              <Text className="m-0 text-sm text-gray-800">
-                Bank Settlement: {rates.payout}%
-              </Text>
-            </Section>
+      <Divider />
 
-            <Heading
-              as="h2"
-              className="mb-0 mt-8 text-lg font-semibold text-gray-900"
-            >
-              Go-Live
-            </Heading>
-            <Text className="text-base text-gray-800">
-              The Go-Live button works after {goLiveAvailabilityHours} hours
-              only. It unlocks on <strong>{availableAt}</strong>. Before that
-              time, the link will show these instructions only. After it
-              unlocks, selecting Go-Live starts the live activation process.
-            </Text>
+      <H2>Going live</H2>
+      <Paragraph>
+        {goLiveAvailabilityHours == null ? (
+          <>
+            The Go-Live button is available <strong>immediately</strong>.
+          </>
+        ) : (
+          <>
+            The Go-Live button unlocks{' '}
+            <strong>{goLiveAvailabilityHours} hours</strong> after this email —
+            on <strong>{availableAt}</strong>. Until then the link will show
+            these same instructions.
+          </>
+        )}{' '}
+        Before Go-Live can proceed, send the signed physical agreement to
+        AssanPay Head Office. This physical agreement copy is required for live
+        activation.
+      </Paragraph>
 
-            <Section className="mt-6 text-center">
-              <Button
-                href={goLiveUrl}
-                className="box-border rounded-md bg-green-600 px-5 py-3 text-sm font-medium text-white"
-              >
-                Go Live
-              </Button>
-            </Section>
+      <ButtonRow>
+        <CTAButton href={goLiveUrl} variant="secondary">
+          Go live
+        </CTAButton>
+      </ButtonRow>
 
-            <Text className="mt-6 text-sm text-gray-600">
-              If the Go-Live button does not work, copy and paste this URL into
-              your browser:
-            </Text>
-            <Text className="break-all text-sm text-blue-700">{goLiveUrl}</Text>
-
-            <Hr className="my-6 border-solid border-gray-200" />
-
-            <Text className="text-xs text-gray-500">
-              This email was sent from the AssanPay onboarding workflow.
-            </Text>
-          </Container>
-        </Body>
-      </Tailwind>
-    </Html>
+      <LinkFallback
+        href={goLiveUrl}
+        label="If the Go-Live button doesn’t work"
+      />
+    </EmailShell>
   )
 }
 

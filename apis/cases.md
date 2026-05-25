@@ -19,7 +19,7 @@ All case routes require authentication.
 Purpose:
 
 - Manually create a case for an existing merchant in an existing queue.
-- No merchant submission or case closure creates follow-up cases automatically.
+- Merchant submission and successful case closure can create follow-up cases when admin case-flow rules are configured.
 
 Authorization:
 

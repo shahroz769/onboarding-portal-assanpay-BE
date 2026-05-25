@@ -1,6 +1,24 @@
 import { z } from 'zod'
 
 const defaultCookieSecure = Bun.env.NODE_ENV === 'production' ? 'true' : 'false'
+const emailAddressSchema = z.string().email()
+const domainSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i,
+  )
+
+function normalizeEmailAddressOrDomain(value: string, ctx: z.RefinementCtx) {
+  const trimmed = value.trim()
+  if (emailAddressSchema.safeParse(trimmed).success) return trimmed
+  if (domainSchema.safeParse(trimmed).success) return `support@${trimmed}`
+
+  ctx.addIssue({
+    code: 'custom',
+    message: 'Expected an email address or domain.',
+  })
+  return z.NEVER
+}
 
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
@@ -26,8 +44,12 @@ const envSchema = z.object({
   EMAIL_FROM: z
     .string()
     .min(1)
-    .default('Onboarding Portal <onboarding@resend.dev>'),
-  EMAIL_REPLY_TO: z.string().email().optional(),
+    .default('AssanPay Onboarding <onboarding@tech.assanpaybd.com>'),
+  EMAIL_REPLY_TO: z
+    .string()
+    .min(1)
+    .transform(normalizeEmailAddressOrDomain)
+    .optional(),
   EMAIL_TEST_TO: z.string().email().optional(),
   PUBLIC_APP_URL: z.string().url().default('http://localhost:5173'),
   RESUBMISSION_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),

@@ -177,6 +177,16 @@ export const saveFieldReviewsSchema = z
 
 export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>
 
+export const saveDocumentReviewSubMerchantSchema = z
+  .object({
+    subMerchantId: z.string().uuid(),
+  })
+  .strict()
+
+export type SaveDocumentReviewSubMerchantInput = z.infer<
+  typeof saveDocumentReviewSubMerchantSchema
+>
+
 // ─── Close Unsuccessful Schema ──────────────────────────────────────────────
 
 export const closeUnsuccessfulSchema = z
@@ -224,16 +234,6 @@ export type SelectSubMerchantFormInput = z.infer<
   typeof selectSubMerchantFormSchema
 >
 
-export const subMerchantFormEmailResponseSchema = z.object({
-  status: z.enum(['sent', 'failed']),
-  emailLogId: z.string().uuid(),
-  error: z.string().optional(),
-})
-
-export type SubMerchantFormEmailResponse = z.infer<
-  typeof subMerchantFormEmailResponseSchema
->
-
 export const sendAgreementEmailSchema = z
   .object({
     remarks: z.string().max(2000).optional().nullable(),
@@ -251,6 +251,16 @@ export const agreementEmailResponseSchema = z.object({
 
 export type AgreementEmailResponse = z.infer<
   typeof agreementEmailResponseSchema
+>
+
+export const saveMidCreationDetailsSchema = z
+  .object({
+    portalMid: z.coerce.number().int().positive(),
+  })
+  .strict()
+
+export type SaveMidCreationDetailsInput = z.infer<
+  typeof saveMidCreationDetailsSchema
 >
 
 export const sendMidCreationEmailSchema = z

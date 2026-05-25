@@ -14,6 +14,8 @@ import {
   listCasesQuerySchema,
   markLiveLimitsAppliedSchema,
   markTestingLimitsAppliedSchema,
+  saveMidCreationDetailsSchema,
+  saveDocumentReviewSubMerchantSchema,
   saveFieldReviewsSchema,
   saveWordpressWebsiteSchema,
   sendAgreementEmailSchema,
@@ -31,7 +33,9 @@ import type {
   ListCasesQuery,
   MarkLiveLimitsAppliedInput,
   MarkTestingLimitsAppliedInput,
+  SaveDocumentReviewSubMerchantInput,
   SaveFieldReviewsInput,
+  SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
   SendAgreementEmailInput,
   SendMidCreationEmailInput,
@@ -53,6 +57,8 @@ import {
   listCases,
   markLiveLimitsApplied,
   markTestingLimitsApplied,
+  saveMidCreationDetails,
+  saveDocumentReviewSubMerchant,
   saveFieldReviews,
   saveWordpressWebsiteCase,
   selectSubMerchantForm,
@@ -62,9 +68,16 @@ import {
   sendForResubmission,
   sendAgreementForClientUpload,
   sendMidCreationCredentialsEmail,
-  sendSubMerchantFormEmail,
   uploadAgreementFinalAgreement,
+  uploadPhysicalAgreementCopy,
+  uploadSubMerchantEmailProof,
   uploadSubMerchantFinalForm,
+  getResubmissionEmailPreview,
+  confirmResubmissionEmailManual,
+  getAgreementEmailPreview,
+  confirmAgreementEmailManual,
+  getMidCreationEmailPreview,
+  confirmMidCreationEmailManual,
 } from './cases.service'
 
 export const caseRoutes = new Hono<AppEnv>()
@@ -196,6 +209,18 @@ caseRoutes.post(
 )
 
 caseRoutes.post(
+  '/:id/mid-creation/save',
+  zodValidator('json', saveMidCreationDetailsSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SaveMidCreationDetailsInput
+    const result = await saveMidCreationDetails(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+caseRoutes.post(
   '/:id/live/limits-applied',
   zodValidator('json', markLiveLimitsAppliedSchema),
   async (c) => {
@@ -221,6 +246,9 @@ caseRoutes.post('/:id/wordpress-website', async (c) => {
   const screenshots = formData
     .getAll('screenshots')
     .filter((value): value is File => value instanceof File)
+  const subMerchantLogoScreenshots = formData
+    .getAll('subMerchantLogoScreenshots')
+    .filter((value): value is File => value instanceof File)
 
   const parsedInput = saveWordpressWebsiteSchema.safeParse({
     clonedWebsiteLink,
@@ -240,6 +268,7 @@ caseRoutes.post('/:id/wordpress-website', async (c) => {
   const result = await saveWordpressWebsiteCase(id, auth.userId, {
     ...input,
     screenshots,
+    subMerchantLogoScreenshots,
   })
   return c.json(result)
 })
@@ -252,6 +281,20 @@ caseRoutes.put(
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as SaveFieldReviewsInput
     const result = await saveFieldReviews(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+caseRoutes.put(
+  '/:id/document-review/sub-merchant',
+  zodValidator('json', saveDocumentReviewSubMerchantSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid(
+      'json' as never,
+    ) as SaveDocumentReviewSubMerchantInput
+    const result = await saveDocumentReviewSubMerchant(id, auth.userId, input)
     return c.json(result)
   },
 )
@@ -321,11 +364,26 @@ caseRoutes.post('/:id/sub-merchant-form/final-form', async (c) => {
   return c.json(result)
 })
 
-// POST /api/cases/:id/sub-merchant-form/send-mail — Email final form
-caseRoutes.post('/:id/sub-merchant-form/send-mail', async (c) => {
+// POST /api/cases/:id/sub-merchant-form/email-proof — Upload manual Gmail proof
+caseRoutes.post('/:id/sub-merchant-form/email-proof', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+
+  if (!(file instanceof File)) {
+    throw new AppError(400, 'Email screenshot is required.')
+  }
+
   const auth = c.get('auth')
   const id = c.req.param('id')
-  const result = await sendSubMerchantFormEmail(id, auth.userId)
+  const result = await uploadSubMerchantEmailProof(id, auth.userId, { file })
   return c.json(result)
 })
 
@@ -352,6 +410,29 @@ caseRoutes.post('/:id/agreement/final-agreement', async (c) => {
   return c.json(result)
 })
 
+// POST /api/cases/:id/physical-agreement/scanned-copy - Upload physical signed agreement copy
+caseRoutes.post('/:id/physical-agreement/scanned-copy', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+
+  if (!(file instanceof File)) {
+    throw new AppError(400, 'Physical agreement copy is required.')
+  }
+
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await uploadPhysicalAgreementCopy(id, auth.userId, { file })
+  return c.json(result)
+})
+
 // POST /api/cases/:id/agreement/send-mail - Send agreement upload link
 caseRoutes.post(
   '/:id/agreement/send-mail',
@@ -366,9 +447,9 @@ caseRoutes.post(
 )
 
 // GET /api/cases/:id/comments — List comments for a case
-// POST /api/cases/:id/mid-creation/send-mail - Send MID credentials and Go-Live link
+// POST /api/cases/:id/testing/send-credentials-mail - Send credentials and Go-Live link
 caseRoutes.post(
-  '/:id/mid-creation/send-mail',
+  '/:id/testing/send-credentials-mail',
   zodValidator('json', sendMidCreationEmailSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -378,6 +459,117 @@ caseRoutes.post(
     return c.json(result)
   },
 )
+
+// POST /api/cases/:id/send-for-resubmission/preview - Get resubmission email preview
+caseRoutes.post('/:id/send-for-resubmission/preview', async (c) => {
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await getResubmissionEmailPreview(id, auth.userId)
+  return c.json(result)
+})
+
+// POST /api/cases/:id/send-for-resubmission/manual - Confirm manual resubmission email
+caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+  const tokenId = formData.get('tokenId')
+  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await confirmResubmissionEmailManual(id, auth.userId, { file, tokenId })
+  return c.json(result)
+})
+
+// POST /api/cases/:id/agreement/send-mail/preview - Get agreement email preview
+caseRoutes.post(
+  '/:id/agreement/send-mail/preview',
+  zodValidator('json', sendAgreementEmailSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SendAgreementEmailInput
+    const result = await getAgreementEmailPreview(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+// POST /api/cases/:id/agreement/send-mail/manual - Confirm manual agreement email
+caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+  const tokenId = formData.get('tokenId')
+  const remarks = formData.get('remarks')
+  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await confirmAgreementEmailManual(id, auth.userId, {
+    tokenId,
+    remarks: typeof remarks === 'string' ? remarks : null,
+    file,
+  })
+  return c.json(result)
+})
+
+// POST /api/cases/:id/testing/send-credentials-mail/preview - Get mid-creation email preview
+caseRoutes.post(
+  '/:id/testing/send-credentials-mail/preview',
+  zodValidator('json', sendMidCreationEmailSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SendMidCreationEmailInput
+    const result = await getMidCreationEmailPreview(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+// POST /api/cases/:id/testing/send-credentials-mail/manual - Confirm manual mid-creation email
+caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+  const tokenId = formData.get('tokenId')
+  const email = formData.get('email')
+  const password = formData.get('password')
+  const portalMid = formData.get('portalMid')
+  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  if (typeof email !== 'string') throw new AppError(400, 'email is required.')
+  if (typeof password !== 'string') throw new AppError(400, 'password is required.')
+  const parsed = sendMidCreationEmailSchema.safeParse({
+    email,
+    password,
+    portalMid: Number(portalMid),
+  })
+  if (!parsed.success) throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await confirmMidCreationEmailManual(id, auth.userId, {
+    ...parsed.data,
+    tokenId,
+    file,
+  })
+  return c.json(result)
+})
 
 caseRoutes.get('/:id/comments', async (c) => {
   const id = c.req.param('id')

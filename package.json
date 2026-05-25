@@ -10,7 +10,7 @@
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.8",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.21",
+    "hono": "^4.12.23",
     "hono-rate-limiter": "^0.5.3",
     "jose": "^6.2.3",
     "nanoid": "^5.1.11",

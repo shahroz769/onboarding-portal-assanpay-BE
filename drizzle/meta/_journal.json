@@ -169,6 +169,27 @@
       "when": 1778371200000,
       "tag": "0023_configuration",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1779665400000,
+      "tag": "0024_document_review_submerchant",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0025_sub_merchant_seller_code",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1780099200000,
+      "tag": "0026_case_flow_rules",
+      "breakpoints": true
     }
   ]
 }

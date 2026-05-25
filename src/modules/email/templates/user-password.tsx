@@ -1,17 +1,12 @@
 /** @jsxImportSource react */
 import {
-  Body,
-  Button,
-  Container,
-  Head,
-  Heading,
-  Hr,
-  Html,
-  Preview,
-  Section,
-  Tailwind,
-  Text,
-} from '@react-email/components'
+  ButtonRow,
+  CTAButton,
+  EmailShell,
+  ExpiryNote,
+  LinkFallback,
+  Paragraph,
+} from './_brand'
 
 export type UserPasswordEmailProps = {
   name: string
@@ -27,54 +22,46 @@ export function UserPasswordEmail({
   purpose,
 }: UserPasswordEmailProps) {
   const isInvite = purpose === 'invite'
-  const title = isInvite ? 'Set up your account' : 'Reset your password'
+
+  const title = isInvite ? 'Welcome to AssanPay' : 'Reset your password'
+  const eyebrow = isInvite ? 'Account invitation' : 'Password reset'
+  const intro = isInvite
+    ? 'Your onboarding portal account is ready. Choose a password using the secure link below to finish setting things up.'
+    : 'We received a request to reset the password on your onboarding portal account. Use the secure link below to choose a new one.'
   const preview = isInvite
-    ? 'Your AssanPay onboarding portal account is ready'
-    : 'Reset your AssanPay onboarding portal password'
+    ? `${name}, set up your AssanPay onboarding portal account`
+    : `${name}, reset your AssanPay onboarding portal password`
+  const ctaLabel = isInvite ? 'Set up account' : 'Reset password'
 
   return (
-    <Html>
-      <Head />
-      <Preview>{preview}</Preview>
-      <Tailwind>
-        <Body className="bg-gray-50 font-sans">
-          <Container className="mx-auto my-10 max-w-xl rounded-lg bg-white p-6">
-            <Heading className="m-0 text-2xl font-semibold text-gray-900">
-              {title}
-            </Heading>
+    <EmailShell
+      preview={preview}
+      eyebrow={eyebrow}
+      title={title}
+      intro={intro}
+    >
+      <Paragraph>Hi {name},</Paragraph>
+      <Paragraph>
+        {isInvite
+          ? 'Set your password and you’ll be ready to sign in to the onboarding portal. The link is single-use and only valid for a short window.'
+          : 'You can choose a new password using the link below. If you didn’t request a reset, you can safely ignore this email — your current password will continue to work.'}
+      </Paragraph>
 
-            <Text className="mt-6 text-base text-gray-800">Hi {name},</Text>
-            <Text className="text-base text-gray-800">
-              {isInvite
-                ? 'Your onboarding portal account has been created. Set your password using the secure link below.'
-                : 'Use the secure link below to set a new password for your onboarding portal account.'}
-            </Text>
+      <ButtonRow>
+        <CTAButton href={actionUrl}>{ctaLabel}</CTAButton>
+      </ButtonRow>
 
-            <Section className="mt-6 text-center">
-              <Button
-                href={actionUrl}
-                className="rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white"
-              >
-                {title}
-              </Button>
-            </Section>
-
-            <Text className="mt-6 text-sm text-gray-600">
-              This link expires on <strong>{expiresAt}</strong> and can only be
-              used once.
-            </Text>
-            <Text className="break-all text-sm text-blue-700">
-              {actionUrl}
-            </Text>
-
-            <Hr className="my-6 border-gray-200" />
-
-            <Text className="text-xs text-gray-500">
-              This email was sent from the AssanPay onboarding portal.
-            </Text>
-          </Container>
-        </Body>
-      </Tailwind>
-    </Html>
+      <ExpiryNote expiresAt={expiresAt} />
+      <LinkFallback href={actionUrl} />
+    </EmailShell>
   )
 }
+
+UserPasswordEmail.PreviewProps = {
+  name: 'Jane Owner',
+  actionUrl: 'https://app.example.com/auth/invite/abc123',
+  expiresAt: 'in 24 hours',
+  purpose: 'invite',
+} satisfies UserPasswordEmailProps
+
+export default UserPasswordEmail
