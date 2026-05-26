@@ -62,7 +62,10 @@ import {
   assertCloseBlockersSatisfied,
   triggerCasesAfterSuccessfulClose,
 } from './case-flow.service'
-import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
+import {
+  getRequiredDocumentTypes,
+  type MerchantDocumentType,
+} from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
@@ -1587,7 +1590,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .where(eq(cases.id, caseId))
   }
 
-  let agreementRecord = agreement
+  let agreementRecord: typeof agreement | null = agreement
   if (!agreementRecord && queue.slug === AGREEMENT_QUEUE_SLUG) {
     const draft = await getConfiguredAgreementDraftForMerchantType(
       merchant.merchantType,
@@ -3934,7 +3937,12 @@ function buildMidCreationEmailBody(params: {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours: number | null
-  testingLimits: { transactionLimit: number; dailyLimit: number; monthlyLimit: number }
+  testingLimits: {
+    collectionMin: number
+    collectionMax: number
+    disbursementMin: number
+    disbursementMax: number
+  }
   cardRate: string
   eWalletsRate: string
   payoutRate: string
@@ -3963,9 +3971,8 @@ Password: ${portalPassword}
 MID: ${portalMid}
 
 Testing Limits:
-• Per Transaction: PKR ${testingLimits.transactionLimit.toLocaleString()}
-• Daily: PKR ${testingLimits.dailyLimit.toLocaleString()}
-• Monthly: PKR ${testingLimits.monthlyLimit.toLocaleString()}
+• Collection: PKR ${testingLimits.collectionMin.toLocaleString()} - PKR ${testingLimits.collectionMax.toLocaleString()}
+• Disbursement: PKR ${testingLimits.disbursementMin.toLocaleString()} - PKR ${testingLimits.disbursementMax.toLocaleString()}
 
 Rates:
 • Card: ${cardRate}
@@ -5532,7 +5539,11 @@ export async function getResubmissionContext(
     .filter((id): id is string => id !== null)
   const docsById = new Map<
     string,
-    { documentType: string; originalName: string; currentDocumentUrl?: string }
+    {
+      documentType: MerchantDocumentType
+      originalName: string
+      currentDocumentUrl?: string
+    }
   >()
   if (docIds.length > 0) {
     const docs = await db
@@ -5562,11 +5573,7 @@ export async function getResubmissionContext(
     if (isDocumentFieldName(review.fieldName)) {
       const docId = getDocumentIdFromFieldName(review.fieldName)
       const doc = docId ? docsById.get(docId) : null
-      const label = doc
-        ? DOCUMENT_TYPE_LABELS[
-            doc.documentType as keyof typeof DOCUMENT_TYPE_LABELS
-          ]
-        : 'Uploaded document'
+      const label = doc ? DOCUMENT_TYPE_LABELS[doc.documentType] : 'Uploaded document'
       return {
         fieldName: review.fieldName,
         label,

@@ -302,13 +302,14 @@ export async function listUsers(query: ListUsersQuery = {}) {
 
   if (query.search) {
     const term = `%${query.search}%`
-    conditions.push(
-      or(
-        ilike(users.name, term),
-        ilike(users.email, term),
-        ilike(users.username, term),
-      ),
+    const searchCondition = or(
+      ilike(users.name, term),
+      ilike(users.email, term),
+      ilike(users.username, term),
     )
+    if (searchCondition) {
+      conditions.push(searchCondition)
+    }
   }
 
   const roleTypes = (query.roleType?.split(',').filter(Boolean) ??

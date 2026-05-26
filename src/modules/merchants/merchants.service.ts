@@ -418,7 +418,10 @@ export async function listMerchants(query: ListMerchantsQuery) {
     if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
       searchConditions.push(eq(merchants.merchantNumber, numericSearch))
     }
-    conditions.push(or(...searchConditions))
+    const searchCondition = or(...searchConditions)
+    if (searchCondition) {
+      conditions.push(searchCondition)
+    }
   }
 
   if (query.onboardingStage) {
