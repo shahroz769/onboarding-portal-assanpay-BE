@@ -1,5 +1,6 @@
 {
   "name": "onboarding-portal-assanpay-BE",
+  "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "db:generate": "drizzle-kit generate",
