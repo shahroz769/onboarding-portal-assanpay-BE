@@ -560,7 +560,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
     password,
     portalMid: Number(portalMid),
   })
-  if (!parsed.success) throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
+  if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid input.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmMidCreationEmailManual(id, auth.userId, {
