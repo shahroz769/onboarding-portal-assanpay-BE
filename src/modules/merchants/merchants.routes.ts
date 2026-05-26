@@ -7,19 +7,26 @@ import type { AppEnv } from '../../types/auth'
 import {
   bulkIdsSchema,
   bulkPrioritySchema,
+  bulkTerminateMerchantsSchema,
   listMerchantsQuerySchema,
-  updatePrioritySchema
-  
-  
-  
-  
+  terminateMerchantSchema,
+  updatePrioritySchema,
 } from './merchants.schemas'
-import type {BulkIdsInput, BulkPriorityInput, ListMerchantsQuery, UpdatePriorityInput} from './merchants.schemas';
+import type {
+  BulkIdsInput,
+  BulkPriorityInput,
+  BulkTerminateMerchantsInput,
+  ListMerchantsQuery,
+  TerminateMerchantInput,
+  UpdatePriorityInput,
+} from './merchants.schemas'
 import {
   bulkSoftDeleteMerchants,
+  bulkTerminateMerchants,
   bulkUpdatePriority,
   listMerchants,
   softDeleteMerchant,
+  terminateMerchant,
   updateMerchantPriority,
 } from './merchants.service'
 
@@ -39,6 +46,20 @@ merchantRoutes.get(
   },
 )
 
+// PATCH /api/merchants/:id/terminate — Terminate merchant and close open cases
+merchantRoutes.patch(
+  '/:id/terminate',
+  requireRoles('admin'),
+  zodValidator('json', terminateMerchantSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as TerminateMerchantInput
+    const result = await terminateMerchant(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
 // PATCH /api/merchants/:id/priority — Update priority (admin, supervisor)
 merchantRoutes.patch(
   '/:id/priority',
@@ -48,6 +69,19 @@ merchantRoutes.patch(
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as UpdatePriorityInput
     const result = await updateMerchantPriority(id, input)
+    return c.json(result)
+  },
+)
+
+// POST /api/merchants/bulk-terminate — Bulk terminate merchants and close open cases
+merchantRoutes.post(
+  '/bulk-terminate',
+  requireRoles('admin'),
+  zodValidator('json', bulkTerminateMerchantsSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const input = c.req.valid('json' as never) as BulkTerminateMerchantsInput
+    const result = await bulkTerminateMerchants(input.ids, auth.userId, input)
     return c.json(result)
   },
 )
@@ -77,8 +111,10 @@ merchantRoutes.post(
   requireRoles('admin', 'supervisor'),
   zodValidator('json', bulkPrioritySchema),
   async (c) => {
-    const { ids, priority } = c.req.valid('json' as never) as BulkPriorityInput
-    const result = await bulkUpdatePriority(ids, priority)
+    const { ids, priority, note } = c.req.valid(
+      'json' as never,
+    ) as BulkPriorityInput
+    const result = await bulkUpdatePriority(ids, priority, note)
     return c.json(result)
   },
 )

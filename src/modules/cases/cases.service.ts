@@ -120,7 +120,11 @@ const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
 const RESUBMISSION_EMAIL_PROOF_KIND = 'resubmission_email_proof'
 const AGREEMENT_EMAIL_PROOF_KIND = 'agreement_email_proof'
 const MID_CREATION_EMAIL_PROOF_KIND = 'mid_creation_email_proof'
-const EMAIL_PROOF_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const EMAIL_PROOF_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+])
 const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 const MAX_PHYSICAL_AGREEMENT_BYTES = 10 * 1024 * 1024
 const PHYSICAL_AGREEMENT_MIME_TYPES = new Set([
@@ -2278,6 +2282,29 @@ export async function advanceStage(caseId: string, userId: string) {
         merchantId: caseData.merchantId,
         queueId: caseData.queueId,
       })
+
+      if (queue?.slug === TESTING_QUEUE_SLUG) {
+        await tx
+          .update(merchants)
+          .set({
+            status: 'testing',
+            onboardingStage: 'testing',
+            updatedAt: now,
+          })
+          .where(eq(merchants.id, caseData.merchantId))
+      }
+
+      if (queue?.slug === LIVE_QUEUE_SLUG) {
+        await tx
+          .update(merchants)
+          .set({
+            status: 'live',
+            onboardingStage: 'live',
+            liveAt: now,
+            updatedAt: now,
+          })
+          .where(eq(merchants.id, caseData.merchantId))
+      }
     }
 
     return updatedRows
@@ -3413,25 +3440,42 @@ export async function getResubmissionEmailPreview(
 
   if (!row) throw new AppError(404, 'Case not found.')
   if (row.queueSlug !== 'documents-review') {
-    throw new AppError(400, 'Resubmission is only available for documents-review cases.')
+    throw new AppError(
+      400,
+      'Resubmission is only available for documents-review cases.',
+    )
   }
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send for resubmission.')
   }
   if (row.status !== 'working') {
-    throw new AppError(400, 'The case must be in the working stage to send for resubmission.')
+    throw new AppError(
+      400,
+      'The case must be in the working stage to send for resubmission.',
+    )
   }
   if (!row.merchantSubmitterEmail) {
     throw new AppError(400, 'No submitter email is on file for this merchant.')
   }
 
   const rejectedReviews = await db
-    .select({ fieldName: caseFieldReviews.fieldName, remarks: caseFieldReviews.remarks })
+    .select({
+      fieldName: caseFieldReviews.fieldName,
+      remarks: caseFieldReviews.remarks,
+    })
     .from(caseFieldReviews)
-    .where(and(eq(caseFieldReviews.caseId, caseId), eq(caseFieldReviews.status, 'rejected')))
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        eq(caseFieldReviews.status, 'rejected'),
+      ),
+    )
 
   if (rejectedReviews.length === 0) {
-    throw new AppError(400, 'There are no rejected fields to send for resubmission.')
+    throw new AppError(
+      400,
+      'There are no rejected fields to send for resubmission.',
+    )
   }
 
   const docIds = rejectedReviews
@@ -3440,7 +3484,10 @@ export async function getResubmissionEmailPreview(
   const documentTypeById = new Map<string, string>()
   if (docIds.length > 0) {
     const docs = await db
-      .select({ id: merchantDocuments.id, documentType: merchantDocuments.documentType })
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+      })
       .from(merchantDocuments)
       .where(inArray(merchantDocuments.id, docIds))
     for (const d of docs) documentTypeById.set(d.id, d.documentType)
@@ -3464,8 +3511,16 @@ export async function getResubmissionEmailPreview(
   })
 
   const issued = existingToken
-    ? { token: existingToken.token, tokenId: existingToken.id, expiresAt: existingToken.expiresAt }
-    : await issueToken(caseId, userId, linkDeadlines.documentsReviewResubmissionHours)
+    ? {
+        token: existingToken.token,
+        tokenId: existingToken.id,
+        expiresAt: existingToken.expiresAt,
+      }
+    : await issueToken(
+        caseId,
+        userId,
+        linkDeadlines.documentsReviewResubmissionHours,
+      )
 
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const subject = 'Action required to update your onboarding submission'
@@ -3493,7 +3548,8 @@ function buildResubmissionEmailBody(params: {
   resubmissionUrl: string
   expiresAt: string
 }): string {
-  const { merchantName, ownerName, rejections, resubmissionUrl, expiresAt } = params
+  const { merchantName, ownerName, rejections, resubmissionUrl, expiresAt } =
+    params
   const itemLines = rejections
     .map((r) => `• ${r.label}${r.remarks ? `\n  ${r.remarks}` : ''}`)
     .join('\n')
@@ -3550,9 +3606,12 @@ export async function confirmResubmissionEmailManual(
     .limit(1)
 
   if (!row) throw new AppError(404, 'Case not found.')
-  if (row.ownerId !== userId) throw new AppError(403, 'Only the case owner can confirm this.')
-  if (row.status !== 'working') throw new AppError(400, 'The case must be in the working stage.')
-  if (!row.merchantSubmitterEmail) throw new AppError(400, 'No submitter email on file.')
+  if (row.ownerId !== userId)
+    throw new AppError(403, 'Only the case owner can confirm this.')
+  if (row.status !== 'working')
+    throw new AppError(400, 'The case must be in the working stage.')
+  if (!row.merchantSubmitterEmail)
+    throw new AppError(400, 'No submitter email on file.')
 
   const tokenRow = await db.query.caseResubmissionTokens.findFirst({
     where: and(
@@ -3564,9 +3623,17 @@ export async function confirmResubmissionEmailManual(
   if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
 
   const rejectedReviews = await db
-    .select({ fieldName: caseFieldReviews.fieldName, remarks: caseFieldReviews.remarks })
+    .select({
+      fieldName: caseFieldReviews.fieldName,
+      remarks: caseFieldReviews.remarks,
+    })
     .from(caseFieldReviews)
-    .where(and(eq(caseFieldReviews.caseId, caseId), eq(caseFieldReviews.status, 'rejected')))
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        eq(caseFieldReviews.status, 'rejected'),
+      ),
+    )
 
   const docIds = rejectedReviews
     .map((r) => getDocumentIdFromFieldName(r.fieldName))
@@ -3574,7 +3641,10 @@ export async function confirmResubmissionEmailManual(
   const documentTypeById = new Map<string, string>()
   if (docIds.length > 0) {
     const docs = await db
-      .select({ id: merchantDocuments.id, documentType: merchantDocuments.documentType })
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+      })
       .from(merchantDocuments)
       .where(inArray(merchantDocuments.id, docIds))
     for (const d of docs) documentTypeById.set(d.id, d.documentType)
@@ -3591,14 +3661,20 @@ export async function confirmResubmissionEmailManual(
     qcEnabled: false,
   })
   const awaitingStage = stages.find((s) => s.slug === 'awaiting_client') ?? null
-  if (!awaitingStage) throw new AppError(500, 'No awaiting_client stage configured.')
+  if (!awaitingStage)
+    throw new AppError(500, 'No awaiting_client stage configured.')
 
   const [reservedCase] = await db
     .update(cases)
-    .set({ status: 'awaiting_client', currentStageId: awaitingStage.id, updatedAt: new Date() })
+    .set({
+      status: 'awaiting_client',
+      currentStageId: awaitingStage.id,
+      updatedAt: new Date(),
+    })
     .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
     .returning({ id: cases.id })
-  if (!reservedCase) throw new AppError(409, 'This case has already been sent for resubmission.')
+  if (!reservedCase)
+    throw new AppError(409, 'This case has already been sent for resubmission.')
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
@@ -3675,7 +3751,10 @@ export async function getAgreementEmailPreview(
 
   const remarks = input.remarks?.trim() || null
   if (details.clientAgreementFileId && !remarks) {
-    throw new AppError(400, 'Remarks are required when asking the client to resubmit the agreement.')
+    throw new AppError(
+      400,
+      'Remarks are required when asking the client to resubmit the agreement.',
+    )
   }
 
   const linkDeadlines = await getLinkDeadlineSettings()
@@ -3690,7 +3769,11 @@ export async function getAgreementEmailPreview(
   })
 
   const issued = existingToken
-    ? { token: existingToken.token, tokenId: existingToken.id, expiresAt: existingToken.expiresAt }
+    ? {
+        token: existingToken.token,
+        tokenId: existingToken.id,
+        expiresAt: existingToken.expiresAt,
+      }
     : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
 
   const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
@@ -3774,14 +3857,20 @@ export async function confirmAgreementEmailManual(
       eq(queueStages.slug, 'awaiting_client'),
     ),
   })
-  if (!awaitingStage) throw new AppError(500, 'No awaiting_client stage configured.')
+  if (!awaitingStage)
+    throw new AppError(500, 'No awaiting_client stage configured.')
 
   const [reservedCase] = await db
     .update(cases)
-    .set({ status: 'awaiting_client', currentStageId: awaitingStage.id, updatedAt: new Date() })
+    .set({
+      status: 'awaiting_client',
+      currentStageId: awaitingStage.id,
+      updatedAt: new Date(),
+    })
     .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
     .returning({ id: cases.id })
-  if (!reservedCase) throw new AppError(409, 'This case has already been sent to the client.')
+  if (!reservedCase)
+    throw new AppError(409, 'This case has already been sent to the client.')
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
@@ -3846,7 +3935,10 @@ export async function getMidCreationEmailPreview(
 
   const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
   if (!savedPortalMid) {
-    throw new AppError(400, 'Save the Portal MID in MID Creation before sending credentials.')
+    throw new AppError(
+      400,
+      'Save the Portal MID in MID Creation before sending credentials.',
+    )
   }
   if (savedPortalMid !== input.portalMid) {
     throw new AppError(400, 'Credentials must use the saved Portal MID.')
@@ -3862,7 +3954,8 @@ export async function getMidCreationEmailPreview(
     linkDeadlines.goLiveAvailabilityHours == null
       ? now // immediately available when no delay configured
       : new Date(
-          now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
+          now.getTime() +
+            linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
         )
 
   // Reuse an unconsumed pending go-live token
@@ -3934,7 +4027,11 @@ function buildMidCreationEmailBody(params: {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours: number | null
-  testingLimits: { transactionLimit: number; dailyLimit: number; monthlyLimit: number }
+  testingLimits: {
+    transactionLimit: number
+    dailyLimit: number
+    monthlyLimit: number
+  }
   cardRate: string
   eWalletsRate: string
   payoutRate: string
@@ -3954,7 +4051,9 @@ function buildMidCreationEmailBody(params: {
     payoutRate,
   } = params
   const goLiveAvailabilityLabel =
-    goLiveAvailabilityHours == null ? 'immediately' : `after ${goLiveAvailabilityHours}h`
+    goLiveAvailabilityHours == null
+      ? 'immediately'
+      : `after ${goLiveAvailabilityHours}h`
   return `AssanPay Merchant Portal Credentials for ${merchantName}
 
 Portal Login: ${merchantPortalUrl}
@@ -3996,7 +4095,10 @@ export async function confirmMidCreationEmailManual(
 
   const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
   if (!savedPortalMid) {
-    throw new AppError(400, 'Save the Portal MID in MID Creation before sending credentials.')
+    throw new AppError(
+      400,
+      'Save the Portal MID in MID Creation before sending credentials.',
+    )
   }
   if (savedPortalMid !== input.portalMid) {
     throw new AppError(400, 'Credentials must use the saved Portal MID.')
@@ -4739,7 +4841,8 @@ export async function sendMidCreationCredentialsEmail(
     linkDeadlines.goLiveAvailabilityHours == null
       ? now
       : new Date(
-          now.getTime() + linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
+          now.getTime() +
+            linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
         )
   const token = generatePublicTokenString()
 
@@ -4916,7 +5019,10 @@ async function loadPhysicalAgreementCase(caseId: string, userId: string) {
     )
   }
   if (row.ownerId !== userId) {
-    throw new AppError(403, 'Only the case owner can upload the agreement copy.')
+    throw new AppError(
+      403,
+      'Only the case owner can upload the agreement copy.',
+    )
   }
   if (row.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
@@ -4947,7 +5053,10 @@ async function ensurePhysicalAgreementCaseForMerchant(
   }
 
   const existing = await tx.query.cases.findFirst({
-    where: and(eq(cases.merchantId, input.merchantId), eq(cases.queueId, queue.id)),
+    where: and(
+      eq(cases.merchantId, input.merchantId),
+      eq(cases.queueId, queue.id),
+    ),
     columns: { id: true, caseNumber: true },
   })
   if (existing) return existing
@@ -4960,7 +5069,10 @@ async function ensurePhysicalAgreementCaseForMerchant(
   })
   const initialStage = stages[0]
   if (!initialStage) {
-    throw new AppError(500, 'No initial stage configured for Physical Agreement queue.')
+    throw new AppError(
+      500,
+      'No initial stage configured for Physical Agreement queue.',
+    )
   }
 
   const merchant = await tx.query.merchants.findFirst({

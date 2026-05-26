@@ -62,6 +62,7 @@ export const merchantStatusEnum = pgEnum('merchant_status', [
   'testing',
   'live',
   'suspended',
+  'terminated',
 ])
 
 export const kinRelationEnum = pgEnum('kin_relation', [

@@ -2,6 +2,16 @@ import { z } from 'zod'
 
 const defaultCookieSecure = Bun.env.NODE_ENV === 'production' ? 'true' : 'false'
 const emailAddressSchema = z.string().email()
+const corsOriginSchema = z
+  .string()
+  .min(1)
+  .transform((value) =>
+    value
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  )
+  .pipe(z.array(z.string().url()).min(1))
 const domainSchema = z
   .string()
   .regex(
@@ -36,7 +46,7 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default(defaultCookieSecure)
     .transform((value) => value === 'true'),
-  CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
+  CORS_ORIGIN: corsOriginSchema.default(['http://localhost:5173']),
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),

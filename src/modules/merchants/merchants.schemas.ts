@@ -495,6 +495,7 @@ export const merchantStatusValues = [
   'testing',
   'live',
   'suspended',
+  'terminated',
 ] as const
 
 export const priorityValues = ['normal', 'high'] as const
@@ -549,5 +550,24 @@ export type BulkIdsInput = z.infer<typeof bulkIdsSchema>
 export const bulkPrioritySchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
   priority: z.enum(priorityValues),
+  note: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((v) => v || null),
 })
 export type BulkPriorityInput = z.infer<typeof bulkPrioritySchema>
+
+export const terminateMerchantSchema = z.object({
+  reason: z.string().trim().min(1).max(1000),
+})
+export type TerminateMerchantInput = z.infer<typeof terminateMerchantSchema>
+
+export const bulkTerminateMerchantsSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+  reason: z.string().trim().min(1).max(1000),
+})
+export type BulkTerminateMerchantsInput = z.infer<
+  typeof bulkTerminateMerchantsSchema
+>

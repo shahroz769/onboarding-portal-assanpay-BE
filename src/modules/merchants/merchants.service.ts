@@ -8,12 +8,19 @@ import {
   inArray,
   isNull,
   lt,
+  ne,
   or,
   sql,
 } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
-import { cases, merchantDocuments, merchants } from '../../db/schema'
+import {
+  caseHistory,
+  cases,
+  merchantDocuments,
+  merchants,
+  queueStages,
+} from '../../db/schema'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
@@ -25,6 +32,7 @@ import type {
   MerchantStatusValue,
   MerchantFormSubmission,
   PriorityValue,
+  TerminateMerchantInput,
   UpdatePriorityInput,
 } from './merchants.schemas'
 import {
@@ -597,6 +605,137 @@ export async function softDeleteMerchant(merchantId: string) {
   return deleted
 }
 
+async function closeOpenCasesAsUnsuccessful(
+  tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0],
+  input: {
+    merchantIds: string[]
+    actorId: string
+    reason: string
+    now: Date
+  },
+) {
+  const openCases = await tx
+    .select({ id: cases.id, queueId: cases.queueId })
+    .from(cases)
+    .where(
+      and(
+        inArray(cases.merchantId, input.merchantIds),
+        ne(cases.status, 'closed'),
+      ),
+    )
+
+  if (openCases.length === 0) {
+    return 0
+  }
+
+  const queueIds = [...new Set(openCases.map((caseRow) => caseRow.queueId))]
+  const closedStages = await tx
+    .select({ id: queueStages.id, queueId: queueStages.queueId })
+    .from(queueStages)
+    .where(
+      and(
+        inArray(queueStages.queueId, queueIds),
+        eq(queueStages.category, 'closed'),
+      ),
+    )
+  const closedStageByQueueId = new Map(
+    closedStages.map((stage) => [stage.queueId, stage.id]),
+  )
+
+  for (const caseRow of openCases) {
+    await tx
+      .update(cases)
+      .set({
+        currentStageId: closedStageByQueueId.get(caseRow.queueId) ?? null,
+        status: 'closed',
+        closeOutcome: 'unsuccessful',
+        closeReason: input.reason,
+        closedAt: input.now,
+        updatedAt: input.now,
+      })
+      .where(eq(cases.id, caseRow.id))
+  }
+
+  await tx.insert(caseHistory).values(
+    openCases.map((caseRow) => ({
+      caseId: caseRow.id,
+      actorId: input.actorId,
+      action: 'closed_unsuccessful',
+      details: { reason: input.reason, source: 'merchant_termination' },
+    })),
+  )
+
+  return openCases.length
+}
+
+export async function terminateMerchant(
+  merchantId: string,
+  actorId: string,
+  input: TerminateMerchantInput,
+) {
+  const db = getDb()
+  const now = new Date()
+
+  const result = await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(merchants)
+      .set({ status: 'terminated', updatedAt: now })
+      .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+      .returning({ id: merchants.id, status: merchants.status })
+
+    if (!updated) {
+      return null
+    }
+
+    const closedCaseCount = await closeOpenCasesAsUnsuccessful(tx, {
+      merchantIds: [merchantId],
+      actorId,
+      reason: input.reason,
+      now,
+    })
+
+    return { ...updated, closedCaseCount }
+  })
+
+  if (!result) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  return result
+}
+
+export async function bulkTerminateMerchants(
+  ids: string[],
+  actorId: string,
+  input: TerminateMerchantInput,
+) {
+  const db = getDb()
+  const now = new Date()
+
+  const result = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(merchants)
+      .set({ status: 'terminated', updatedAt: now })
+      .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+      .returning({ id: merchants.id })
+
+    const updatedIds = updatedRows.map((row) => row.id)
+    const closedCaseCount =
+      updatedIds.length > 0
+        ? await closeOpenCasesAsUnsuccessful(tx, {
+            merchantIds: updatedIds,
+            actorId,
+            reason: input.reason,
+            now,
+          })
+        : 0
+
+    return { terminatedCount: updatedRows.length, closedCaseCount }
+  })
+
+  return result
+}
+
 export async function bulkSoftDeleteMerchants(ids: string[]) {
   const db = getDb()
 
@@ -612,6 +751,7 @@ export async function bulkSoftDeleteMerchants(ids: string[]) {
 export async function bulkUpdatePriority(
   ids: string[],
   priority: UpdatePriorityInput['priority'],
+  note?: UpdatePriorityInput['note'],
 ) {
   const db = getDb()
 
@@ -621,6 +761,7 @@ export async function bulkUpdatePriority(
       .update(merchants)
       .set({
         priority,
+        priorityNote: note,
         updatedAt: now,
       })
       .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
