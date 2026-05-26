@@ -1,16 +1,16 @@
 import { Hono } from 'hono'
 
-import { zodValidator } from '../../lib/validators'
-import { requireAuth } from '../../middleware/auth'
-import { requireRoles } from '../../middleware/rbac'
-import type { AppEnv } from '../../types/auth'
-import { createUserSchema } from '../auth/auth.schemas'
+import { zodValidator } from '../../lib/validators.js'
+import { requireAuth } from '../../middleware/auth.js'
+import { requireRoles } from '../../middleware/rbac.js'
+import type { AppEnv } from '../../types/auth.js'
+import { createUserSchema } from '../auth/auth.schemas.js'
 import {
   bulkUserStatusSchema,
   listUsersQuerySchema,
   updateUserSchema,
   userIdParamSchema,
-} from './users.schemas'
+} from './users.schemas.js'
 import {
   bulkUpdateUserStatus,
   createUser,
@@ -19,7 +19,7 @@ import {
   listUsers,
   sendResetPassword,
   updateUser,
-} from './users.service'
+} from './users.service.js'
 
 export const userRoutes = new Hono<AppEnv>()
 

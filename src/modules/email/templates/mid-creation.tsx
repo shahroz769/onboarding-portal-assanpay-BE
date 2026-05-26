@@ -10,7 +10,7 @@ import {
   Panel,
   Paragraph,
   SectionLabel,
-} from './_brand'
+} from './_brand.js'
 
 export type MidCreationEmailProps = {
   merchantName: string

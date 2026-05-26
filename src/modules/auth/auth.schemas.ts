@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { roleTypes } from '../../types/auth'
+import { roleTypes } from '../../types/auth.js'
 
 const ASSANPAY_EMAIL_DOMAIN = '@assanpay.com'
 const ASSANPAY_EMAIL_MESSAGE = 'Email must use the @assanpay.com domain.'

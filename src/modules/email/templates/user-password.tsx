@@ -6,7 +6,7 @@ import {
   ExpiryNote,
   LinkFallback,
   Paragraph,
-} from './_brand'
+} from './_brand.js'
 
 export type UserPasswordEmailProps = {
   name: string

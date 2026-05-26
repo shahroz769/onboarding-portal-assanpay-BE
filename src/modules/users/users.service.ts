@@ -1,24 +1,24 @@
 import { and, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 
-import { env } from '../../config/env'
-import { getDb } from '../../db/client'
+import { env } from '../../config/env.js'
+import { getDb } from '../../db/client.js'
 import {
   cases,
   queues,
   refreshTokens,
   userQueueAccess,
   users,
-} from '../../db/schema'
-import { AppError } from '../../lib/errors'
-import type { RoleType, SessionUser } from '../../types/auth'
+} from '../../db/schema.js'
+import { AppError } from '../../lib/errors.js'
+import type { RoleType, SessionUser } from '../../types/auth.js'
 import {
   canCreateRole,
   issuePasswordToken,
   revokeAllUserSessions,
-} from '../auth/auth.service'
-import { sendEmail } from '../email/email.service'
-import { UserPasswordEmail } from '../email/templates/user-password'
-import type { ListUsersQuery } from './users.schemas'
+} from '../auth/auth.service.js'
+import { sendEmail } from '../email/email.service.js'
+import { UserPasswordEmail } from '../email/templates/user-password.js'
+import type { ListUsersQuery } from './users.schemas.js'
 
 type QueueAccessInput = {
   queueViewScope?: 'all' | 'selected'

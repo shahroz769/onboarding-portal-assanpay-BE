@@ -1,7 +1,7 @@
 import { and, count, eq, inArray, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 
-import { getDb } from '../../db/client'
+import { getDb } from '../../db/client.js'
 import {
   caseFieldReviews,
   caseHistory,
@@ -10,18 +10,18 @@ import {
   merchantDocuments,
   merchants,
   queueStages,
-} from '../../db/schema'
-import { AppError } from '../../lib/errors'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
-import type { AppEnv } from '../../types/auth'
-import { validateToken } from '../cases/case-resubmission-tokens.service'
+} from '../../db/schema.js'
+import { AppError } from '../../lib/errors.js'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
+import type { AppEnv } from '../../types/auth.js'
+import { validateToken } from '../cases/case-resubmission-tokens.service.js'
 import {
   DOCUMENT_TYPE_LABELS,
   getDocumentIdFromFieldName,
   isDocumentFieldName,
   MERCHANT_FIELD_LABELS,
-} from '../cases/field-labels'
-import { getResubmissionContext } from '../cases/cases.service'
+} from '../cases/field-labels.js'
+import { getResubmissionContext } from '../cases/cases.service.js'
 import {
   MAX_FILE_SIZE_BYTES,
   getAllowedDocumentTypes,
@@ -29,9 +29,9 @@ import {
   
   normalizeMimeType,
   validateStoredMerchantScalarValues
-} from './merchants.schemas'
-import type {MerchantDocumentType} from './merchants.schemas';
-import { notifyOnResubmission } from '../notifications/notifications.service'
+} from './merchants.schemas.js'
+import type {MerchantDocumentType} from './merchants.schemas.js';
+import { notifyOnResubmission } from '../notifications/notifications.service.js'
 
 export const resubmissionRoutes = new Hono<AppEnv>()
 

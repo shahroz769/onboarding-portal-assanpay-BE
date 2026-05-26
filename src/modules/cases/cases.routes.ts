@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 
-import { requireAuth } from '../../middleware/auth'
-import { requireRoles } from '../../middleware/rbac'
-import { AppError } from '../../lib/errors'
-import { zodValidator } from '../../lib/validators'
-import type { AppEnv } from '../../types/auth'
+import { requireAuth } from '../../middleware/auth.js'
+import { requireRoles } from '../../middleware/rbac.js'
+import { AppError } from '../../lib/errors.js'
+import { zodValidator } from '../../lib/validators.js'
+import type { AppEnv } from '../../types/auth.js'
 import {
   assignCaseSchema,
   bulkAssignCaseSchema,
@@ -23,7 +23,7 @@ import {
   selectSubMerchantFormSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
-} from './cases.schemas'
+} from './cases.schemas.js'
 import type {
   AssignCaseInput,
   BulkAssignCaseInput,
@@ -42,7 +42,7 @@ import type {
   SelectSubMerchantFormInput,
   UpdateCasePriorityInput,
   UpdateCaseStatusInput,
-} from './cases.schemas'
+} from './cases.schemas.js'
 import {
   advanceStage,
   assignCase,
@@ -78,7 +78,7 @@ import {
   confirmAgreementEmailManual,
   getMidCreationEmailPreview,
   confirmMidCreationEmailManual,
-} from './cases.service'
+} from './cases.service.js'
 
 export const caseRoutes = new Hono<AppEnv>()
 

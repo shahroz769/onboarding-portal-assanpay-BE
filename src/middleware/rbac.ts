@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 
-import { AppError } from '../lib/errors'
-import type { AppEnv, RoleType } from '../types/auth'
+import { AppError } from '../lib/errors.js'
+import type { AppEnv, RoleType } from '../types/auth.js'
 
 export function requireRoles(...roles: RoleType[]) {
   return createMiddleware<AppEnv>(async (c, next) => {

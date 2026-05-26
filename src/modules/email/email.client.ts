@@ -1,6 +1,6 @@
 import { Resend } from 'resend'
 
-import { env } from '../../config/env'
+import { env } from '../../config/env.js'
 
 let cachedClient: Resend | null = null
 

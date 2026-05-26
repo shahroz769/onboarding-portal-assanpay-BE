@@ -11,7 +11,7 @@ import {
   SectionLabel,
   brand,
   fontStack,
-} from './_brand'
+} from './_brand.js'
 
 export type DocumentResubmissionEmailRejection = {
   label: string

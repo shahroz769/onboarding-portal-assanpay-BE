@@ -1,6 +1,6 @@
 import { and, count, desc, eq, inArray, lt, or, sql } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb } from '../../db/client.js'
 import {
   caseComments,
   cases,
@@ -8,19 +8,19 @@ import {
   queues,
   users
   
-} from '../../db/schema'
-import type {NewNotification} from '../../db/schema';
-import { AppError } from '../../lib/errors'
+} from '../../db/schema.js'
+import type {NewNotification} from '../../db/schema.js';
+import { AppError } from '../../lib/errors.js'
 import {
   buildCommentSnippet,
   buildNotificationCopy,
-} from './notifications.copy'
-import { publish  } from './notifications.events'
-import type {NotificationStreamEvent} from './notifications.events';
+} from './notifications.copy.js'
+import { publish  } from './notifications.events.js'
+import type {NotificationStreamEvent} from './notifications.events.js';
 import type {
   ListNotificationsQuery,
   NotificationType,
-} from './notifications.schemas'
+} from './notifications.schemas.js'
 
 // ─── List ───────────────────────────────────────────────────────────────────
 

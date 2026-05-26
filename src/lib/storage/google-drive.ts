@@ -1,7 +1,7 @@
 import { importPKCS8, SignJWT } from 'jose'
 
-import { env } from '../../config/env'
-import { AppError } from '../errors'
+import { env } from '../../config/env.js'
+import { AppError } from '../errors.js'
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'

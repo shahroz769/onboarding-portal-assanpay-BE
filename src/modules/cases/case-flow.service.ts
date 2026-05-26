@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 
-import type { getDb } from '../../db/client'
+import type { getDb } from '../../db/client.js'
 import {
   caseFlowCloseBlockers,
   caseFlowCloseTriggers,
@@ -11,9 +11,9 @@ import {
   merchants,
   queueCaseSequences,
   queues,
-} from '../../db/schema'
-import { AppError } from '../../lib/errors'
-import { ensureQueueStages } from '../queues/queue-stage-defaults'
+} from '../../db/schema.js'
+import { AppError } from '../../lib/errors.js'
+import { ensureQueueStages } from '../queues/queue-stage-defaults.js'
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]

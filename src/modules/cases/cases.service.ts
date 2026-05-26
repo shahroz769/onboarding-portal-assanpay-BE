@@ -12,7 +12,7 @@ import {
   sql,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb } from '../../db/client.js'
 import {
   agreementCaseDetails,
   caseComments,
@@ -33,47 +33,47 @@ import {
   subMerchantDraftTemplates,
   userQueueAccess,
   users,
-} from '../../db/schema'
-import { AppError } from '../../lib/errors'
-import { env } from '../../config/env'
-import type { SessionUser } from '../../types/auth'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+} from '../../db/schema.js'
+import { AppError } from '../../lib/errors.js'
+import { env } from '../../config/env.js'
+import type { SessionUser } from '../../types/auth.js'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
 import {
   ensureQueueStages,
   getVisibleStagesForQueue,
   getStatusForStage,
   resolveStageForCase,
-} from '../queues/queue-stage-defaults'
+} from '../queues/queue-stage-defaults.js'
 import {
   notifyAssignment,
   notifyOnComment,
-} from '../notifications/notifications.service'
-import { sendEmail } from '../email/email.service'
-import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
-import { AgreementEmail } from '../email/templates/agreement'
-import { MidCreationEmail } from '../email/templates/mid-creation'
+} from '../notifications/notifications.service.js'
+import { sendEmail } from '../email/email.service.js'
+import { DocumentResubmissionEmail } from '../email/templates/document-resubmission.js'
+import { AgreementEmail } from '../email/templates/agreement.js'
+import { MidCreationEmail } from '../email/templates/mid-creation.js'
 import {
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
-} from '../configuration/configuration.service'
+} from '../configuration/configuration.service.js'
 import {
   assertCloseBlockersSatisfied,
   triggerCasesAfterSuccessfulClose,
-} from './case-flow.service'
+} from './case-flow.service.js'
 import {
   getRequiredDocumentTypes,
   type MerchantDocumentType,
-} from '../merchants/merchants.schemas'
+} from '../merchants/merchants.schemas.js'
 import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
   getDocumentIdFromFieldName,
   isDocumentFieldName,
-} from './field-labels'
-import { issueToken } from './case-resubmission-tokens.service'
-import { caseStatusValues, isValidStatusTransition } from './cases.schemas'
+} from './field-labels.js'
+import { issueToken } from './case-resubmission-tokens.service.js'
+import { caseStatusValues, isValidStatusTransition } from './cases.schemas.js'
 import type {
   CaseStatusValue,
   CloseUnsuccessfulInput,
@@ -89,17 +89,17 @@ import type {
   SelectSubMerchantFormInput,
   SendMidCreationEmailInput,
   UpdateCaseStatusInput,
-} from './cases.schemas'
+} from './cases.schemas.js'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
   AGREEMENT_FINAL_FILE_KIND,
   AGREEMENT_QUEUE_SLUG,
-} from './agreement.config'
+} from './agreement.config.js'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
   SUB_MERCHANT_FORM_QUEUE_SLUG,
-} from './sub-merchant-form.config'
+} from './sub-merchant-form.config.js'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
 const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024

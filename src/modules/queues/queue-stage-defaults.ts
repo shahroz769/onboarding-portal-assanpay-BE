@@ -1,11 +1,11 @@
 import { asc, eq } from 'drizzle-orm'
 
-import { queueStages } from '../../db/schema'
-import type { NewQueueStage, QueueStage } from '../../db/schema'
+import { queueStages } from '../../db/schema.js'
+import type { NewQueueStage, QueueStage } from '../../db/schema.js'
 import type {
   CaseStatusValue,
   StageCategoryValue,
-} from '../cases/cases.schemas'
+} from '../cases/cases.schemas.js'
 
 type QueueStageDb = {
   select: (...args: any[]) => any

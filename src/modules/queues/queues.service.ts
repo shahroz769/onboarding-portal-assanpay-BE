@@ -1,10 +1,10 @@
 import { eq } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
-import { queues, queueCaseSequences } from '../../db/schema'
-import { AppError } from '../../lib/errors'
-import { ensureQueueStages } from './queue-stage-defaults'
-import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
+import { getDb } from '../../db/client.js'
+import { queues, queueCaseSequences } from '../../db/schema.js'
+import { AppError } from '../../lib/errors.js'
+import { ensureQueueStages } from './queue-stage-defaults.js'
+import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas.js'
 
 export async function listQueues(options: { includeInactive?: boolean } = {}) {
   const db = getDb()

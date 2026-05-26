@@ -1,4 +1,4 @@
-import type { MerchantDocumentType } from '../merchants/merchants.schemas'
+import type { MerchantDocumentType } from '../merchants/merchants.schemas.js'
 
 /**
  * Stable backend mapping of merchant text-field keys to human-readable labels.

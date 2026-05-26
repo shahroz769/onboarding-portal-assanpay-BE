@@ -1,11 +1,11 @@
 import { and, eq, isNull } from 'drizzle-orm'
 import { createMiddleware } from 'hono/factory'
 
-import { getDb } from '../db/client'
-import { users } from '../db/schema'
-import { verifyAccessToken } from '../lib/auth'
-import { AppError } from '../lib/errors'
-import type { AppEnv } from '../types/auth'
+import { getDb } from '../db/client.js'
+import { users } from '../db/schema.js'
+import { verifyAccessToken } from '../lib/auth.js'
+import { AppError } from '../lib/errors.js'
+import type { AppEnv } from '../types/auth.js'
 
 export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   const authorization = c.req.header('authorization')

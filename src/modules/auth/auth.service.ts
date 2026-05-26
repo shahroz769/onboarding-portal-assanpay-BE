@@ -1,17 +1,17 @@
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
 
-import { env } from '../../config/env'
-import { getDb } from '../../db/client'
-import { refreshTokens, userPasswordTokens, users } from '../../db/schema'
+import { env } from '../../config/env.js'
+import { getDb } from '../../db/client.js'
+import { refreshTokens, userPasswordTokens, users } from '../../db/schema.js'
 import {
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
-} from '../../lib/auth'
-import { AppError } from '../../lib/errors'
-import { hashToken } from '../../lib/security'
-import type { RoleType, SessionUser } from '../../types/auth'
-import { getLinkDeadlineSettings } from '../configuration/configuration.service'
+} from '../../lib/auth.js'
+import { AppError } from '../../lib/errors.js'
+import { hashToken } from '../../lib/security.js'
+import type { RoleType, SessionUser } from '../../types/auth.js'
+import { getLinkDeadlineSettings } from '../configuration/configuration.service.js'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
   admin: ['supervisor', 'agent'],

@@ -12,12 +12,12 @@ import {
   sql,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
-import { cases, merchantDocuments, merchants } from '../../db/schema'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
-import type { FileStorageProvider } from '../../lib/storage/google-drive'
-import { AppError } from '../../lib/errors'
-import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
+import { getDb } from '../../db/client.js'
+import { cases, merchantDocuments, merchants } from '../../db/schema.js'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
+import type { FileStorageProvider } from '../../lib/storage/google-drive.js'
+import { AppError } from '../../lib/errors.js'
+import { triggerStartCasesForMerchant } from '../cases/case-flow.service.js'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -26,12 +26,12 @@ import type {
   MerchantFormSubmission,
   PriorityValue,
   UpdatePriorityInput,
-} from './merchants.schemas'
+} from './merchants.schemas.js'
 import {
   businessScopeValues,
   merchantStatusValues,
   priorityValues,
-} from './merchants.schemas'
+} from './merchants.schemas.js'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType

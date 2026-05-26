@@ -3,15 +3,15 @@ import { Hono } from 'hono'
 import { csrf } from 'hono/csrf'
 import { rateLimiter } from 'hono-rate-limiter'
 
-import { env } from '../../config/env'
-import { zodValidator } from '../../lib/validators'
-import type { AppEnv } from '../../types/auth'
+import { env } from '../../config/env.js'
+import { zodValidator } from '../../lib/validators.js'
+import type { AppEnv } from '../../types/auth.js'
 import {
   loginSchema,
   passwordTokenParamSchema,
   registerAdminSchema,
   setPasswordSchema,
-} from './auth.schemas'
+} from './auth.schemas.js'
 import {
   getPasswordTokenContext,
   login,
@@ -19,7 +19,7 @@ import {
   refreshSession,
   registerAdmin,
   setPasswordWithToken,
-} from './auth.service'
+} from './auth.service.js'
 
 const REFRESH_COOKIE_NAME = 'refresh_token'
 
