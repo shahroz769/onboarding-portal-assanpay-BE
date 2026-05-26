@@ -1,6 +1,6 @@
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 
-import { getDb, getQueryClient } from './client.js'
+import { getDb, getQueryClient } from './client'
 
 await migrate(getDb(), {
   migrationsFolder: './drizzle',

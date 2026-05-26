@@ -2,7 +2,7 @@ import type { ValidationTargets } from 'hono'
 import { validator } from 'hono/validator'
 import type { z } from 'zod'
 
-import { AppError } from './errors.js'
+import { AppError } from './errors'
 
 export function zodValidator<
   TTarget extends keyof ValidationTargets,

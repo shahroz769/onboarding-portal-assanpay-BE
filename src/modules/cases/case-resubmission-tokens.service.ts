@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm'
 
-import { env } from '../../config/env.js'
-import { getDb } from '../../db/client.js'
-import { caseResubmissionTokens } from '../../db/schema.js'
-import { AppError } from '../../lib/errors.js'
+import { env } from '../../config/env'
+import { getDb } from '../../db/client'
+import { caseResubmissionTokens } from '../../db/schema'
+import { AppError } from '../../lib/errors'
 
 export type IssuedToken = {
   token: string

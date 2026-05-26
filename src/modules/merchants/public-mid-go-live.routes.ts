@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 
-import type { AppEnv } from '../../types/auth.js'
+import type { AppEnv } from '../../types/auth'
 import {
   activateMidGoLive,
   getMidGoLiveContext,
-} from '../cases/cases.service.js'
+} from '../cases/cases.service'
 
 export const midGoLiveRoutes = new Hono<AppEnv>()
 

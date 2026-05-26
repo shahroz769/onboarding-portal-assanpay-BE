@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 
-import { AppError } from '../../lib/errors.js'
-import type { AppEnv } from '../../types/auth.js'
-import { parseMerchantFormData } from './merchants.schemas.js'
-import { createMerchantSubmission } from './merchants.service.js'
+import { AppError } from '../../lib/errors'
+import type { AppEnv } from '../../types/auth'
+import { parseMerchantFormData } from './merchants.schemas'
+import { createMerchantSubmission } from './merchants.service'
 
 export const merchantFormRoutes = new Hono<AppEnv>()
 

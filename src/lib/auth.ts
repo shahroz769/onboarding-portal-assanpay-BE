@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose'
 
-import { env } from '../config/env.js'
-import type { RoleType, SessionUser } from '../types/auth.js'
+import { env } from '../config/env'
+import type { RoleType, SessionUser } from '../types/auth'
 
 const accessSecret = new TextEncoder().encode(env.JWT_ACCESS_SECRET)
 const refreshSecret = new TextEncoder().encode(env.JWT_REFRESH_SECRET)

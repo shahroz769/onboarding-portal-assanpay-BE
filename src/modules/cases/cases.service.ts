@@ -12,7 +12,7 @@ import {
   sql,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client.js'
+import { getDb } from '../../db/client'
 import {
   agreementCaseDetails,
   caseComments,
@@ -33,47 +33,44 @@ import {
   subMerchantDraftTemplates,
   userQueueAccess,
   users,
-} from '../../db/schema.js'
-import { AppError } from '../../lib/errors.js'
-import { env } from '../../config/env.js'
-import type { SessionUser } from '../../types/auth.js'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
+} from '../../db/schema'
+import { AppError } from '../../lib/errors'
+import { env } from '../../config/env'
+import type { SessionUser } from '../../types/auth'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   ensureQueueStages,
   getVisibleStagesForQueue,
   getStatusForStage,
   resolveStageForCase,
-} from '../queues/queue-stage-defaults.js'
+} from '../queues/queue-stage-defaults'
 import {
   notifyAssignment,
   notifyOnComment,
-} from '../notifications/notifications.service.js'
-import { sendEmail } from '../email/email.service.js'
-import { DocumentResubmissionEmail } from '../email/templates/document-resubmission.js'
-import { AgreementEmail } from '../email/templates/agreement.js'
-import { MidCreationEmail } from '../email/templates/mid-creation.js'
+} from '../notifications/notifications.service'
+import { sendEmail } from '../email/email.service'
+import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
+import { AgreementEmail } from '../email/templates/agreement'
+import { MidCreationEmail } from '../email/templates/mid-creation'
 import {
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
-} from '../configuration/configuration.service.js'
+} from '../configuration/configuration.service'
 import {
   assertCloseBlockersSatisfied,
   triggerCasesAfterSuccessfulClose,
-} from './case-flow.service.js'
-import {
-  getRequiredDocumentTypes,
-  type MerchantDocumentType,
-} from '../merchants/merchants.schemas.js'
+} from './case-flow.service'
+import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
   getDocumentIdFromFieldName,
   isDocumentFieldName,
-} from './field-labels.js'
-import { issueToken } from './case-resubmission-tokens.service.js'
-import { caseStatusValues, isValidStatusTransition } from './cases.schemas.js'
+} from './field-labels'
+import { issueToken } from './case-resubmission-tokens.service'
+import { caseStatusValues, isValidStatusTransition } from './cases.schemas'
 import type {
   CaseStatusValue,
   CloseUnsuccessfulInput,
@@ -89,17 +86,17 @@ import type {
   SelectSubMerchantFormInput,
   SendMidCreationEmailInput,
   UpdateCaseStatusInput,
-} from './cases.schemas.js'
+} from './cases.schemas'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
   AGREEMENT_FINAL_FILE_KIND,
   AGREEMENT_QUEUE_SLUG,
-} from './agreement.config.js'
+} from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
   SUB_MERCHANT_FORM_QUEUE_SLUG,
-} from './sub-merchant-form.config.js'
+} from './sub-merchant-form.config'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
 const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024
@@ -1590,7 +1587,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .where(eq(cases.id, caseId))
   }
 
-  let agreementRecord: typeof agreement | null = agreement
+  let agreementRecord = agreement
   if (!agreementRecord && queue.slug === AGREEMENT_QUEUE_SLUG) {
     const draft = await getConfiguredAgreementDraftForMerchantType(
       merchant.merchantType,
@@ -3937,12 +3934,7 @@ function buildMidCreationEmailBody(params: {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours: number | null
-  testingLimits: {
-    collectionMin: number
-    collectionMax: number
-    disbursementMin: number
-    disbursementMax: number
-  }
+  testingLimits: { transactionLimit: number; dailyLimit: number; monthlyLimit: number }
   cardRate: string
   eWalletsRate: string
   payoutRate: string
@@ -3971,8 +3963,9 @@ Password: ${portalPassword}
 MID: ${portalMid}
 
 Testing Limits:
-• Collection: PKR ${testingLimits.collectionMin.toLocaleString()} - PKR ${testingLimits.collectionMax.toLocaleString()}
-• Disbursement: PKR ${testingLimits.disbursementMin.toLocaleString()} - PKR ${testingLimits.disbursementMax.toLocaleString()}
+• Per Transaction: PKR ${testingLimits.transactionLimit.toLocaleString()}
+• Daily: PKR ${testingLimits.dailyLimit.toLocaleString()}
+• Monthly: PKR ${testingLimits.monthlyLimit.toLocaleString()}
 
 Rates:
 • Card: ${cardRate}
@@ -5539,11 +5532,7 @@ export async function getResubmissionContext(
     .filter((id): id is string => id !== null)
   const docsById = new Map<
     string,
-    {
-      documentType: MerchantDocumentType
-      originalName: string
-      currentDocumentUrl?: string
-    }
+    { documentType: string; originalName: string; currentDocumentUrl?: string }
   >()
   if (docIds.length > 0) {
     const docs = await db
@@ -5573,7 +5562,11 @@ export async function getResubmissionContext(
     if (isDocumentFieldName(review.fieldName)) {
       const docId = getDocumentIdFromFieldName(review.fieldName)
       const doc = docId ? docsById.get(docId) : null
-      const label = doc ? DOCUMENT_TYPE_LABELS[doc.documentType] : 'Uploaded document'
+      const label = doc
+        ? DOCUMENT_TYPE_LABELS[
+            doc.documentType as keyof typeof DOCUMENT_TYPE_LABELS
+          ]
+        : 'Uploaded document'
       return {
         fieldName: review.fieldName,
         label,

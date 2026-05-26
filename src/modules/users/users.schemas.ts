@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { roleTypes } from '../../types/auth.js'
+import { roleTypes } from '../../types/auth'
 
 export const userIdParamSchema = z.object({
   id: z.uuid(),

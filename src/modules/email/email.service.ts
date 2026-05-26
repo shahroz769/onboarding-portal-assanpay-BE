@@ -2,10 +2,10 @@ import type { ReactElement } from 'react'
 import { render } from '@react-email/render'
 import { eq } from 'drizzle-orm'
 
-import { env } from '../../config/env.js'
-import { getDb } from '../../db/client.js'
-import { emailLog } from '../../db/schema.js'
-import { getResendClient } from './email.client.js'
+import { env } from '../../config/env'
+import { getDb } from '../../db/client'
+import { emailLog } from '../../db/schema'
+import { getResendClient } from './email.client'
 
 export type SendEmailInput = {
   to: string

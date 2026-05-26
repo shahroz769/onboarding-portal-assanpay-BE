@@ -1,6 +1,6 @@
 import type { z } from 'zod'
 
-import { AppError } from './errors.js'
+import { AppError } from './errors'
 
 export async function parseJsonBody<TSchema extends z.ZodTypeAny>(
   request: Request,

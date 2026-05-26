@@ -1,12 +1,12 @@
 import { Hono } from 'hono'
 
-import { requireAuth } from '../../middleware/auth.js'
-import { requireRoles } from '../../middleware/rbac.js'
-import { zodValidator } from '../../lib/validators.js'
-import type { AppEnv } from '../../types/auth.js'
-import { createQueueSchema, updateQueueStatusSchema } from './queues.schemas.js'
-import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas.js'
-import { createQueue, listQueues, updateQueueStatus } from './queues.service.js'
+import { requireAuth } from '../../middleware/auth'
+import { requireRoles } from '../../middleware/rbac'
+import { zodValidator } from '../../lib/validators'
+import type { AppEnv } from '../../types/auth'
+import { createQueueSchema, updateQueueStatusSchema } from './queues.schemas'
+import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
+import { createQueue, listQueues, updateQueueStatus } from './queues.service'
 
 export const queueRoutes = new Hono<AppEnv>()
 

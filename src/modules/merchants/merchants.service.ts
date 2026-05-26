@@ -12,12 +12,12 @@ import {
   sql,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client.js'
-import { cases, merchantDocuments, merchants } from '../../db/schema.js'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
-import type { FileStorageProvider } from '../../lib/storage/google-drive.js'
-import { AppError } from '../../lib/errors.js'
-import { triggerStartCasesForMerchant } from '../cases/case-flow.service.js'
+import { getDb } from '../../db/client'
+import { cases, merchantDocuments, merchants } from '../../db/schema'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+import type { FileStorageProvider } from '../../lib/storage/google-drive'
+import { AppError } from '../../lib/errors'
+import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -26,12 +26,12 @@ import type {
   MerchantFormSubmission,
   PriorityValue,
   UpdatePriorityInput,
-} from './merchants.schemas.js'
+} from './merchants.schemas'
 import {
   businessScopeValues,
   merchantStatusValues,
   priorityValues,
-} from './merchants.schemas.js'
+} from './merchants.schemas'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType
@@ -418,10 +418,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
     if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
       searchConditions.push(eq(merchants.merchantNumber, numericSearch))
     }
-    const searchCondition = or(...searchConditions)
-    if (searchCondition) {
-      conditions.push(searchCondition)
-    }
+    conditions.push(or(...searchConditions))
   }
 
   if (query.onboardingStage) {

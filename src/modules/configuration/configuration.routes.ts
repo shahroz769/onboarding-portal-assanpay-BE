@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 
-import { requireAuth } from '../../middleware/auth.js'
-import { requireRoles } from '../../middleware/rbac.js'
-import { zodValidator } from '../../lib/validators.js'
-import type { AppEnv } from '../../types/auth.js'
+import { requireAuth } from '../../middleware/auth'
+import { requireRoles } from '../../middleware/rbac'
+import { zodValidator } from '../../lib/validators'
+import type { AppEnv } from '../../types/auth'
 import {
   getConfigurationOverview,
   updateEmailSendingModeSettings,
@@ -13,19 +13,19 @@ import {
   createSubMerchantDraft,
   getCaseFlowConfiguration,
   updateCaseFlowConfiguration,
-} from './configuration.service.js'
+} from './configuration.service'
 import {
   updateCaseFlowConfigurationSchema,
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
-} from './configuration.schemas.js'
+} from './configuration.schemas'
 import type {
   EmailSendingModeSettings,
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
   UpdateCaseFlowConfigurationInput,
-} from './configuration.schemas.js'
+} from './configuration.schemas'
 
 export const configurationRoutes = new Hono<AppEnv>()
 

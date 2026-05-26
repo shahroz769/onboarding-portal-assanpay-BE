@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { AppError } from '../../lib/errors.js'
+import { AppError } from '../../lib/errors'
 
 export const merchantTypes = [
   'sole_proprietorship',

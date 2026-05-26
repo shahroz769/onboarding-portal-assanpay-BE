@@ -10,7 +10,7 @@ import {
   SectionLabel,
   brand,
   fontStack,
-} from './_brand.js'
+} from './_brand'
 import { Text } from '@react-email/components'
 
 export type AgreementEmailProps = {

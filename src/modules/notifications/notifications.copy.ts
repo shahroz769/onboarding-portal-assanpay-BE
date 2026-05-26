@@ -1,4 +1,4 @@
-import type { NotificationType } from './notifications.schemas.js'
+import type { NotificationType } from './notifications.schemas'
 
 const SNIPPET_LENGTH = 140
 

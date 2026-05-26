@@ -1,25 +1,25 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 
-import { zodValidator } from '../../lib/validators.js'
-import { requireAuth } from '../../middleware/auth.js'
-import type { AppEnv } from '../../types/auth.js'
+import { zodValidator } from '../../lib/validators'
+import { requireAuth } from '../../middleware/auth'
+import type { AppEnv } from '../../types/auth'
 import {
   createBulkNotifications,
   getUnreadCount,
   listForUser,
   markAllRead,
   markRead,
-} from './notifications.service.js'
-import { subscribe } from './notifications.events.js'
+} from './notifications.service'
+import { subscribe } from './notifications.events'
 import {
   listNotificationsQuerySchema,
   testNotificationBodySchema,
-} from './notifications.schemas.js'
+} from './notifications.schemas'
 import type {
   ListNotificationsQuery,
   TestNotificationBody,
-} from './notifications.schemas.js'
+} from './notifications.schemas'
 
 export const notificationRoutes = new Hono<AppEnv>()
 const NOTIFICATION_STREAM_HEARTBEAT_MS = 25_000

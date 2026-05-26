@@ -1,24 +1,24 @@
 import { and, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 
-import { env } from '../../config/env.js'
-import { getDb } from '../../db/client.js'
+import { env } from '../../config/env'
+import { getDb } from '../../db/client'
 import {
   cases,
   queues,
   refreshTokens,
   userQueueAccess,
   users,
-} from '../../db/schema.js'
-import { AppError } from '../../lib/errors.js'
-import type { RoleType, SessionUser } from '../../types/auth.js'
+} from '../../db/schema'
+import { AppError } from '../../lib/errors'
+import type { RoleType, SessionUser } from '../../types/auth'
 import {
   canCreateRole,
   issuePasswordToken,
   revokeAllUserSessions,
-} from '../auth/auth.service.js'
-import { sendEmail } from '../email/email.service.js'
-import { UserPasswordEmail } from '../email/templates/user-password.js'
-import type { ListUsersQuery } from './users.schemas.js'
+} from '../auth/auth.service'
+import { sendEmail } from '../email/email.service'
+import { UserPasswordEmail } from '../email/templates/user-password'
+import type { ListUsersQuery } from './users.schemas'
 
 type QueueAccessInput = {
   queueViewScope?: 'all' | 'selected'
@@ -302,14 +302,13 @@ export async function listUsers(query: ListUsersQuery = {}) {
 
   if (query.search) {
     const term = `%${query.search}%`
-    const searchCondition = or(
-      ilike(users.name, term),
-      ilike(users.email, term),
-      ilike(users.username, term),
+    conditions.push(
+      or(
+        ilike(users.name, term),
+        ilike(users.email, term),
+        ilike(users.username, term),
+      ),
     )
-    if (searchCondition) {
-      conditions.push(searchCondition)
-    }
   }
 
   const roleTypes = (query.roleType?.split(',').filter(Boolean) ??

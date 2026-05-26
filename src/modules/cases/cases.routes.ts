@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 
-import { requireAuth } from '../../middleware/auth.js'
-import { requireRoles } from '../../middleware/rbac.js'
-import { AppError } from '../../lib/errors.js'
-import { zodValidator } from '../../lib/validators.js'
-import type { AppEnv } from '../../types/auth.js'
+import { requireAuth } from '../../middleware/auth'
+import { requireRoles } from '../../middleware/rbac'
+import { AppError } from '../../lib/errors'
+import { zodValidator } from '../../lib/validators'
+import type { AppEnv } from '../../types/auth'
 import {
   assignCaseSchema,
   bulkAssignCaseSchema,
@@ -23,7 +23,7 @@ import {
   selectSubMerchantFormSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
-} from './cases.schemas.js'
+} from './cases.schemas'
 import type {
   AssignCaseInput,
   BulkAssignCaseInput,
@@ -42,7 +42,7 @@ import type {
   SelectSubMerchantFormInput,
   UpdateCasePriorityInput,
   UpdateCaseStatusInput,
-} from './cases.schemas.js'
+} from './cases.schemas'
 import {
   advanceStage,
   assignCase,
@@ -78,7 +78,7 @@ import {
   confirmAgreementEmailManual,
   getMidCreationEmailPreview,
   confirmMidCreationEmailManual,
-} from './cases.service.js'
+} from './cases.service'
 
 export const caseRoutes = new Hono<AppEnv>()
 
@@ -560,7 +560,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
     password,
     portalMid: Number(portalMid),
   })
-  if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid input.')
+  if (!parsed.success) throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmMidCreationEmailManual(id, auth.userId, {

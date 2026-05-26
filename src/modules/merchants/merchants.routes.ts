@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 
-import { requireAuth } from '../../middleware/auth.js'
-import { requireRoles } from '../../middleware/rbac.js'
-import { zodValidator } from '../../lib/validators.js'
-import type { AppEnv } from '../../types/auth.js'
+import { requireAuth } from '../../middleware/auth'
+import { requireRoles } from '../../middleware/rbac'
+import { zodValidator } from '../../lib/validators'
+import type { AppEnv } from '../../types/auth'
 import {
   bulkIdsSchema,
   bulkPrioritySchema,
@@ -13,15 +13,15 @@ import {
   
   
   
-} from './merchants.schemas.js'
-import type {BulkIdsInput, BulkPriorityInput, ListMerchantsQuery, UpdatePriorityInput} from './merchants.schemas.js';
+} from './merchants.schemas'
+import type {BulkIdsInput, BulkPriorityInput, ListMerchantsQuery, UpdatePriorityInput} from './merchants.schemas';
 import {
   bulkSoftDeleteMerchants,
   bulkUpdatePriority,
   listMerchants,
   softDeleteMerchant,
   updateMerchantPriority,
-} from './merchants.service.js'
+} from './merchants.service'
 
 export const merchantRoutes = new Hono<AppEnv>()
 

@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 
-import { getDb } from '../../db/client.js'
+import { getDb } from '../../db/client'
 import {
   agreementCaseDetails,
   caseFiles,
@@ -10,14 +10,14 @@ import {
   cases,
   merchants,
   queueStages,
-} from '../../db/schema.js'
-import { AppError } from '../../lib/errors.js'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
-import type { AppEnv } from '../../types/auth.js'
-import { validateToken } from '../cases/case-resubmission-tokens.service.js'
-import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config.js'
-import { getAgreementUploadContext } from '../cases/cases.service.js'
-import { notifyOnResubmission } from '../notifications/notifications.service.js'
+} from '../../db/schema'
+import { AppError } from '../../lib/errors'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+import type { AppEnv } from '../../types/auth'
+import { validateToken } from '../cases/case-resubmission-tokens.service'
+import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
+import { getAgreementUploadContext } from '../cases/cases.service'
+import { notifyOnResubmission } from '../notifications/notifications.service'
 
 export const agreementUploadRoutes = new Hono<AppEnv>()
 

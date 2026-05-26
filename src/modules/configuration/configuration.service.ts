@@ -1,6 +1,6 @@
 import { asc, eq, inArray } from 'drizzle-orm'
 
-import { getDb } from '../../db/client.js'
+import { getDb } from '../../db/client'
 import {
   agreementDraftTemplates,
   caseFlowCloseBlockers,
@@ -9,10 +9,10 @@ import {
   configurationSettings,
   queues,
   subMerchantDraftTemplates,
-} from '../../db/schema.js'
-import { AppError } from '../../lib/errors.js'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive.js'
-import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchantType } from '../cases/agreement.config.js'
+} from '../../db/schema'
+import { AppError } from '../../lib/errors'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchantType } from '../cases/agreement.config'
 import {
   BUSINESS_TYPE_OPTIONS,
   businessTypeSchema,
@@ -20,14 +20,14 @@ import {
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
   updateCaseFlowConfigurationSchema,
-} from './configuration.schemas.js'
+} from './configuration.schemas'
 import type {
   BusinessType,
   EmailSendingModeSettings,
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
   UpdateCaseFlowConfigurationInput,
-} from './configuration.schemas.js'
+} from './configuration.schemas'
 
 const LIMITS_AND_MDR_KEY = 'limits-and-mdr'
 const LINK_DEADLINES_KEY = 'link-deadlines'

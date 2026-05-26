@@ -1,8 +1,39 @@
 import { lt, or, eq, and, sql } from 'drizzle-orm'
-import { env } from './config/env.js'
-import { app } from './app.js'
-import { getDb } from './db/client.js'
-import { refreshTokens } from './db/schema.js'
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+
+import { env } from './config/env'
+import { getDb } from './db/client'
+import { refreshTokens } from './db/schema'
+import { errorHandler } from './middleware/error-handler'
+import { authRoutes } from './modules/auth/auth.routes'
+import { caseRoutes } from './modules/cases/cases.routes'
+import { configurationRoutes } from './modules/configuration/configuration.routes'
+import { merchantFormRoutes } from './modules/merchants/form.routes'
+import { merchantRoutes } from './modules/merchants/merchants.routes'
+import { agreementUploadRoutes } from './modules/merchants/public-agreement.routes'
+import { midGoLiveRoutes } from './modules/merchants/public-mid-go-live.routes'
+import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
+import { notificationRoutes } from './modules/notifications/notifications.routes'
+import { queueRoutes } from './modules/queues/queues.routes'
+import { userRoutes } from './modules/users/users.routes'
+import type { AppEnv } from './types/auth'
+
+const app = new Hono<AppEnv>()
+
+app.use(
+  '*',
+  cors({
+    origin: env.CORS_ORIGIN,
+    credentials: true,
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    exposeHeaders: ['Content-Length'],
+    maxAge: 86400,
+  }),
+)
+
+app.onError(errorHandler)
 
 app.get('/', (c) => {
   return c.json({
@@ -19,6 +50,18 @@ app.get('/health/db', async (c) => {
     db: result[0]?.ok === 1,
   })
 })
+
+app.route('/api/auth', authRoutes)
+app.route('/api/public', merchantFormRoutes)
+app.route('/api/public/resubmission', resubmissionRoutes)
+app.route('/api/public/agreement', agreementUploadRoutes)
+app.route('/api/public/mid-go-live', midGoLiveRoutes)
+app.route('/api/merchants', merchantRoutes)
+app.route('/api/users', userRoutes)
+app.route('/api/queues', queueRoutes)
+app.route('/api/cases', caseRoutes)
+app.route('/api/configuration', configurationRoutes)
+app.route('/api/notifications', notificationRoutes)
 
 async function purgeExpiredRefreshTokens() {
   try {

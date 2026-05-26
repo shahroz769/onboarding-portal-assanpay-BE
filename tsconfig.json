@@ -2,8 +2,8 @@
   "compilerOptions": {
     "strict": true,
     "target": "ESNext",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "types": ["bun", "node"],
     "skipLibCheck": true,
     "jsx": "react-jsx",
