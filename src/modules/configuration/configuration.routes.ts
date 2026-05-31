@@ -9,6 +9,7 @@ import {
   updateEmailSendingModeSettings,
   updateLimitsAndMdrSettings,
   updateLinkDeadlineSettings,
+  updateMerchantPortalSettings,
   uploadAgreementDraft,
   createSubMerchantDraft,
   getCaseFlowConfiguration,
@@ -19,11 +20,13 @@ import {
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
+  merchantPortalSettingsSchema,
 } from './configuration.schemas'
 import type {
   EmailSendingModeSettings,
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
+  MerchantPortalSettings,
   UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
@@ -74,6 +77,15 @@ configurationRoutes.put(
   async (c) => {
     const input = c.req.valid('json' as never) as EmailSendingModeSettings
     return c.json(await updateEmailSendingModeSettings(input))
+  },
+)
+
+configurationRoutes.put(
+  '/merchant-portal',
+  zodValidator('json', merchantPortalSettingsSchema),
+  async (c) => {
+    const input = c.req.valid('json' as never) as MerchantPortalSettings
+    return c.json(await updateMerchantPortalSettings(input))
   },
 )
 

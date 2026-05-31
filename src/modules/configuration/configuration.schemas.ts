@@ -26,6 +26,12 @@ export const emailSendingModeSettingsSchema = z
     path: ['autoEnabled'],
   })
 
+export const merchantPortalSettingsSchema = z
+  .object({
+    loginUrl: z.string().trim().url().max(2048),
+  })
+  .strict()
+
 export const limitsAndMdrSettingsSchema = z
   .object({
     testing: z.object({
@@ -130,11 +136,26 @@ const caseFlowCloseBlockerInputSchema = z
     path: ['prerequisiteQueueId'],
   })
 
+const caseFlowCreationRequirementInputSchema = z
+  .object({
+    targetQueueId: z.string().uuid(),
+    prerequisiteQueueId: z.string().uuid(),
+    isActive: z.boolean().default(true),
+  })
+  .strict()
+  .refine((value) => value.targetQueueId !== value.prerequisiteQueueId, {
+    message: 'A queue cannot require itself before creation.',
+    path: ['prerequisiteQueueId'],
+  })
+
 export const updateCaseFlowConfigurationSchema = z
   .object({
     startRules: z.array(caseFlowStartRuleInputSchema),
     closeTriggers: z.array(caseFlowCloseTriggerInputSchema),
     closeBlockers: z.array(caseFlowCloseBlockerInputSchema),
+    creationRequirements: z
+      .array(caseFlowCreationRequirementInputSchema)
+      .default([]),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -160,6 +181,14 @@ export const updateCaseFlowConfigurationSchema = z
       'closeBlockers',
       'Duplicate close requirement relation.',
     )
+    addDuplicateIssue(
+      value.creationRequirements.map(
+        (rule) => `${rule.targetQueueId}:${rule.prerequisiteQueueId}`,
+      ),
+      ctx,
+      'creationRequirements',
+      'Duplicate creation requirement relation.',
+    )
   })
 
 function addDuplicateIssue(
@@ -182,6 +211,9 @@ export type LimitsAndMdrSettings = z.infer<typeof limitsAndMdrSettingsSchema>
 export type LinkDeadlineSettings = z.infer<typeof linkDeadlineSettingsSchema>
 export type EmailSendingModeSettings = z.infer<
   typeof emailSendingModeSettingsSchema
+>
+export type MerchantPortalSettings = z.infer<
+  typeof merchantPortalSettingsSchema
 >
 export type BusinessType = z.infer<typeof businessTypeSchema>
 export type UpdateCaseFlowConfigurationInput = z.infer<

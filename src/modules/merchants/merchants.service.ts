@@ -12,6 +12,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm'
+import { aliasedTable } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -20,16 +21,24 @@ import {
   merchantDocuments,
   merchants,
   queueStages,
+  users,
 } from '../../db/schema'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
+import { queues } from '../../db/schema'
+import { isCaseSlaBreached } from '../cases/case-sla'
 import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
+import {
+  getLimitsAndMdrSettings,
+  defaultLimitsAndMdrSettings,
+} from '../configuration/configuration.service'
+import { merchantLimitsMdrSchema } from './merchants.schemas'
+import type { MerchantLimitsMdr } from './merchants.schemas'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
   MerchantDocumentType,
-  MerchantStatusValue,
   MerchantFormSubmission,
   PriorityValue,
   TerminateMerchantInput,
@@ -37,7 +46,6 @@ import type {
 } from './merchants.schemas'
 import {
   businessScopeValues,
-  merchantStatusValues,
   priorityValues,
 } from './merchants.schemas'
 
@@ -52,7 +60,6 @@ type UploadedDocumentRecord = {
   googleDriveFolderId: string
 }
 
-const merchantStatusValueSet = new Set<string>(merchantStatusValues)
 const priorityValueSet = new Set<string>(priorityValues)
 const businessScopeValueSet = new Set<string>(businessScopeValues)
 
@@ -192,7 +199,6 @@ function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
     swiftCode: merchant.swiftCode,
     nextOfKinRelation: merchant.nextOfKinRelation,
     status: merchant.status,
-    onboardingStage: merchant.onboardingStage,
     submittedAt: merchant.submittedAt,
     createdAt: merchant.createdAt,
     updatedAt: merchant.updatedAt,
@@ -288,8 +294,7 @@ export async function createMerchantSubmission(
           accountNumberIban: input.accountNumberIban,
           swiftCode: input.swiftCode,
           nextOfKinRelation: input.nextOfKinRelation,
-          status: 'form_submitted',
-          onboardingStage: 'form_submitted',
+          status: 'pending',
           submittedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -390,10 +395,6 @@ const sortColumnMap = {
     expression: sql`lower(${merchants.businessName})`,
     kind: 'string',
   },
-  onboardingStage: {
-    expression: merchants.onboardingStage,
-    kind: 'string',
-  },
   status: {
     expression: merchants.status,
     kind: 'string',
@@ -427,16 +428,6 @@ export async function listMerchants(query: ListMerchantsQuery) {
       searchConditions.push(eq(merchants.merchantNumber, numericSearch))
     }
     conditions.push(or(...searchConditions))
-  }
-
-  if (query.onboardingStage) {
-    const stages = parseCsvValues<MerchantStatusValue>(
-      query.onboardingStage,
-      merchantStatusValueSet,
-    )
-    if (stages.length > 0) {
-      conditions.push(inArray(merchants.onboardingStage, stages))
-    }
   }
 
   if (query.priority) {
@@ -510,7 +501,6 @@ export async function listMerchants(query: ListMerchantsQuery) {
       id: merchants.id,
       merchantNumber: merchants.merchantNumber,
       businessName: merchants.businessName,
-      onboardingStage: merchants.onboardingStage,
       status: merchants.status,
       priority: merchants.priority,
       priorityNote: merchants.priorityNote,
@@ -615,8 +605,14 @@ async function closeOpenCasesAsUnsuccessful(
   },
 ) {
   const openCases = await tx
-    .select({ id: cases.id, queueId: cases.queueId })
+    .select({
+      id: cases.id,
+      queueId: cases.queueId,
+      createdAt: cases.createdAt,
+      queueSlaHours: queues.slaHours,
+    })
     .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
     .where(
       and(
         inArray(cases.merchantId, input.merchantIds),
@@ -649,6 +645,11 @@ async function closeOpenCasesAsUnsuccessful(
         currentStageId: closedStageByQueueId.get(caseRow.queueId) ?? null,
         status: 'closed',
         closeOutcome: 'unsuccessful',
+        slaBreached: isCaseSlaBreached({
+          createdAt: caseRow.createdAt,
+          evaluatedAt: input.now,
+          slaHours: caseRow.queueSlaHours,
+        }),
         closeReason: input.reason,
         closedAt: input.now,
         updatedAt: input.now,
@@ -780,3 +781,172 @@ export async function bulkUpdatePriority(
 
   return { updatedCount: result.length }
 }
+
+// ─── Merchant Detail ────────────────────────────────────────────────────────
+
+function resolveLimitsMdrOverride(raw: unknown): MerchantLimitsMdr | null {
+  if (!raw) return null
+  const parsed = merchantLimitsMdrSchema.safeParse(raw)
+  return parsed.success ? parsed.data : null
+}
+
+export async function getMerchantDetail(merchantId: string) {
+  const db = getDb()
+
+  const merchant = await db.query.merchants.findFirst({
+    where: and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)),
+  })
+
+  if (!merchant) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  const owner = aliasedTable(users, 'history_actor')
+
+  const [documents, merchantCases, timeline] = await Promise.all([
+    db
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+        originalName: merchantDocuments.originalName,
+        mimeType: merchantDocuments.mimeType,
+        sizeBytes: merchantDocuments.sizeBytes,
+        status: merchantDocuments.status,
+        googleDriveWebViewLink: merchantDocuments.googleDriveWebViewLink,
+        googleDriveDownloadLink: merchantDocuments.googleDriveDownloadLink,
+        createdAt: merchantDocuments.createdAt,
+      })
+      .from(merchantDocuments)
+      .where(eq(merchantDocuments.merchantId, merchantId))
+      .orderBy(asc(merchantDocuments.createdAt)),
+    db
+      .select({
+        id: cases.id,
+        caseNumber: cases.caseNumber,
+        queueId: cases.queueId,
+        queueName: queues.name,
+        queueSlaHours: queues.slaHours,
+        stageName: queueStages.name,
+        stageCategory: queueStages.category,
+        status: cases.status,
+        priority: cases.priority,
+        closeOutcome: cases.closeOutcome,
+        closeReason: cases.closeReason,
+        slaBreached: cases.slaBreached,
+        ownerId: cases.ownerId,
+        ownerName: users.name,
+        closedAt: cases.closedAt,
+        createdAt: cases.createdAt,
+        updatedAt: cases.updatedAt,
+      })
+      .from(cases)
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
+      .leftJoin(users, eq(cases.ownerId, users.id))
+      .where(eq(cases.merchantId, merchantId))
+      .orderBy(desc(cases.createdAt)),
+    db
+      .select({
+        id: caseHistory.id,
+        caseId: caseHistory.caseId,
+        caseNumber: cases.caseNumber,
+        queueName: queues.name,
+        action: caseHistory.action,
+        details: caseHistory.details,
+        actorId: caseHistory.actorId,
+        actorName: owner.name,
+        createdAt: caseHistory.createdAt,
+      })
+      .from(caseHistory)
+      .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .leftJoin(owner, eq(caseHistory.actorId, owner.id))
+      .where(eq(cases.merchantId, merchantId))
+      .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id)),
+  ])
+
+  const now = new Date()
+  const casesWithSla = merchantCases.map((caseRow) => {
+    const isOpen =
+      caseRow.status !== 'closed' &&
+      caseRow.status !== 'error' &&
+      caseRow.stageCategory !== 'closed'
+    const slaBreached = isOpen
+      ? isCaseSlaBreached({
+          createdAt: caseRow.createdAt,
+          evaluatedAt: now,
+          slaHours: caseRow.queueSlaHours,
+        })
+      : (caseRow.slaBreached ?? false)
+    return { ...caseRow, slaBreached }
+  })
+
+  const testStartedAt =
+    timeline.find((event) => event.action === 'testing_limits_applied')
+      ?.createdAt ?? null
+
+  const globalLimitsAndMdr = await getLimitsAndMdrSettings()
+  const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
+
+  return {
+    merchant: {
+      ...merchant,
+      limitsMdrOverride: override,
+    },
+    documents,
+    cases: casesWithSla,
+    timeline,
+    milestones: {
+      formFilledAt: merchant.submittedAt,
+      testStartedAt,
+      liveAt: merchant.liveAt,
+    },
+    limitsAndMdr: {
+      effective: override ?? globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+      override,
+      global: globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+      isOverridden: override !== null,
+    },
+  }
+}
+
+export async function updateMerchantLimitsMdr(
+  merchantId: string,
+  input: MerchantLimitsMdr,
+) {
+  const db = getDb()
+  const value = merchantLimitsMdrSchema.parse(input)
+
+  const [updated] = await db
+    .update(merchants)
+    .set({ limitsMdrOverride: value, updatedAt: new Date() })
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+    .returning({ id: merchants.id })
+
+  if (!updated) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  return { id: updated.id, limitsAndMdr: value }
+}
+
+export async function resetMerchantLimitsMdr(merchantId: string) {
+  const db = getDb()
+
+  const [updated] = await db
+    .update(merchants)
+    .set({ limitsMdrOverride: null, updatedAt: new Date() })
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+    .returning({ id: merchants.id })
+
+  if (!updated) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  const globalLimitsAndMdr = await getLimitsAndMdrSettings()
+  return {
+    id: updated.id,
+    limitsAndMdr: globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+  }
+}
+

@@ -5,6 +5,7 @@ import {
   agreementDraftTemplates,
   caseFlowCloseBlockers,
   caseFlowCloseTriggers,
+  caseFlowCreationRequirements,
   caseFlowStartRules,
   configurationSettings,
   queues,
@@ -19,6 +20,7 @@ import {
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
+  merchantPortalSettingsSchema,
   updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
 import type {
@@ -26,12 +28,14 @@ import type {
   EmailSendingModeSettings,
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
+  MerchantPortalSettings,
   UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
 const LIMITS_AND_MDR_KEY = 'limits-and-mdr'
 const LINK_DEADLINES_KEY = 'link-deadlines'
 const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
+const MERCHANT_PORTAL_KEY = 'merchant-portal'
 const MAX_DRAFT_BYTES = 5 * 1024 * 1024
 const DRAFT_MIME_TYPES = new Set([
   'application/pdf',
@@ -71,6 +75,10 @@ export const defaultLinkDeadlineSettings: LinkDeadlineSettings = {
 export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
   autoEnabled: true,
   manualEnabled: true,
+}
+
+export const defaultMerchantPortalSettings: MerchantPortalSettings = {
+  loginUrl: 'https://merchant.assanpay.com/login',
 }
 
 async function readSetting<T>(
@@ -153,17 +161,35 @@ export async function updateEmailSendingModeSettings(
   return value
 }
 
+export function getMerchantPortalSettings() {
+  return readSetting(
+    MERCHANT_PORTAL_KEY,
+    defaultMerchantPortalSettings,
+    merchantPortalSettingsSchema,
+  )
+}
+
+export async function updateMerchantPortalSettings(
+  input: MerchantPortalSettings,
+) {
+  const value = merchantPortalSettingsSchema.parse(input)
+  await writeSetting(MERCHANT_PORTAL_KEY, value)
+  return value
+}
+
 export async function getConfigurationOverview() {
   const [
     limitsAndMdr,
     linkDeadlines,
     emailSendingMode,
+    merchantPortal,
     agreementDrafts,
     subMerchants,
   ] = await Promise.all([
     getLimitsAndMdrSettings(),
     getLinkDeadlineSettings(),
     getEmailSendingModeSettings(),
+    getMerchantPortalSettings(),
     listAgreementDrafts(),
     listSubMerchantDrafts(),
   ])
@@ -172,6 +198,7 @@ export async function getConfigurationOverview() {
     limitsAndMdr,
     linkDeadlines,
     emailSendingMode,
+    merchantPortal,
     agreementDrafts,
     subMerchants,
     businessTypes: BUSINESS_TYPE_OPTIONS,
@@ -323,7 +350,13 @@ export async function createSubMerchantDraft(input: {
 }
 
 export async function getCaseFlowConfiguration() {
-  const [queueRows, startRules, closeTriggers, closeBlockers] =
+  const [
+    queueRows,
+    startRules,
+    closeTriggers,
+    closeBlockers,
+    creationRequirements,
+  ] =
     await Promise.all([
       getDb()
         .select({
@@ -373,6 +406,19 @@ export async function getCaseFlowConfiguration() {
           asc(caseFlowCloseBlockers.blockedQueueId),
           asc(caseFlowCloseBlockers.createdAt),
         ),
+      getDb()
+        .select({
+          id: caseFlowCreationRequirements.id,
+          targetQueueId: caseFlowCreationRequirements.targetQueueId,
+          prerequisiteQueueId:
+            caseFlowCreationRequirements.prerequisiteQueueId,
+          isActive: caseFlowCreationRequirements.isActive,
+        })
+        .from(caseFlowCreationRequirements)
+        .orderBy(
+          asc(caseFlowCreationRequirements.targetQueueId),
+          asc(caseFlowCreationRequirements.createdAt),
+        ),
     ])
 
   return {
@@ -380,6 +426,7 @@ export async function getCaseFlowConfiguration() {
     startRules,
     closeTriggers,
     closeBlockers,
+    creationRequirements,
   }
 }
 
@@ -391,6 +438,7 @@ export async function updateCaseFlowConfiguration(
   const now = new Date()
 
   await getDb().transaction(async (tx) => {
+    await tx.delete(caseFlowCreationRequirements)
     await tx.delete(caseFlowCloseBlockers)
     await tx.delete(caseFlowCloseTriggers)
     await tx.delete(caseFlowStartRules)
@@ -428,6 +476,17 @@ export async function updateCaseFlowConfiguration(
         })),
       )
     }
+
+    if (value.creationRequirements.length > 0) {
+      await tx.insert(caseFlowCreationRequirements).values(
+        value.creationRequirements.map((rule) => ({
+          targetQueueId: rule.targetQueueId,
+          prerequisiteQueueId: rule.prerequisiteQueueId,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })),
+      )
+    }
   })
 
   return getCaseFlowConfiguration()
@@ -444,6 +503,10 @@ async function assertReferencedQueuesExist(
   }
   for (const rule of input.closeBlockers) {
     queueIds.add(rule.blockedQueueId)
+    queueIds.add(rule.prerequisiteQueueId)
+  }
+  for (const rule of input.creationRequirements) {
+    queueIds.add(rule.targetQueueId)
     queueIds.add(rule.prerequisiteQueueId)
   }
 

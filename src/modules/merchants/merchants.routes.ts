@@ -9,6 +9,7 @@ import {
   bulkPrioritySchema,
   bulkTerminateMerchantsSchema,
   listMerchantsQuerySchema,
+  merchantLimitsMdrSchema,
   terminateMerchantSchema,
   updatePrioritySchema,
 } from './merchants.schemas'
@@ -17,6 +18,7 @@ import type {
   BulkPriorityInput,
   BulkTerminateMerchantsInput,
   ListMerchantsQuery,
+  MerchantLimitsMdr,
   TerminateMerchantInput,
   UpdatePriorityInput,
 } from './merchants.schemas'
@@ -24,9 +26,12 @@ import {
   bulkSoftDeleteMerchants,
   bulkTerminateMerchants,
   bulkUpdatePriority,
+  getMerchantDetail,
   listMerchants,
+  resetMerchantLimitsMdr,
   softDeleteMerchant,
   terminateMerchant,
+  updateMerchantLimitsMdr,
   updateMerchantPriority,
 } from './merchants.service'
 
@@ -42,6 +47,37 @@ merchantRoutes.get(
   async (c) => {
     const query = c.req.valid('query' as never) as ListMerchantsQuery
     const result = await listMerchants(query)
+    return c.json(result)
+  },
+)
+
+// GET /api/merchants/:id — Merchant detail (all roles)
+merchantRoutes.get('/:id', async (c) => {
+  const id = c.req.param('id')
+  const result = await getMerchantDetail(id)
+  return c.json(result)
+})
+
+// PATCH /api/merchants/:id/limits-mdr — Update per-merchant limits & MDR (admin, supervisor)
+merchantRoutes.patch(
+  '/:id/limits-mdr',
+  requireRoles('admin', 'supervisor'),
+  zodValidator('json', merchantLimitsMdrSchema),
+  async (c) => {
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as MerchantLimitsMdr
+    const result = await updateMerchantLimitsMdr(id, input)
+    return c.json(result)
+  },
+)
+
+// DELETE /api/merchants/:id/limits-mdr — Reset to global limits & MDR (admin, supervisor)
+merchantRoutes.delete(
+  '/:id/limits-mdr',
+  requireRoles('admin', 'supervisor'),
+  async (c) => {
+    const id = c.req.param('id')
+    const result = await resetMerchantLimitsMdr(id)
     return c.json(result)
   },
 )

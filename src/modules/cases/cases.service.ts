@@ -52,14 +52,17 @@ import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
 import { AgreementEmail } from '../email/templates/agreement'
 import { MidCreationEmail } from '../email/templates/mid-creation'
+import { LiveActivationEmail } from '../email/templates/live-activation'
 import {
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
+  getMerchantPortalSettings,
 } from '../configuration/configuration.service'
 import {
   assertCloseBlockersSatisfied,
+  assertCreationRequirementsSatisfied,
   triggerCasesAfterSuccessfulClose,
 } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
@@ -84,6 +87,7 @@ import type {
   SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
   SelectSubMerchantFormInput,
+  SendLiveEmailInput,
   SendMidCreationEmailInput,
   UpdateCaseStatusInput,
 } from './cases.schemas'
@@ -97,6 +101,7 @@ import {
   SUB_MERCHANT_FINAL_FORM_KIND,
   SUB_MERCHANT_FORM_QUEUE_SLUG,
 } from './sub-merchant-form.config'
+import { isCaseSlaBreached } from './case-sla'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
 const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024
@@ -116,10 +121,10 @@ const WORDPRESS_WEBSITE_QUEUE_SLUG = 'wordpress-website'
 const WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX = 'wordpress_screenshot_'
 const WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX =
   'wordpress_sub_merchant_logo_screenshot_'
-const MERCHANT_PORTAL_LOGIN_URL = 'https://merchant.assanpay.com/login'
 const RESUBMISSION_EMAIL_PROOF_KIND = 'resubmission_email_proof'
 const AGREEMENT_EMAIL_PROOF_KIND = 'agreement_email_proof'
 const MID_CREATION_EMAIL_PROOF_KIND = 'mid_creation_email_proof'
+const LIVE_ACTIVATION_EMAIL_PROOF_KIND = 'live_activation_email_proof'
 const EMAIL_PROOF_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -798,6 +803,11 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       )
     }
 
+    await assertCreationRequirementsSatisfied(tx, {
+      merchantId: merchant.id,
+      targetQueueId: queue.id,
+    })
+
     const stages = await ensureQueueStages(tx, {
       id: queue.id,
       name: queue.name,
@@ -985,6 +995,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       queueId: cases.queueId,
       queueName: queues.name,
       queueSlaHours: queues.slaHours,
+      slaBreached: cases.slaBreached,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
       ownerId: cases.ownerId,
@@ -1208,10 +1219,19 @@ export async function updateCaseStatus(
 ) {
   const db = getDb()
 
-  const existing = await db.query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { id: true, status: true, merchantId: true, queueId: true },
-  })
+  const [existing] = await db
+    .select({
+      id: cases.id,
+      status: cases.status,
+      merchantId: cases.merchantId,
+      queueId: cases.queueId,
+      createdAt: cases.createdAt,
+      queueSlaHours: queues.slaHours,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
 
   if (!existing) {
     throw new AppError(404, 'Case not found.')
@@ -1233,7 +1253,13 @@ export async function updateCaseStatus(
 
   // Auto-set closedAt when transitioning to closed
   if (input.status === 'closed' || input.status === 'error') {
-    updateData.closedAt = new Date()
+    const closedAt = new Date()
+    updateData.closedAt = closedAt
+    updateData.slaBreached = isCaseSlaBreached({
+      createdAt: existing.createdAt,
+      evaluatedAt: closedAt,
+      slaHours: existing.queueSlaHours,
+    })
   }
 
   // Clear closedAt when re-opening from closed
@@ -1243,6 +1269,7 @@ export async function updateCaseStatus(
     input.status !== 'error'
   ) {
     updateData.closedAt = null
+    updateData.slaBreached = null
   }
 
   const [updated] = await db.transaction(async (tx) => {
@@ -1260,6 +1287,7 @@ export async function updateCaseStatus(
       .returning({
         id: cases.id,
         status: cases.status,
+        slaBreached: cases.slaBreached,
         closedAt: cases.closedAt,
         updatedAt: cases.updatedAt,
       })
@@ -1444,6 +1472,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       status: cases.status,
       priority: cases.priority,
       closeOutcome: cases.closeOutcome,
+      slaBreached: cases.slaBreached,
       closeReason: cases.closeReason,
       closedAt: cases.closedAt,
       createdAt: cases.createdAt,
@@ -1681,6 +1710,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       status: caseData.status,
       priority: caseData.priority,
       closeOutcome: caseData.closeOutcome,
+      slaBreached: caseData.slaBreached,
       closeReason: caseData.closeReason,
       closedAt: caseData.closedAt,
       createdAt: caseData.createdAt,
@@ -2250,6 +2280,11 @@ export async function advanceStage(caseId: string, userId: string) {
     updateData.closeOutcome = 'successful'
     updateData.closeReason = null
     updateData.closedAt = now
+    updateData.slaBreached = isCaseSlaBreached({
+      createdAt: caseData.createdAt,
+      evaluatedAt: now,
+      slaHours: queue.slaHours,
+    })
   }
 
   const action =
@@ -2290,7 +2325,6 @@ export async function advanceStage(caseId: string, userId: string) {
           .update(merchants)
           .set({
             status: 'testing',
-            onboardingStage: 'testing',
             updatedAt: now,
           })
           .where(eq(merchants.id, caseData.merchantId))
@@ -2301,7 +2335,6 @@ export async function advanceStage(caseId: string, userId: string) {
           .update(merchants)
           .set({
             status: 'live',
-            onboardingStage: 'live',
             liveAt: now,
             updatedAt: now,
           })
@@ -2584,6 +2617,11 @@ export async function closeUnsuccessful(
             ? 'closed'
             : 'error',
         closeOutcome: 'unsuccessful',
+        slaBreached: isCaseSlaBreached({
+          createdAt: caseData.createdAt,
+          evaluatedAt: now,
+          slaHours: queue?.slaHours,
+        }),
         closeReason: input.reason,
         closedAt: now,
         updatedAt: now,
@@ -3946,9 +3984,10 @@ export async function getMidCreationEmailPreview(
     throw new AppError(400, 'Credentials must use the saved Portal MID.')
   }
 
-  const [linkDeadlines, limitsAndMdr] = await Promise.all([
+  const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
     getLinkDeadlineSettings(),
     getLimitsAndMdrSettings(),
+    getMerchantPortalSettings(),
   ])
 
   const now = new Date()
@@ -3999,7 +4038,7 @@ export async function getMidCreationEmailPreview(
     portalEmail: input.email,
     portalPassword: input.password,
     portalMid: String(input.portalMid),
-    merchantPortalUrl: MERCHANT_PORTAL_LOGIN_URL,
+    merchantPortalUrl: merchantPortal.loginUrl,
     goLiveUrl,
     availableAt: formatEmailDateTime(resolvedAvailableAt),
     goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
@@ -4149,6 +4188,105 @@ export async function confirmMidCreationEmailManual(
   )
 
   return { status: 'sent', fileId: savedFile.id }
+}
+
+export type LiveActivationEmailPreviewResult = {
+  recipient: string
+  subject: string
+  body: string
+  tokenId: string
+  goLiveAvailableAt: null
+}
+
+export async function getLiveActivationEmailPreview(
+  caseId: string,
+  userId: string,
+  input: SendLiveEmailInput,
+): Promise<LiveActivationEmailPreviewResult> {
+  await assertManualEmailEnabled()
+  const caseRow = await loadLiveCase(caseId, userId)
+  const [limitsAndMdr, merchantPortal] = await Promise.all([
+    getLimitsAndMdrSettings(),
+    getMerchantPortalSettings(),
+  ])
+  const subject = `AssanPay account is live for ${caseRow.merchantName}`
+
+  return {
+    recipient: input.email,
+    subject,
+    body: buildLiveActivationEmailBody({
+      merchantName: caseRow.merchantName,
+      merchantPortalUrl: merchantPortal.loginUrl,
+      liveLimits: limitsAndMdr.live,
+    }),
+    tokenId: caseId,
+    goLiveAvailableAt: null,
+  }
+}
+
+export async function confirmLiveActivationEmailManual(
+  caseId: string,
+  userId: string,
+  input: SendLiveEmailInput & { tokenId: string; file: File },
+): Promise<ManualEmailResult> {
+  await assertManualEmailEnabled()
+  validateEmailProofFile(input.file)
+  const caseRow = await loadLiveCase(caseId, userId)
+
+  if (input.tokenId !== caseId) {
+    throw new AppError(400, 'Invalid preview token.')
+  }
+
+  const { savedFile } = await uploadEmailProofFile(
+    caseId,
+    userId,
+    input.file,
+    LIVE_ACTIVATION_EMAIL_PROOF_KIND,
+    caseRow.caseNumber,
+    caseRow.merchantName,
+  )
+
+  await getDb().insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'live_activation_email_sent_manual',
+    details: {
+      recipient: input.email,
+      screenshotFileId: savedFile.id,
+      manual: true,
+    },
+    createdAt: new Date(),
+  })
+
+  return { status: 'sent', fileId: savedFile.id }
+}
+
+function buildLiveActivationEmailBody(params: {
+  merchantName: string
+  merchantPortalUrl: string
+  liveLimits: {
+    collectionMin: number
+    collectionMax: number
+    disbursementMin: number
+    disbursementMax: number
+  }
+}) {
+  const { merchantName, merchantPortalUrl, liveLimits } = params
+  return `AssanPay account is live for ${merchantName}
+
+Congratulations, ${merchantName}. Your AssanPay merchant account is live now and ready for production transactions.
+
+Merchant Portal Link: ${merchantPortalUrl}
+
+Live Limits Per Transaction
+- Collection: PKR ${liveLimits.collectionMin.toLocaleString()}-${liveLimits.collectionMax.toLocaleString()}
+- Disbursement: PKR ${liveLimits.disbursementMin.toLocaleString()}-${liveLimits.disbursementMax.toLocaleString()}
+
+You can use the merchant portal to monitor live activity and manage your AssanPay merchant account.
+
+If you need any help, just reply to this email.
+
+- AssanPay Onboarding Team`
 }
 
 export async function sendForResubmission(
@@ -4815,6 +4953,38 @@ async function loadMidCreationCase(caseId: string, userId: string) {
   return row
 }
 
+async function loadLiveCase(caseId: string, userId: string) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+      queueSlug: queues.slug,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.queueSlug !== LIVE_QUEUE_SLUG) {
+    throw new AppError(400, 'This action is only available for Live cases.')
+  }
+  if (row.ownerId !== userId) {
+    throw new AppError(403, 'Only the case owner can send the live email.')
+  }
+  if (row.status !== 'working') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
+
+  return row
+}
+
 export async function sendMidCreationCredentialsEmail(
   caseId: string,
   userId: string,
@@ -4835,9 +5005,10 @@ export async function sendMidCreationCredentialsEmail(
   }
 
   const now = new Date()
-  const [linkDeadlines, limitsAndMdr] = await Promise.all([
+  const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
     getLinkDeadlineSettings(),
     getLimitsAndMdrSettings(),
+    getMerchantPortalSettings(),
   ])
   const availableAt =
     linkDeadlines.goLiveAvailabilityHours == null
@@ -4877,7 +5048,7 @@ export async function sendMidCreationCredentialsEmail(
       portalEmail: input.email,
       portalPassword: input.password,
       portalMid: input.portalMid,
-      merchantPortalUrl: MERCHANT_PORTAL_LOGIN_URL,
+      merchantPortalUrl: merchantPortal.loginUrl,
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
@@ -4902,6 +5073,7 @@ export async function sendMidCreationCredentialsEmail(
       cardRate,
       limitsAndMdr,
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+      merchantPortalUrl: merchantPortal.loginUrl,
     },
   })
 
@@ -4953,6 +5125,68 @@ export async function sendMidCreationCredentialsEmail(
     status: 'sent',
     emailLogId: emailResult.emailLogId,
     goLiveAvailableAt: availableAt.toISOString(),
+  }
+}
+
+export async function sendLiveActivationEmail(
+  caseId: string,
+  userId: string,
+  input: SendLiveEmailInput,
+): Promise<MidCreationEmailResult> {
+  await assertAutoEmailEnabled()
+  const db = getDb()
+  const caseRow = await loadLiveCase(caseId, userId)
+  const [limitsAndMdr, merchantPortal] = await Promise.all([
+    getLimitsAndMdrSettings(),
+    getMerchantPortalSettings(),
+  ])
+
+  const emailResult = await sendEmail({
+    to: input.email,
+    subject: `AssanPay account is live for ${caseRow.merchantName}`,
+    template: 'live-activation',
+    react: LiveActivationEmail({
+      merchantName: caseRow.merchantName,
+      merchantPortalUrl: merchantPortal.loginUrl,
+      liveLimits: limitsAndMdr.live,
+    }),
+    caseId,
+    merchantId: caseRow.merchantId,
+    idempotencyKey: `live-activation/${caseId}`,
+    metadata: {
+      recipient: input.email,
+      merchantPortalUrl: merchantPortal.loginUrl,
+      liveLimits: limitsAndMdr.live,
+    },
+  })
+
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action:
+      emailResult.status === 'sent'
+        ? 'live_activation_email_sent'
+        : 'live_activation_email_failed',
+    details: {
+      emailLogId: emailResult.emailLogId,
+      recipient: input.email,
+      error: emailResult.error ?? null,
+    },
+  })
+
+  if (emailResult.status === 'failed') {
+    return {
+      status: 'failed',
+      emailLogId: emailResult.emailLogId,
+      goLiveAvailableAt: null,
+      error: emailResult.error,
+    }
+  }
+
+  return {
+    status: 'sent',
+    emailLogId: emailResult.emailLogId,
+    goLiveAvailableAt: null,
   }
 }
 
@@ -5063,6 +5297,11 @@ async function ensurePhysicalAgreementCaseForMerchant(
   })
   if (existing) return existing
 
+  await assertCreationRequirementsSatisfied(tx, {
+    merchantId: input.merchantId,
+    targetQueueId: queue.id,
+  })
+
   const stages = await ensureQueueStages(tx, {
     id: queue.id,
     name: queue.name,
@@ -5103,6 +5342,16 @@ async function ensurePhysicalAgreementCaseForMerchant(
     throw new AppError(500, 'Failed to create Physical Agreement case.')
   }
 
+  const [sourceCase] = await tx
+    .select({
+      caseNumber: cases.caseNumber,
+      queueName: queues.name,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, input.parentCaseId))
+    .limit(1)
+
   await tx.insert(caseHistory).values({
     caseId: created.id,
     actorId: null,
@@ -5110,6 +5359,8 @@ async function ensurePhysicalAgreementCaseForMerchant(
     details: {
       parentCaseId: input.parentCaseId,
       sourceQueueId: input.sourceQueueId,
+      sourceCaseNumber: sourceCase?.caseNumber ?? null,
+      sourceQueueName: sourceCase?.queueName ?? null,
       targetQueueId: queue.id,
       targetQueueName: queue.name,
       merchantName: merchant.businessName,
@@ -5779,10 +6030,13 @@ export async function activateMidGoLive(token: string) {
         midQueueId: cases.queueId,
         midCaseNumber: cases.caseNumber,
         midCaseStatus: cases.status,
+        midCaseCreatedAt: cases.createdAt,
+        midCaseQueueSlaHours: queues.slaHours,
         merchantName: merchants.businessName,
       })
       .from(midGoLiveTokens)
       .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
+      .innerJoin(queues, eq(cases.queueId, queues.id))
       .innerJoin(merchants, eq(cases.merchantId, merchants.id))
       .where(eq(midGoLiveTokens.token, token))
       .limit(1)
@@ -5811,24 +6065,6 @@ export async function activateMidGoLive(token: string) {
 
     if (tokenRow.availableAt.getTime() > Date.now()) {
       throw new AppError(425, 'This Go-Live link works after 72 hours only.')
-    }
-
-    const [physicalAgreementCase] = await tx
-      .select({ id: cases.id })
-      .from(cases)
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .where(
-        and(
-          eq(cases.merchantId, tokenRow.merchantId),
-          eq(queues.slug, PHYSICAL_AGREEMENT_QUEUE_SLUG),
-          eq(cases.status, 'closed'),
-          eq(cases.closeOutcome, 'successful'),
-        ),
-      )
-      .limit(1)
-
-    if (!physicalAgreementCase) {
-      throw new AppError(409, 'Submit Physical copy of agreement to go live')
     }
 
     const liveQueue = await tx.query.queues.findFirst({
@@ -5861,6 +6097,11 @@ export async function activateMidGoLive(token: string) {
     let liveCaseNumber = existingLiveCase?.caseNumber ?? null
 
     if (!existingLiveCase) {
+      await assertCreationRequirementsSatisfied(tx, {
+        merchantId: tokenRow.merchantId,
+        targetQueueId: liveQueue.id,
+      })
+
       const liveStages = await ensureQueueStages(tx, {
         id: liveQueue.id,
         name: liveQueue.name,
@@ -5927,6 +6168,11 @@ export async function activateMidGoLive(token: string) {
           status: 'closed',
           currentStageId: closedStage?.id ?? null,
           closeOutcome: 'successful',
+          slaBreached: isCaseSlaBreached({
+            createdAt: tokenRow.midCaseCreatedAt,
+            evaluatedAt: now,
+            slaHours: tokenRow.midCaseQueueSlaHours,
+          }),
           closeReason: null,
           closedAt: now,
           updatedAt: now,

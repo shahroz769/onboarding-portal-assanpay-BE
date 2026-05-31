@@ -275,6 +275,14 @@ export type SendMidCreationEmailInput = z.infer<
   typeof sendMidCreationEmailSchema
 >
 
+export const sendLiveEmailSchema = z
+  .object({
+    email: z.string().trim().email().max(255),
+  })
+  .strict()
+
+export type SendLiveEmailInput = z.infer<typeof sendLiveEmailSchema>
+
 export const midCreationEmailResponseSchema = z.object({
   status: z.enum(['sent', 'failed']),
   emailLogId: z.string().uuid(),

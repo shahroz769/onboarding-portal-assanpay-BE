@@ -55,13 +55,9 @@ export const merchantTypeEnum = pgEnum('merchant_type', [
 ])
 
 export const merchantStatusEnum = pgEnum('merchant_status', [
-  'form_submitted',
-  'documents_review',
-  'sub_merchant',
-  'agreement',
+  'pending',
   'testing',
   'live',
-  'suspended',
   'terminated',
 ])
 
@@ -379,16 +375,14 @@ export const merchants = pgTable(
     accountNumberIban: varchar('account_number_iban', { length: 64 }).notNull(),
     swiftCode: varchar('swift_code', { length: 64 }),
     nextOfKinRelation: kinRelationEnum('next_of_kin_relation').notNull(),
-    status: merchantStatusEnum('status').default('form_submitted').notNull(),
-    onboardingStage: merchantStatusEnum('onboarding_stage')
-      .default('form_submitted')
-      .notNull(),
+    status: merchantStatusEnum('status').default('pending').notNull(),
     priority: priorityEnum('priority').default('normal').notNull(),
     priorityNote: varchar('priority_note', { length: 500 }),
     businessScope: businessScopeEnum('business_scope')
       .default('local')
       .notNull(),
     currency: varchar('currency', { length: 8 }).default('PKR').notNull(),
+    limitsMdrOverride: jsonb('limits_mdr_override'),
     liveAt: timestamp('live_at', { withTimezone: true }),
     submittedAt: timestamp('submitted_at', { withTimezone: true })
       .defaultNow()
@@ -424,9 +418,6 @@ export const merchants = pgTable(
       'merchants_active_business_name_lower_idx',
     )
       .on(sql`lower(${table.businessName})`, table.id)
-      .where(sql`${table.deletedAt} IS NULL`),
-    merchantsActiveStageCreatedIdx: index('merchants_active_stage_created_idx')
-      .on(table.onboardingStage, table.createdAt, table.id)
       .where(sql`${table.deletedAt} IS NULL`),
     merchantsActivePriorityCreatedIdx: index(
       'merchants_active_priority_created_idx',
@@ -517,6 +508,7 @@ export const cases = pgTable(
     status: caseStatusEnum('status').default('new').notNull(),
     priority: priorityEnum('priority').default('normal').notNull(),
     closeOutcome: caseCloseOutcomeEnum('close_outcome'),
+    slaBreached: boolean('sla_breached'),
     closeReason: text('close_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -780,6 +772,34 @@ export const caseFlowCloseBlockers = pgTable(
     caseFlowCloseBlockersBlockedIdx: index(
       'case_flow_close_blockers_blocked_idx',
     ).on(table.blockedQueueId),
+  }),
+)
+
+export const caseFlowCreationRequirements = pgTable(
+  'case_flow_creation_requirements',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    targetQueueId: uuid('target_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    prerequisiteQueueId: uuid('prerequisite_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFlowCreationRequirementsTargetPrerequisiteUnique: uniqueIndex(
+      'case_flow_creation_requirements_target_prerequisite_unique',
+    ).on(table.targetQueueId, table.prerequisiteQueueId),
+    caseFlowCreationRequirementsTargetIdx: index(
+      'case_flow_creation_requirements_target_idx',
+    ).on(table.targetQueueId),
   }),
 )
 
@@ -1138,6 +1158,10 @@ export type CaseFlowCloseTrigger = typeof caseFlowCloseTriggers.$inferSelect
 export type NewCaseFlowCloseTrigger = typeof caseFlowCloseTriggers.$inferInsert
 export type CaseFlowCloseBlocker = typeof caseFlowCloseBlockers.$inferSelect
 export type NewCaseFlowCloseBlocker = typeof caseFlowCloseBlockers.$inferInsert
+export type CaseFlowCreationRequirement =
+  typeof caseFlowCreationRequirements.$inferSelect
+export type NewCaseFlowCreationRequirement =
+  typeof caseFlowCreationRequirements.$inferInsert
 export type CaseLink = typeof caseLinks.$inferSelect
 export type NewCaseLink = typeof caseLinks.$inferInsert
 export type Notification = typeof notifications.$inferSelect

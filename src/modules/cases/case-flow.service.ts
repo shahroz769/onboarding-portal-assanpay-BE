@@ -4,6 +4,7 @@ import type { getDb } from '../../db/client'
 import {
   caseFlowCloseBlockers,
   caseFlowCloseTriggers,
+  caseFlowCreationRequirements,
   caseFlowStartRules,
   caseHistory,
   caseLinks,
@@ -98,6 +99,11 @@ async function createConfiguredCase(
     )
   }
 
+  await assertCreationRequirementsSatisfied(tx, {
+    merchantId: merchant.id,
+    targetQueueId: queue.id,
+  })
+
   const stages = await ensureQueueStages(tx, {
     id: queue.id,
     name: queue.name,
@@ -129,6 +135,18 @@ async function createConfiguredCase(
     throw new AppError(500, 'Failed to create configured case.')
   }
 
+  const [sourceCase] = input.parentCaseId
+    ? await tx
+        .select({
+          caseNumber: cases.caseNumber,
+          queueName: queues.name,
+        })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(eq(cases.id, input.parentCaseId))
+        .limit(1)
+    : []
+
   await tx.insert(caseHistory).values({
     caseId: created.id,
     actorId: null,
@@ -139,6 +157,8 @@ async function createConfiguredCase(
     details: {
       parentCaseId: input.parentCaseId,
       sourceQueueId: input.sourceQueueId,
+      sourceCaseNumber: sourceCase?.caseNumber ?? null,
+      sourceQueueName: sourceCase?.queueName ?? null,
       targetQueueId: queue.id,
       targetQueueName: queue.name,
       merchantName: merchant.businessName,
@@ -232,6 +252,57 @@ export async function assertCloseBlockersSatisfied(
     throw new AppError(
       409,
       `Close ${missing.map((item) => item.prerequisiteQueueName).join(', ')} before closing this case.`,
+    )
+  }
+}
+
+export async function assertCreationRequirementsSatisfied(
+  tx: DbTransaction,
+  input: { merchantId: string; targetQueueId: string },
+) {
+  const requirements = await tx
+    .select({
+      prerequisiteQueueId: caseFlowCreationRequirements.prerequisiteQueueId,
+      prerequisiteQueueName: queues.name,
+    })
+    .from(caseFlowCreationRequirements)
+    .innerJoin(
+      queues,
+      eq(caseFlowCreationRequirements.prerequisiteQueueId, queues.id),
+    )
+    .where(
+      and(
+        eq(caseFlowCreationRequirements.targetQueueId, input.targetQueueId),
+        eq(caseFlowCreationRequirements.isActive, true),
+      ),
+    )
+
+  if (requirements.length === 0) return
+
+  const prerequisiteQueueIds = requirements.map(
+    (requirement) => requirement.prerequisiteQueueId,
+  )
+  const satisfiedRows = await tx
+    .select({ queueId: cases.queueId })
+    .from(cases)
+    .where(
+      and(
+        eq(cases.merchantId, input.merchantId),
+        inArray(cases.queueId, prerequisiteQueueIds),
+        eq(cases.status, 'closed'),
+        eq(cases.closeOutcome, 'successful'),
+      ),
+    )
+
+  const satisfiedQueueIds = new Set(satisfiedRows.map((row) => row.queueId))
+  const missing = requirements.filter(
+    (requirement) => !satisfiedQueueIds.has(requirement.prerequisiteQueueId),
+  )
+
+  if (missing.length > 0) {
+    throw new AppError(
+      409,
+      `Close ${missing.map((item) => item.prerequisiteQueueName).join(', ')} before creating this case.`,
     )
   }
 }

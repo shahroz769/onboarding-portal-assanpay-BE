@@ -19,6 +19,7 @@ import {
   saveFieldReviewsSchema,
   saveWordpressWebsiteSchema,
   sendAgreementEmailSchema,
+  sendLiveEmailSchema,
   sendMidCreationEmailSchema,
   selectSubMerchantFormSchema,
   updateCasePrioritySchema,
@@ -38,6 +39,7 @@ import type {
   SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
   SendAgreementEmailInput,
+  SendLiveEmailInput,
   SendMidCreationEmailInput,
   SelectSubMerchantFormInput,
   UpdateCasePriorityInput,
@@ -78,6 +80,9 @@ import {
   confirmAgreementEmailManual,
   getMidCreationEmailPreview,
   confirmMidCreationEmailManual,
+  sendLiveActivationEmail,
+  getLiveActivationEmailPreview,
+  confirmLiveActivationEmailManual,
 } from './cases.service'
 
 export const caseRoutes = new Hono<AppEnv>()
@@ -119,6 +124,19 @@ caseRoutes.post(
   },
 )
 
+// POST /api/cases/:id/live/send-mail - Send live activation email
+caseRoutes.post(
+  '/:id/live/send-mail',
+  zodValidator('json', sendLiveEmailSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SendLiveEmailInput
+    const result = await sendLiveActivationEmail(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
 // POST /api/cases/bulk-assign — Bulk assign owner (admin, supervisor)
 caseRoutes.post(
   '/bulk-assign',
@@ -128,6 +146,19 @@ caseRoutes.post(
     const auth = c.get('auth')
     const input = c.req.valid('json' as never) as BulkAssignCaseInput
     const result = await bulkAssignCases(input.ids, input.ownerId, auth.userId)
+    return c.json(result)
+  },
+)
+
+// POST /api/cases/:id/live/send-mail/preview - Get live activation email preview
+caseRoutes.post(
+  '/:id/live/send-mail/preview',
+  zodValidator('json', sendLiveEmailSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as SendLiveEmailInput
+    const result = await getLiveActivationEmailPreview(id, auth.userId, input)
     return c.json(result)
   },
 )
@@ -144,6 +175,35 @@ caseRoutes.patch(
     return c.json(result)
   },
 )
+
+// POST /api/cases/:id/live/send-mail/manual - Confirm manual live activation email
+caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
+  const contentType = c.req.header('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
+  const file = formData.get('file')
+  const tokenId = formData.get('tokenId')
+  const email = formData.get('email')
+  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  if (typeof email !== 'string') throw new AppError(400, 'email is required.')
+  const parsed = sendLiveEmailSchema.safeParse({ email })
+  if (!parsed.success) {
+    throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid email payload.')
+  }
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await confirmLiveActivationEmailManual(id, auth.userId, {
+    ...parsed.data,
+    tokenId,
+    file,
+  })
+  return c.json(result)
+})
 
 // PATCH /api/cases/:id/assign — Assign case owner (admin, supervisor)
 caseRoutes.patch(

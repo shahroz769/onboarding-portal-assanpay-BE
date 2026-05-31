@@ -419,6 +419,39 @@ export function getAllowedDocumentTypes(merchantType: MerchantType) {
   ] as MerchantDocumentType[]
 }
 
+// ─── Per-Merchant Limits & MDR Override ─────────────────────────────────────
+
+const limitRangeSchema = z
+  .object({
+    collectionMin: z.coerce.number().min(0),
+    collectionMax: z.coerce.number().min(0),
+    disbursementMin: z.coerce.number().min(0),
+    disbursementMax: z.coerce.number().min(0),
+  })
+  .refine((value) => value.collectionMax >= value.collectionMin, {
+    message: 'Collection maximum must be greater than or equal to the minimum.',
+    path: ['collectionMax'],
+  })
+  .refine((value) => value.disbursementMax >= value.disbursementMin, {
+    message:
+      'Disbursement maximum must be greater than or equal to the minimum.',
+    path: ['disbursementMax'],
+  })
+
+export const merchantLimitsMdrSchema = z.object({
+  testing: limitRangeSchema,
+  live: limitRangeSchema,
+  rates: z.object({
+    eWallets: z.coerce.number().min(0).max(100),
+    cardDefault: z.coerce.number().min(0).max(100),
+    cardShopify: z.coerce.number().min(0).max(100),
+    payout: z.coerce.number().min(0).max(100),
+  }),
+})
+
+export type MerchantLimitsMdr = z.infer<typeof merchantLimitsMdrSchema>
+
+
 function assertRequiredDocuments(
   merchantType: MerchantType,
   files: Map<MerchantDocumentType, UploadedMerchantDocument>,
@@ -488,13 +521,9 @@ function toLower(value: string) {
 // ─── List / Update / Delete Schemas ─────────────────────────────────────────
 
 export const merchantStatusValues = [
-  'form_submitted',
-  'documents_review',
-  'sub_merchant',
-  'agreement',
+  'pending',
   'testing',
   'live',
-  'suspended',
   'terminated',
 ] as const
 
@@ -507,7 +536,6 @@ export type BusinessScopeValue = (typeof businessScopeValues)[number]
 export const sortableColumns = [
   'merchantNumber',
   'businessName',
-  'onboardingStage',
   'status',
   'priority',
   'createdAt',
@@ -518,7 +546,6 @@ export const listMerchantsQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
   search: z.string().trim().max(200).optional(),
-  onboardingStage: z.string().optional(),
   priority: z.string().optional(),
   currency: z.string().optional(),
   businessScope: z.string().optional(),

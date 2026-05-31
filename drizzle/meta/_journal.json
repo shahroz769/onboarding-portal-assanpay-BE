@@ -204,6 +204,41 @@
       "when": 1780272000000,
       "tag": "0029_queue_sla_hours",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780358400000,
+      "tag": "0030_case_sla_breached",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780531200000,
+      "tag": "0031_simplify_merchant_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780617600000,
+      "tag": "0032_merchant_limits_mdr_override",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780704000000,
+      "tag": "0033_ensure_physical_agreement_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780790400000,
+      "tag": "0034_case_flow_creation_requirements",
+      "breakpoints": true
     }
   ]
 }
