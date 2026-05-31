@@ -4,7 +4,11 @@ import { getDb } from '../../db/client'
 import { queues, queueCaseSequences } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { ensureQueueStages } from './queue-stage-defaults'
-import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
+import type {
+  CreateQueueInput,
+  UpdateQueueSlaInput,
+  UpdateQueueStatusInput,
+} from './queues.schemas'
 
 export async function listQueues(options: { includeInactive?: boolean } = {}) {
   const db = getDb()
@@ -16,6 +20,7 @@ export async function listQueues(options: { includeInactive?: boolean } = {}) {
       slug: queues.slug,
       prefix: queues.prefix,
       qcEnabled: queues.qcEnabled,
+      slaHours: queues.slaHours,
       isActive: queues.isActive,
       createdAt: queues.createdAt,
     })
@@ -63,6 +68,7 @@ export async function createQueue(input: CreateQueueInput) {
       slug: created.slug,
       prefix: created.prefix,
       qcEnabled: created.qcEnabled,
+      slaHours: created.slaHours,
       isActive: created.isActive,
       createdAt: created.createdAt,
     }
@@ -84,6 +90,31 @@ export async function updateQueueStatus(
       slug: queues.slug,
       prefix: queues.prefix,
       qcEnabled: queues.qcEnabled,
+      slaHours: queues.slaHours,
+      isActive: queues.isActive,
+      createdAt: queues.createdAt,
+    })
+
+  if (!updated) {
+    throw new AppError(404, 'Queue not found.')
+  }
+
+  return updated
+}
+
+export async function updateQueueSla(id: string, input: UpdateQueueSlaInput) {
+  const db = getDb()
+  const [updated] = await db
+    .update(queues)
+    .set({ slaHours: input.slaHours })
+    .where(eq(queues.id, id))
+    .returning({
+      id: queues.id,
+      name: queues.name,
+      slug: queues.slug,
+      prefix: queues.prefix,
+      qcEnabled: queues.qcEnabled,
+      slaHours: queues.slaHours,
       isActive: queues.isActive,
       createdAt: queues.createdAt,
     })

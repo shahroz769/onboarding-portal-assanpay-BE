@@ -4,9 +4,22 @@ import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
-import { createQueueSchema, updateQueueStatusSchema } from './queues.schemas'
-import type { CreateQueueInput, UpdateQueueStatusInput } from './queues.schemas'
-import { createQueue, listQueues, updateQueueStatus } from './queues.service'
+import {
+  createQueueSchema,
+  updateQueueSlaSchema,
+  updateQueueStatusSchema,
+} from './queues.schemas'
+import type {
+  CreateQueueInput,
+  UpdateQueueSlaInput,
+  UpdateQueueStatusInput,
+} from './queues.schemas'
+import {
+  createQueue,
+  listQueues,
+  updateQueueSla,
+  updateQueueStatus,
+} from './queues.service'
 
 export const queueRoutes = new Hono<AppEnv>()
 
@@ -41,6 +54,18 @@ queueRoutes.patch(
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as UpdateQueueStatusInput
     const result = await updateQueueStatus(id, input)
+    return c.json(result)
+  },
+)
+
+queueRoutes.patch(
+  '/:id/sla',
+  requireRoles('admin'),
+  zodValidator('json', updateQueueSlaSchema),
+  async (c) => {
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as UpdateQueueSlaInput
+    const result = await updateQueueSla(id, input)
     return c.json(result)
   },
 )

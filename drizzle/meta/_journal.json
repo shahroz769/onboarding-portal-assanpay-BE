@@ -197,6 +197,13 @@
       "when": 1779753600000,
       "tag": "0028_merchant_terminated_status",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780272000000,
+      "tag": "0029_queue_sla_hours",
+      "breakpoints": true
     }
   ]
 }

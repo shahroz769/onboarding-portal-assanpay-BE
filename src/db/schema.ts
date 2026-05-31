@@ -166,6 +166,7 @@ export const queues = pgTable('queues', {
   slug: varchar('slug', { length: 120 }).notNull().unique(),
   prefix: varchar('prefix', { length: 4 }).notNull().unique(),
   qcEnabled: boolean('qc_enabled').default(false).notNull(),
+  slaHours: integer('sla_hours').default(24).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()

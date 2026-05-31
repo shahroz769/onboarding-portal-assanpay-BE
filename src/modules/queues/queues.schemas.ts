@@ -29,3 +29,11 @@ export const updateQueueStatusSchema = z
   .strict()
 
 export type UpdateQueueStatusInput = z.infer<typeof updateQueueStatusSchema>
+
+export const updateQueueSlaSchema = z
+  .object({
+    slaHours: z.coerce.number().int().min(1).max(8760),
+  })
+  .strict()
+
+export type UpdateQueueSlaInput = z.infer<typeof updateQueueSlaSchema>
