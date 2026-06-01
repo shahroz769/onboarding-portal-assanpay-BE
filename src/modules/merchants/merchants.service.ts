@@ -11,8 +11,8 @@ import {
   ne,
   or,
   sql,
+  aliasedTable,
 } from 'drizzle-orm'
-import { aliasedTable } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -20,24 +20,24 @@ import {
   cases,
   merchantDocuments,
   merchants,
+  queues,
   queueStages,
   users,
 } from '../../db/schema'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
-import { queues } from '../../db/schema'
 import { isCaseSlaBreached } from '../cases/case-sla'
 import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import {
   getLimitsAndMdrSettings,
-  defaultLimitsAndMdrSettings,
+  getPaymentMethodSettings,
 } from '../configuration/configuration.service'
-import { merchantLimitsMdrSchema } from './merchants.schemas'
-import type { MerchantLimitsMdr } from './merchants.schemas'
+import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
+  MerchantLimitsMdr,
   MerchantDocumentType,
   MerchantFormSubmission,
   PriorityValue,
@@ -46,6 +46,7 @@ import type {
 } from './merchants.schemas'
 import {
   businessScopeValues,
+  merchantLimitsMdrSchema,
   priorityValues,
 } from './merchants.schemas'
 
@@ -180,6 +181,7 @@ function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
     submitterEmail: merchant.submitterEmail,
     ownerFullName: merchant.ownerFullName,
     ownerPhone: merchant.ownerPhone,
+    activeWhatsappNumber: merchant.activeWhatsappNumber,
     businessName: merchant.businessName,
     businessPhone: merchant.businessPhone,
     businessEmail: merchant.businessEmail,
@@ -228,6 +230,8 @@ export async function createMerchantSubmission(
   input: MerchantFormSubmission,
   storage: FileStorageProvider = new GoogleDriveStorageProvider(),
 ) {
+  await assertMerchantContactValuesUnused(input)
+
   const merchantId = crypto.randomUUID()
   let folderId: string | null = null
   let submissionFolderId: string | null = null
@@ -276,6 +280,7 @@ export async function createMerchantSubmission(
           submitterEmail: input.email,
           ownerFullName: input.ownerFullName,
           ownerPhone: input.ownerPhone,
+          activeWhatsappNumber: input.activeWhatsappNumber,
           businessName: input.businessName,
           businessPhone: input.businessPhone,
           businessEmail: input.businessEmail,
@@ -348,6 +353,114 @@ export async function createMerchantSubmission(
 
     throw error
   }
+}
+
+export async function assertMerchantContactValuesUnused(
+  input: Pick<
+    MerchantFormSubmission,
+    | 'email'
+    | 'businessEmail'
+    | 'ownerPhone'
+    | 'businessPhone'
+    | 'activeWhatsappNumber'
+  >,
+  options: { excludeMerchantId?: string } = {},
+) {
+  const submittedEmails = uniqueNonEmptyValues([
+    input.email,
+    input.businessEmail,
+  ])
+  const submittedPhones = uniqueNonEmptyValues([
+    input.ownerPhone,
+    input.businessPhone,
+    input.activeWhatsappNumber,
+  ])
+
+  if (submittedEmails.length < 2) {
+    throw new AppError(
+      409,
+      'Submitter email and business email must be different.',
+    )
+  }
+
+  if (submittedPhones.length < 3) {
+    throw new AppError(
+      409,
+      'Owner phone, business phone, and active WhatsApp number must be different.',
+    )
+  }
+
+  const duplicateConditions = [
+    ...submittedEmails.flatMap((email) => [
+      eq(merchants.submitterEmail, email),
+      eq(merchants.businessEmail, email),
+    ]),
+    ...submittedPhones.flatMap((phone) => [
+      eq(merchants.ownerPhone, phone),
+      eq(merchants.businessPhone, phone),
+      eq(merchants.activeWhatsappNumber, phone),
+    ]),
+  ]
+
+  const whereCondition = options.excludeMerchantId
+    ? and(
+        ne(merchants.id, options.excludeMerchantId),
+        or(...duplicateConditions),
+      )
+    : or(...duplicateConditions)
+
+  const [existing] = await getDb()
+    .select({
+      submitterEmail: merchants.submitterEmail,
+      businessEmail: merchants.businessEmail,
+      ownerPhone: merchants.ownerPhone,
+      businessPhone: merchants.businessPhone,
+      activeWhatsappNumber: merchants.activeWhatsappNumber,
+    })
+    .from(merchants)
+    .where(whereCondition)
+    .limit(1)
+
+  if (!existing) return
+
+  const duplicateEmail = submittedEmails.find(
+    (email) =>
+      existing.submitterEmail === email || existing.businessEmail === email,
+  )
+  if (duplicateEmail) {
+    throw new AppError(
+      409,
+      'This email address has already been used for another merchant.',
+    )
+  }
+
+  const duplicatePhone = submittedPhones.find(
+    (phone) =>
+      existing.ownerPhone === phone ||
+      existing.businessPhone === phone ||
+      existing.activeWhatsappNumber === phone,
+  )
+  if (duplicatePhone) {
+    throw new AppError(
+      409,
+      'This phone number has already been used for another merchant.',
+    )
+  }
+
+  throw new AppError(
+    409,
+    'This email address or phone number has already been used.',
+  )
+}
+
+function uniqueNonEmptyValues(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim().toLowerCase())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  )
 }
 
 function buildFolderName(merchantId: string, businessName: string) {
@@ -790,6 +903,25 @@ function resolveLimitsMdrOverride(raw: unknown): MerchantLimitsMdr | null {
   return parsed.success ? parsed.data : null
 }
 
+async function getLatestMidCreationPaymentMethods(merchantId: string) {
+  const [entry] = await getDb()
+    .select({ details: caseHistory.details })
+    .from(caseHistory)
+    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(caseHistory.action, 'mid_creation_saved'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  const details = entry?.details as { paymentMethods?: unknown } | null
+  const parsed = paymentMethodSettingsSchema.safeParse(details?.paymentMethods)
+  return parsed.success ? parsed.data : null
+}
+
 export async function getMerchantDetail(merchantId: string) {
   const db = getDb()
 
@@ -885,7 +1017,12 @@ export async function getMerchantDetail(merchantId: string) {
     timeline.find((event) => event.action === 'testing_limits_applied')
       ?.createdAt ?? null
 
-  const globalLimitsAndMdr = await getLimitsAndMdrSettings()
+  const [globalLimitsAndMdr, globalPaymentMethods, savedPaymentMethods] =
+    await Promise.all([
+      getLimitsAndMdrSettings(),
+      getPaymentMethodSettings(),
+      getLatestMidCreationPaymentMethods(merchantId),
+    ])
   const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
 
   return {
@@ -902,11 +1039,12 @@ export async function getMerchantDetail(merchantId: string) {
       liveAt: merchant.liveAt,
     },
     limitsAndMdr: {
-      effective: override ?? globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+      effective: override ?? globalLimitsAndMdr,
       override,
-      global: globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+      global: globalLimitsAndMdr,
       isOverridden: override !== null,
     },
+    paymentMethods: savedPaymentMethods ?? globalPaymentMethods,
   }
 }
 
@@ -946,7 +1084,6 @@ export async function resetMerchantLimitsMdr(merchantId: string) {
   const globalLimitsAndMdr = await getLimitsAndMdrSettings()
   return {
     id: updated.id,
-    limitsAndMdr: globalLimitsAndMdr ?? defaultLimitsAndMdrSettings,
+    limitsAndMdr: globalLimitsAndMdr,
   }
 }
-

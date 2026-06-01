@@ -34,6 +34,7 @@ import {
   userQueueAccess,
   users,
 } from '../../db/schema'
+import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
 import type { SessionUser } from '../../types/auth'
@@ -54,12 +55,16 @@ import { AgreementEmail } from '../email/templates/agreement'
 import { MidCreationEmail } from '../email/templates/mid-creation'
 import { LiveActivationEmail } from '../email/templates/live-activation'
 import {
+  defaultPaymentMethodSettings,
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
   getMerchantPortalSettings,
+  getPaymentMethodSettings,
 } from '../configuration/configuration.service'
+import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
+import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
 import {
   assertCloseBlockersSatisfied,
   assertCreationRequirementsSatisfied,
@@ -750,6 +755,7 @@ type MidCreationCredentials = {
   portalMid: number
   email: string
   password: string
+  paymentMethods: PaymentMethodSettings
 }
 
 async function getMidCreationCredentials(
@@ -774,6 +780,7 @@ async function getMidCreationCredentials(
     portalMid?: unknown
     email?: unknown
     password?: unknown
+    paymentMethods?: unknown
   } | null
   if (
     typeof details?.portalMid !== 'number' ||
@@ -783,11 +790,37 @@ async function getMidCreationCredentials(
     return null
   }
 
+  const parsedPaymentMethods = paymentMethodSettingsSchema.safeParse(
+    details.paymentMethods,
+  )
+
   return {
     portalMid: details.portalMid,
     email: details.email,
     password: details.password,
+    paymentMethods: parsedPaymentMethods.success
+      ? parsedPaymentMethods.data
+      : defaultPaymentMethodSettings,
   }
+}
+
+function getCaseDetailMerchant(input: {
+  merchant: Merchant
+  queueSlug: string
+  ownerId: string | null
+  actor?: SessionUser
+}) {
+  if (
+    input.queueSlug !== MID_CREATION_QUEUE_SLUG ||
+    input.actor?.userId === input.ownerId
+  ) {
+    return input.merchant
+  }
+
+  const merchant = { ...input.merchant } as Record<string, unknown>
+  delete merchant.bankName
+  delete merchant.accountNumberIban
+  return merchant
 }
 
 // ─── Create Case ────────────────────────────────────────────────────────────
@@ -1519,7 +1552,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const [
     queue,
     stagesResult,
-    merchant,
+    merchantRow,
     documents,
     fieldReviews,
     latestResubmissionEntry,
@@ -1532,6 +1565,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     caseDocumentReviewDetail,
     merchantDocumentReviewDetail,
     midCreationCredentials,
+    paymentMethods,
   ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
@@ -1612,11 +1646,20 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     getDocumentReviewDetails(caseId),
     getLatestDocumentReviewDetailsForMerchant(caseData.merchantId),
     getMidCreationCredentials(caseData.merchantId),
+    getPaymentMethodSettings(),
   ])
 
-  if (!queue || !merchant) {
+  if (!queue || !merchantRow) {
     throw new AppError(500, 'Case data integrity error.')
   }
+
+  const merchant = merchantRow
+  const merchantForDetail = getCaseDetailMerchant({
+    merchant: merchantRow,
+    queueSlug: queue.slug,
+    ownerId: caseData.ownerId,
+    actor,
+  })
 
   const seededStages =
     stagesResult.length > 0
@@ -1751,7 +1794,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       qcEnabled: queue.qcEnabled,
       slaHours: queue.slaHours,
     },
-    merchant,
+    merchant: merchantForDetail,
     documents,
     fieldReviews,
     subMerchantForm: subMerchantFormRecord
@@ -1856,6 +1899,10 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       portalMid:
         queue.slug === MID_CREATION_QUEUE_SLUG
           ? (midCreationCredentials?.portalMid ?? null)
+          : null,
+      paymentMethods:
+        queue.slug === MID_CREATION_QUEUE_SLUG
+          ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
           : null,
     },
     live: {
@@ -2923,6 +2970,7 @@ export async function saveMidCreationDetails(
       portalMid: input.portalMid,
       email: input.email,
       password: input.password,
+      paymentMethods: input.paymentMethods,
     },
     createdAt: savedAt,
   })
@@ -2930,6 +2978,7 @@ export async function saveMidCreationDetails(
   return {
     portalMid: input.portalMid,
     email: input.email,
+    paymentMethods: input.paymentMethods,
     savedAt: savedAt.toISOString(),
   }
 }
@@ -4036,10 +4085,6 @@ export async function getMidCreationEmailPreview(
   _input: SendMidCreationEmailInput,
 ): Promise<MidCreationEmailPreviewResult> {
   await assertManualEmailEnabled()
-  throw new AppError(
-    400,
-    'Credential email previews are disabled because portal credentials are hidden in Testing.',
-  )
   const caseRow = await loadMidCreationCase(caseId, userId)
   const db = getDb()
 
@@ -4100,7 +4145,7 @@ export async function getMidCreationEmailPreview(
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
   const isShopify = caseRow.websiteCms === 'shopify'
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
-  const body = buildMidCreationEmailBody({
+  const body = buildMidCreationMessageBody({
     merchantName: caseRow.merchantName,
     portalEmail: credentials.email,
     portalPassword: credentials.password,
@@ -4191,16 +4236,64 @@ Best regards,
 AssanPay Onboarding Team`
 }
 
+function buildMidCreationMessageBody(params: {
+  merchantName: string
+  portalEmail: string
+  portalPassword: string
+  portalMid: string
+  merchantPortalUrl: string
+  goLiveUrl: string
+  availableAt: string
+  goLiveAvailabilityHours: number | null
+  testingLimits: {
+    collectionMin: number
+    collectionMax: number
+    disbursementMin: number
+    disbursementMax: number
+  }
+  cardRate: string
+  eWalletsRate: string
+  payoutRate: string
+}): string {
+  const goLiveAvailabilityLabel =
+    params.goLiveAvailabilityHours == null
+      ? 'immediately'
+      : `after ${params.goLiveAvailabilityHours}h`
+
+  return `AssanPay Merchant Portal Credentials for ${params.merchantName}
+
+Portal Login: ${params.merchantPortalUrl}
+Email: ${params.portalEmail}
+Password: ${params.portalPassword}
+MID: ${params.portalMid}
+
+Testing Limits:
+- Collection: PKR ${params.testingLimits.collectionMin.toLocaleString()}-${params.testingLimits.collectionMax.toLocaleString()}
+- Disbursement: PKR ${params.testingLimits.disbursementMin.toLocaleString()}-${params.testingLimits.disbursementMax.toLocaleString()}
+
+Rates:
+- Card: ${params.cardRate}
+- eWallets: ${params.eWalletsRate}
+- Payout: ${params.payoutRate}
+
+Go-Live Link (available ${goLiveAvailabilityLabel}):
+${params.goLiveUrl}
+Available at: ${params.availableAt}
+
+Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.
+
+Please keep your credentials secure and do not share them with anyone.
+
+Best regards,
+AssanPay Onboarding Team`
+}
+
 export async function confirmMidCreationEmailManual(
   caseId: string,
   userId: string,
   input: SendMidCreationEmailInput & { tokenId: string; file: File },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
-  throw new AppError(
-    400,
-    'Manual credential email confirmation is disabled because portal credentials are hidden in Testing.',
-  )
   validateEmailProofFile(input.file)
   const caseRow = await loadMidCreationCase(caseId, userId)
   const db = getDb()

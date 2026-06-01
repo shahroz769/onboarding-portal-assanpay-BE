@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
+
 export const caseStatusValues = [
   'new',
   'working',
@@ -258,6 +260,7 @@ export const saveMidCreationDetailsSchema = z
     portalMid: z.coerce.number().int().positive(),
     email: z.string().trim().email().max(255),
     password: z.string().min(8).max(128),
+    paymentMethods: paymentMethodSettingsSchema,
   })
   .strict()
 

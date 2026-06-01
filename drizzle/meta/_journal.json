@@ -239,6 +239,13 @@
       "when": 1780790400000,
       "tag": "0034_case_flow_creation_requirements",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780876800000,
+      "tag": "0035_active_whatsapp_number",
+      "breakpoints": true
     }
   ]
 }

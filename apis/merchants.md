@@ -56,7 +56,6 @@ File field names:
 - `owner_cnic_back`
 - `next_of_kin_cnic_front`
 - `next_of_kin_cnic_back`
-- `utility_bill`
 - Merchant-type-specific fields:
   `company_ntn`, `authority_letter`, `taxpayer_registration_certificate`,
   `company_incorporation_certificate`, `memorandum_articles`, `form_ii`,

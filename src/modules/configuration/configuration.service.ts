@@ -21,6 +21,8 @@ import {
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
+  PAYMENT_METHOD_OPTIONS,
+  paymentMethodSettingsSchema,
   updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
 import type {
@@ -29,6 +31,7 @@ import type {
   LimitsAndMdrSettings,
   LinkDeadlineSettings,
   MerchantPortalSettings,
+  PaymentMethodSettings,
   UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
@@ -36,6 +39,7 @@ const LIMITS_AND_MDR_KEY = 'limits-and-mdr'
 const LINK_DEADLINES_KEY = 'link-deadlines'
 const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
 const MERCHANT_PORTAL_KEY = 'merchant-portal'
+const PAYMENT_METHODS_KEY = 'payment-methods'
 const MAX_DRAFT_BYTES = 5 * 1024 * 1024
 const DRAFT_MIME_TYPES = new Set([
   'application/pdf',
@@ -80,6 +84,13 @@ export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
 export const defaultMerchantPortalSettings: MerchantPortalSettings = {
   loginUrl: 'https://merchant.assanpay.com/login',
 }
+
+export const defaultPaymentMethodSettings: PaymentMethodSettings =
+  PAYMENT_METHOD_OPTIONS.map((method) => ({
+    ...method,
+    collectionEnabled: true,
+    disbursementEnabled: !['qr', 'card'].includes(method.key),
+  }))
 
 async function readSetting<T>(
   key: string,
@@ -177,12 +188,29 @@ export async function updateMerchantPortalSettings(
   return value
 }
 
+export function getPaymentMethodSettings() {
+  return readSetting(
+    PAYMENT_METHODS_KEY,
+    defaultPaymentMethodSettings,
+    paymentMethodSettingsSchema,
+  )
+}
+
+export async function updatePaymentMethodSettings(
+  input: PaymentMethodSettings,
+) {
+  const value = paymentMethodSettingsSchema.parse(input)
+  await writeSetting(PAYMENT_METHODS_KEY, value)
+  return value
+}
+
 export async function getConfigurationOverview() {
   const [
     limitsAndMdr,
     linkDeadlines,
     emailSendingMode,
     merchantPortal,
+    paymentMethods,
     agreementDrafts,
     subMerchants,
   ] = await Promise.all([
@@ -190,6 +218,7 @@ export async function getConfigurationOverview() {
     getLinkDeadlineSettings(),
     getEmailSendingModeSettings(),
     getMerchantPortalSettings(),
+    getPaymentMethodSettings(),
     listAgreementDrafts(),
     listSubMerchantDrafts(),
   ])
@@ -199,6 +228,7 @@ export async function getConfigurationOverview() {
     linkDeadlines,
     emailSendingMode,
     merchantPortal,
+    paymentMethods,
     agreementDrafts,
     subMerchants,
     businessTypes: BUSINESS_TYPE_OPTIONS,
@@ -356,70 +386,68 @@ export async function getCaseFlowConfiguration() {
     closeTriggers,
     closeBlockers,
     creationRequirements,
-  ] =
-    await Promise.all([
-      getDb()
-        .select({
-          id: queues.id,
-          name: queues.name,
-          slug: queues.slug,
-          prefix: queues.prefix,
-          isActive: queues.isActive,
-        })
-        .from(queues)
-        .orderBy(queues.name),
-      getDb()
-        .select({
-          id: caseFlowStartRules.id,
-          targetQueueId: caseFlowStartRules.targetQueueId,
-          order: caseFlowStartRules.order,
-          isActive: caseFlowStartRules.isActive,
-        })
-        .from(caseFlowStartRules)
-        .orderBy(
-          asc(caseFlowStartRules.order),
-          asc(caseFlowStartRules.createdAt),
-        ),
-      getDb()
-        .select({
-          id: caseFlowCloseTriggers.id,
-          sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
-          targetQueueId: caseFlowCloseTriggers.targetQueueId,
-          order: caseFlowCloseTriggers.order,
-          isActive: caseFlowCloseTriggers.isActive,
-        })
-        .from(caseFlowCloseTriggers)
-        .orderBy(
-          asc(caseFlowCloseTriggers.sourceQueueId),
-          asc(caseFlowCloseTriggers.order),
-          asc(caseFlowCloseTriggers.createdAt),
-        ),
-      getDb()
-        .select({
-          id: caseFlowCloseBlockers.id,
-          blockedQueueId: caseFlowCloseBlockers.blockedQueueId,
-          prerequisiteQueueId: caseFlowCloseBlockers.prerequisiteQueueId,
-          isActive: caseFlowCloseBlockers.isActive,
-        })
-        .from(caseFlowCloseBlockers)
-        .orderBy(
-          asc(caseFlowCloseBlockers.blockedQueueId),
-          asc(caseFlowCloseBlockers.createdAt),
-        ),
-      getDb()
-        .select({
-          id: caseFlowCreationRequirements.id,
-          targetQueueId: caseFlowCreationRequirements.targetQueueId,
-          prerequisiteQueueId:
-            caseFlowCreationRequirements.prerequisiteQueueId,
-          isActive: caseFlowCreationRequirements.isActive,
-        })
-        .from(caseFlowCreationRequirements)
-        .orderBy(
-          asc(caseFlowCreationRequirements.targetQueueId),
-          asc(caseFlowCreationRequirements.createdAt),
-        ),
-    ])
+  ] = await Promise.all([
+    getDb()
+      .select({
+        id: queues.id,
+        name: queues.name,
+        slug: queues.slug,
+        prefix: queues.prefix,
+        isActive: queues.isActive,
+      })
+      .from(queues)
+      .orderBy(queues.name),
+    getDb()
+      .select({
+        id: caseFlowStartRules.id,
+        targetQueueId: caseFlowStartRules.targetQueueId,
+        order: caseFlowStartRules.order,
+        isActive: caseFlowStartRules.isActive,
+      })
+      .from(caseFlowStartRules)
+      .orderBy(
+        asc(caseFlowStartRules.order),
+        asc(caseFlowStartRules.createdAt),
+      ),
+    getDb()
+      .select({
+        id: caseFlowCloseTriggers.id,
+        sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
+        targetQueueId: caseFlowCloseTriggers.targetQueueId,
+        order: caseFlowCloseTriggers.order,
+        isActive: caseFlowCloseTriggers.isActive,
+      })
+      .from(caseFlowCloseTriggers)
+      .orderBy(
+        asc(caseFlowCloseTriggers.sourceQueueId),
+        asc(caseFlowCloseTriggers.order),
+        asc(caseFlowCloseTriggers.createdAt),
+      ),
+    getDb()
+      .select({
+        id: caseFlowCloseBlockers.id,
+        blockedQueueId: caseFlowCloseBlockers.blockedQueueId,
+        prerequisiteQueueId: caseFlowCloseBlockers.prerequisiteQueueId,
+        isActive: caseFlowCloseBlockers.isActive,
+      })
+      .from(caseFlowCloseBlockers)
+      .orderBy(
+        asc(caseFlowCloseBlockers.blockedQueueId),
+        asc(caseFlowCloseBlockers.createdAt),
+      ),
+    getDb()
+      .select({
+        id: caseFlowCreationRequirements.id,
+        targetQueueId: caseFlowCreationRequirements.targetQueueId,
+        prerequisiteQueueId: caseFlowCreationRequirements.prerequisiteQueueId,
+        isActive: caseFlowCreationRequirements.isActive,
+      })
+      .from(caseFlowCreationRequirements)
+      .orderBy(
+        asc(caseFlowCreationRequirements.targetQueueId),
+        asc(caseFlowCreationRequirements.createdAt),
+      ),
+  ])
 
   return {
     queues: queueRows,

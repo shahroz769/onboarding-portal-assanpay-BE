@@ -33,7 +33,6 @@ export const baseDocumentTypes = [
   'owner_cnic_back',
   'next_of_kin_cnic_front',
   'next_of_kin_cnic_back',
-  'utility_bill',
 ] as const
 
 export const merchantSpecificDocumentMap = {
@@ -198,6 +197,10 @@ const sanitizedStringSchema = z
   .transform(sanitizeText)
 
 const trimmedStringSchema = z.string().trim().min(1, 'This field is required.')
+export const localMobileNumberSchema = z
+  .string()
+  .trim()
+  .regex(/^03\d{9}$/, 'Must be a valid mobile number.')
 
 export const scalarMerchantSchema = z
   .object({
@@ -207,7 +210,8 @@ export const scalarMerchantSchema = z
       .email('Submitter email must be a valid email.')
       .transform(toLower),
     ownerFullName: sanitizedStringSchema,
-    ownerPhone: trimmedStringSchema,
+    ownerPhone: localMobileNumberSchema,
+    activeWhatsappNumber: localMobileNumberSchema,
     businessName: sanitizedStringSchema,
     businessPhone: trimmedStringSchema,
     businessEmail: z
@@ -264,6 +268,7 @@ export const storedMerchantScalarSchema = z
     submitterEmail: scalarMerchantSchema.shape.email,
     ownerFullName: scalarMerchantSchema.shape.ownerFullName,
     ownerPhone: scalarMerchantSchema.shape.ownerPhone,
+    activeWhatsappNumber: localMobileNumberSchema.nullable(),
     businessName: scalarMerchantSchema.shape.businessName,
     businessPhone: scalarMerchantSchema.shape.businessPhone,
     businessEmail: scalarMerchantSchema.shape.businessEmail,
@@ -450,7 +455,6 @@ export const merchantLimitsMdrSchema = z.object({
 })
 
 export type MerchantLimitsMdr = z.infer<typeof merchantLimitsMdrSchema>
-
 
 function assertRequiredDocuments(
   merchantType: MerchantType,

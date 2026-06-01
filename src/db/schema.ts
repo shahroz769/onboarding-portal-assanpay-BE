@@ -95,7 +95,6 @@ export const merchantDocumentTypeEnum = pgEnum('merchant_document_type', [
   'owner_cnic_back',
   'next_of_kin_cnic_front',
   'next_of_kin_cnic_back',
-  'utility_bill',
   'company_ntn',
   'authority_letter',
   'taxpayer_registration_certificate',
@@ -350,6 +349,7 @@ export const merchants = pgTable(
     submitterEmail: varchar('submitter_email', { length: 255 }).notNull(),
     ownerFullName: varchar('owner_full_name', { length: 160 }).notNull(),
     ownerPhone: varchar('owner_phone', { length: 32 }).notNull(),
+    activeWhatsappNumber: varchar('active_whatsapp_number', { length: 32 }),
     businessName: varchar('business_name', { length: 200 }).notNull(),
     businessPhone: varchar('business_phone', { length: 32 }).notNull(),
     businessEmail: varchar('business_email', { length: 255 }).notNull(),
@@ -402,6 +402,15 @@ export const merchants = pgTable(
     merchantsBusinessEmailIdx: index('merchants_business_email_idx').on(
       table.businessEmail,
     ),
+    merchantsOwnerPhoneIdx: index('merchants_owner_phone_idx').on(
+      table.ownerPhone,
+    ),
+    merchantsBusinessPhoneIdx: index('merchants_business_phone_idx').on(
+      table.businessPhone,
+    ),
+    merchantsActiveWhatsappNumberIdx: index(
+      'merchants_active_whatsapp_number_idx',
+    ).on(table.activeWhatsappNumber),
     merchantsBusinessNameIdx: index('merchants_business_name_idx').on(
       table.businessName,
     ),

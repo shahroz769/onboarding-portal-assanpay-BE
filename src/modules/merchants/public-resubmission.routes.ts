@@ -26,11 +26,11 @@ import {
   MAX_FILE_SIZE_BYTES,
   getAllowedDocumentTypes,
   getRequiredDocumentTypes,
-  
   normalizeMimeType,
-  validateStoredMerchantScalarValues
+  validateStoredMerchantScalarValues,
 } from './merchants.schemas'
-import type {MerchantDocumentType} from './merchants.schemas';
+import type { MerchantDocumentType } from './merchants.schemas'
+import { assertMerchantContactValuesUnused } from './merchants.service'
 import { notifyOnResubmission } from '../notifications/notifications.service'
 
 export const resubmissionRoutes = new Hono<AppEnv>()
@@ -69,6 +69,7 @@ resubmissionRoutes.post('/:token', async (c) => {
       submitterEmail: merchants.submitterEmail,
       ownerFullName: merchants.ownerFullName,
       ownerPhone: merchants.ownerPhone,
+      activeWhatsappNumber: merchants.activeWhatsappNumber,
       businessName: merchants.businessName,
       businessPhone: merchants.businessPhone,
       businessEmail: merchants.businessEmail,
@@ -293,6 +294,9 @@ resubmissionRoutes.post('/:token', async (c) => {
     ownerFullName:
       submittedTextFields.get('ownerFullName') ?? caseRow.ownerFullName,
     ownerPhone: submittedTextFields.get('ownerPhone') ?? caseRow.ownerPhone,
+    activeWhatsappNumber:
+      submittedTextFields.get('activeWhatsappNumber') ??
+      caseRow.activeWhatsappNumber,
     businessName:
       submittedTextFields.get('businessName') ?? caseRow.businessName,
     businessPhone:
@@ -330,6 +334,17 @@ resubmissionRoutes.post('/:token', async (c) => {
     nextOfKinRelation:
       submittedTextFields.get('nextOfKinRelation') ?? caseRow.nextOfKinRelation,
   })
+
+  await assertMerchantContactValuesUnused(
+    {
+      email: validatedMerchantValues.submitterEmail,
+      businessEmail: validatedMerchantValues.businessEmail,
+      ownerPhone: validatedMerchantValues.ownerPhone,
+      businessPhone: validatedMerchantValues.businessPhone,
+      activeWhatsappNumber: validatedMerchantValues.activeWhatsappNumber,
+    },
+    { excludeMerchantId: caseRow.merchantId },
+  )
 
   const storage = new GoogleDriveStorageProvider()
   const replaceActions = Array.from(documentActions.entries()).filter(
@@ -446,7 +461,7 @@ resubmissionRoutes.post('/:token', async (c) => {
         label:
           DOCUMENT_TYPE_LABELS[
             existing.documentType as keyof typeof DOCUMENT_TYPE_LABELS
-          ] ?? existing.documentType,
+          ],
         type: 'document' as const,
         action: documentActions.get(fieldName),
         previousFileName: existing.originalName,
@@ -463,6 +478,7 @@ resubmissionRoutes.post('/:token', async (c) => {
           submitterEmail: validatedMerchantValues.submitterEmail,
           ownerFullName: validatedMerchantValues.ownerFullName,
           ownerPhone: validatedMerchantValues.ownerPhone,
+          activeWhatsappNumber: validatedMerchantValues.activeWhatsappNumber,
           businessName: validatedMerchantValues.businessName,
           businessPhone: validatedMerchantValues.businessPhone,
           businessEmail: validatedMerchantValues.businessEmail,
@@ -613,7 +629,7 @@ async function resolveMerchantFolderId(
 ) {
   const folder = await storage.getFileMetadata(currentFolderId)
 
-  if (!submissionFolderPattern.test(folder.name ?? '')) {
+  if (!submissionFolderPattern.test(folder.name)) {
     return currentFolderId
   }
 
