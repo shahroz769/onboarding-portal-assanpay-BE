@@ -188,12 +188,17 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const email = formData.get('email')
-  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
-  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  if (!(file instanceof File))
+    throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId)
+    throw new AppError(400, 'tokenId is required.')
   if (typeof email !== 'string') throw new AppError(400, 'email is required.')
   const parsed = sendLiveEmailSchema.safeParse({ email })
   if (!parsed.success) {
-    throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid email payload.')
+    throw new AppError(
+      400,
+      parsed.error.issues[0]?.message ?? 'Invalid email payload.',
+    )
   }
   const auth = c.get('auth')
   const id = c.req.param('id')
@@ -539,11 +544,16 @@ caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
   })
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
-  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
-  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  if (!(file instanceof File))
+    throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId)
+    throw new AppError(400, 'tokenId is required.')
   const auth = c.get('auth')
   const id = c.req.param('id')
-  const result = await confirmResubmissionEmailManual(id, auth.userId, { file, tokenId })
+  const result = await confirmResubmissionEmailManual(id, auth.userId, {
+    file,
+    tokenId,
+  })
   return c.json(result)
 })
 
@@ -572,8 +582,10 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const remarks = formData.get('remarks')
-  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
-  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
+  if (!(file instanceof File))
+    throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId)
+    throw new AppError(400, 'tokenId is required.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmAgreementEmailManual(id, auth.userId, {
@@ -608,19 +620,13 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
   })
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
-  const email = formData.get('email')
-  const password = formData.get('password')
-  const portalMid = formData.get('portalMid')
-  if (!(file instanceof File)) throw new AppError(400, 'Screenshot file is required.')
-  if (typeof tokenId !== 'string' || !tokenId) throw new AppError(400, 'tokenId is required.')
-  if (typeof email !== 'string') throw new AppError(400, 'email is required.')
-  if (typeof password !== 'string') throw new AppError(400, 'password is required.')
-  const parsed = sendMidCreationEmailSchema.safeParse({
-    email,
-    password,
-    portalMid: Number(portalMid),
-  })
-  if (!parsed.success) throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
+  if (!(file instanceof File))
+    throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId)
+    throw new AppError(400, 'tokenId is required.')
+  const parsed = sendMidCreationEmailSchema.safeParse({})
+  if (!parsed.success)
+    throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmMidCreationEmailManual(id, auth.userId, {

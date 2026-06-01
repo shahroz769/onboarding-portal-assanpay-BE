@@ -742,6 +742,19 @@ async function ensureInheritedSubMerchantFormDetails(input: {
 async function getMidCreationPortalMid(
   merchantId: string,
 ): Promise<number | null> {
+  const credentials = await getMidCreationCredentials(merchantId)
+  return credentials?.portalMid ?? null
+}
+
+type MidCreationCredentials = {
+  portalMid: number
+  email: string
+  password: string
+}
+
+async function getMidCreationCredentials(
+  merchantId: string,
+): Promise<MidCreationCredentials | null> {
   const db = getDb()
   const [entry] = await db
     .select({ details: caseHistory.details })
@@ -750,18 +763,31 @@ async function getMidCreationPortalMid(
     .where(
       and(
         eq(cases.merchantId, merchantId),
-        inArray(caseHistory.action, [
-          'mid_creation_saved',
-          'mid_creation_email_sent',
-        ]),
+        eq(caseHistory.action, 'mid_creation_saved'),
       ),
     )
     .orderBy(desc(caseHistory.createdAt))
     .limit(1)
 
   if (!entry) return null
-  const details = entry.details as { portalMid?: unknown } | null
-  return typeof details?.portalMid === 'number' ? details.portalMid : null
+  const details = entry.details as {
+    portalMid?: unknown
+    email?: unknown
+    password?: unknown
+  } | null
+  if (
+    typeof details?.portalMid !== 'number' ||
+    typeof details.email !== 'string' ||
+    typeof details.password !== 'string'
+  ) {
+    return null
+  }
+
+  return {
+    portalMid: details.portalMid,
+    email: details.email,
+    password: details.password,
+  }
 }
 
 // ─── Create Case ────────────────────────────────────────────────────────────
@@ -1505,7 +1531,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     merchantWordpressWebsiteDetails,
     caseDocumentReviewDetail,
     merchantDocumentReviewDetail,
-    midCreationPortalMid,
+    midCreationCredentials,
   ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
@@ -1585,7 +1611,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     getLatestWordpressWebsiteDetailsForMerchant(caseData.merchantId),
     getDocumentReviewDetails(caseId),
     getLatestDocumentReviewDetailsForMerchant(caseData.merchantId),
-    getMidCreationPortalMid(caseData.merchantId),
+    getMidCreationCredentials(caseData.merchantId),
   ])
 
   if (!queue || !merchant) {
@@ -1826,7 +1852,11 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             name: testingLimitsAppliedEntry.actorName ?? 'Unknown',
           }
         : null,
-      portalMid: midCreationPortalMid,
+      credentialsReady: Boolean(midCreationCredentials),
+      portalMid:
+        queue.slug === MID_CREATION_QUEUE_SLUG
+          ? (midCreationCredentials?.portalMid ?? null)
+          : null,
     },
     live: {
       limitsAppliedAt: liveLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
@@ -1989,7 +2019,7 @@ export async function advanceStage(caseId: string, userId: string) {
 
   const queue = await db.query.queues.findFirst({
     where: eq(queues.id, caseData.queueId),
-    columns: { qcEnabled: true, slug: true },
+    columns: { qcEnabled: true, slug: true, slaHours: true },
   })
 
   let targetStage = null
@@ -2103,9 +2133,12 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
-    const portalMid = await getMidCreationPortalMid(caseData.merchantId)
-    if (!portalMid) {
-      throw new AppError(400, 'Save the Portal MID before closing this case.')
+    const credentials = await getMidCreationCredentials(caseData.merchantId)
+    if (!credentials) {
+      throw new AppError(
+        400,
+        'Save the merchant portal credentials before closing this case.',
+      )
     }
 
     targetStage = await db.query.queueStages.findFirst({
@@ -2300,8 +2333,19 @@ export async function advanceStage(caseId: string, userId: string) {
     const updatedRows = await tx
       .update(cases)
       .set(updateData)
-      .where(eq(cases.id, caseId))
+      .where(
+        and(
+          eq(cases.id, caseId),
+          eq(cases.ownerId, userId),
+          eq(cases.currentStageId, caseData.currentStageId),
+          eq(cases.status, caseData.status),
+        ),
+      )
       .returning()
+
+    if (!updatedRows[0]) {
+      throw new AppError(409, 'Case stage was already updated.')
+    }
 
     await tx.insert(caseHistory).values({
       caseId,
@@ -2877,12 +2921,15 @@ export async function saveMidCreationDetails(
     action: 'mid_creation_saved',
     details: {
       portalMid: input.portalMid,
+      email: input.email,
+      password: input.password,
     },
     createdAt: savedAt,
   })
 
   return {
     portalMid: input.portalMid,
+    email: input.email,
     savedAt: savedAt.toISOString(),
   }
 }
@@ -3304,7 +3351,26 @@ export async function listCaseHistory(caseId: string) {
       desc(caseHistory.id),
     )
 
-  return history
+  return history.map((entry) => ({
+    ...entry,
+    details: sanitizeCaseHistoryDetails(entry.action, entry.details),
+  }))
+}
+
+function sanitizeCaseHistoryDetails(action: string, details: unknown) {
+  if (
+    action !== 'mid_creation_saved' ||
+    !details ||
+    typeof details !== 'object'
+  ) {
+    return details
+  }
+
+  const { password: _password, ...safeDetails } = details as Record<
+    string,
+    unknown
+  >
+  return safeDetails
 }
 
 // ─── Send For Resubmission ──────────────────────────────────────────────────
@@ -3967,21 +4033,22 @@ export type MidCreationEmailPreviewResult = {
 export async function getMidCreationEmailPreview(
   caseId: string,
   userId: string,
-  input: SendMidCreationEmailInput,
+  _input: SendMidCreationEmailInput,
 ): Promise<MidCreationEmailPreviewResult> {
   await assertManualEmailEnabled()
+  throw new AppError(
+    400,
+    'Credential email previews are disabled because portal credentials are hidden in Testing.',
+  )
   const caseRow = await loadMidCreationCase(caseId, userId)
   const db = getDb()
 
-  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
-  if (!savedPortalMid) {
+  const credentials = await getMidCreationCredentials(caseRow.merchantId)
+  if (!credentials) {
     throw new AppError(
       400,
-      'Save the Portal MID in MID Creation before sending credentials.',
+      'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
-  }
-  if (savedPortalMid !== input.portalMid) {
-    throw new AppError(400, 'Credentials must use the saved Portal MID.')
   }
 
   const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
@@ -4035,9 +4102,9 @@ export async function getMidCreationEmailPreview(
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
   const body = buildMidCreationEmailBody({
     merchantName: caseRow.merchantName,
-    portalEmail: input.email,
-    portalPassword: input.password,
-    portalMid: String(input.portalMid),
+    portalEmail: credentials.email,
+    portalPassword: credentials.password,
+    portalMid: String(credentials.portalMid),
     merchantPortalUrl: merchantPortal.loginUrl,
     goLiveUrl,
     availableAt: formatEmailDateTime(resolvedAvailableAt),
@@ -4051,7 +4118,7 @@ export async function getMidCreationEmailPreview(
   })
 
   return {
-    recipient: input.email,
+    recipient: credentials.email,
     subject,
     body,
     tokenId,
@@ -4130,19 +4197,20 @@ export async function confirmMidCreationEmailManual(
   input: SendMidCreationEmailInput & { tokenId: string; file: File },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
+  throw new AppError(
+    400,
+    'Manual credential email confirmation is disabled because portal credentials are hidden in Testing.',
+  )
   validateEmailProofFile(input.file)
   const caseRow = await loadMidCreationCase(caseId, userId)
   const db = getDb()
 
-  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
-  if (!savedPortalMid) {
+  const credentials = await getMidCreationCredentials(caseRow.merchantId)
+  if (!credentials) {
     throw new AppError(
       400,
-      'Save the Portal MID in MID Creation before sending credentials.',
+      'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
-  }
-  if (savedPortalMid !== input.portalMid) {
-    throw new AppError(400, 'Credentials must use the saved Portal MID.')
   }
 
   const tokenRow = await db.query.midGoLiveTokens.findFirst({
@@ -4171,8 +4239,8 @@ export async function confirmMidCreationEmailManual(
     details: {
       tokenId: input.tokenId,
       availableAt: tokenRow.availableAt.toISOString(),
-      recipient: input.email,
-      portalMid: input.portalMid,
+      recipient: credentials.email,
+      portalMid: credentials.portalMid,
       screenshotFileId: savedFile.id,
       manual: true,
     },
@@ -4246,17 +4314,19 @@ export async function confirmLiveActivationEmailManual(
     caseRow.merchantName,
   )
 
-  await getDb().insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'live_activation_email_sent_manual',
-    details: {
-      recipient: input.email,
-      screenshotFileId: savedFile.id,
-      manual: true,
-    },
-    createdAt: new Date(),
-  })
+  await getDb()
+    .insert(caseHistory)
+    .values({
+      caseId,
+      actorId: userId,
+      action: 'live_activation_email_sent_manual',
+      details: {
+        recipient: input.email,
+        screenshotFileId: savedFile.id,
+        manual: true,
+      },
+      createdAt: new Date(),
+    })
 
   return { status: 'sent', fileId: savedFile.id }
 }
@@ -4988,20 +5058,17 @@ async function loadLiveCase(caseId: string, userId: string) {
 export async function sendMidCreationCredentialsEmail(
   caseId: string,
   userId: string,
-  input: SendMidCreationEmailInput,
+  _input: SendMidCreationEmailInput,
 ): Promise<MidCreationEmailResult> {
   await assertAutoEmailEnabled()
   const db = getDb()
   const caseRow = await loadMidCreationCase(caseId, userId)
-  const savedPortalMid = await getMidCreationPortalMid(caseRow.merchantId)
-  if (!savedPortalMid) {
+  const credentials = await getMidCreationCredentials(caseRow.merchantId)
+  if (!credentials) {
     throw new AppError(
       400,
-      'Save the Portal MID in MID Creation before sending credentials.',
+      'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
-  }
-  if (savedPortalMid !== input.portalMid) {
-    throw new AppError(400, 'Credentials must use the saved Portal MID.')
   }
 
   const now = new Date()
@@ -5040,14 +5107,14 @@ export async function sendMidCreationCredentialsEmail(
     : `${limitsAndMdr.rates.cardDefault}%`
 
   const emailResult = await sendEmail({
-    to: input.email,
+    to: credentials.email,
     subject: `AssanPay merchant portal credentials for ${caseRow.merchantName}`,
     template: 'mid-creation',
     react: MidCreationEmail({
       merchantName: caseRow.merchantName,
-      portalEmail: input.email,
-      portalPassword: input.password,
-      portalMid: input.portalMid,
+      portalEmail: credentials.email,
+      portalPassword: credentials.password,
+      portalMid: credentials.portalMid,
       merchantPortalUrl: merchantPortal.loginUrl,
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
@@ -5067,8 +5134,8 @@ export async function sendMidCreationCredentialsEmail(
     metadata: {
       tokenId: tokenRow.id,
       availableAt: availableAt.toISOString(),
-      portalEmail: input.email,
-      portalMid: input.portalMid,
+      portalEmail: credentials.email,
+      portalMid: credentials.portalMid,
       websiteCms: caseRow.websiteCms,
       cardRate,
       limitsAndMdr,
@@ -5104,8 +5171,8 @@ export async function sendMidCreationCredentialsEmail(
     details: {
       tokenId: tokenRow.id,
       emailLogId: emailResult.emailLogId,
-      recipient: input.email,
-      portalMid: input.portalMid,
+      recipient: credentials.email,
+      portalMid: credentials.portalMid,
       availableAt:
         emailResult.status === 'sent' ? availableAt.toISOString() : null,
       error: emailResult.error ?? null,

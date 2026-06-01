@@ -19,30 +19,43 @@ const CASE_STATUSES = [
 const MERCHANT_STATUSES = ['pending', 'testing', 'live', 'terminated'] as const
 
 // Open cases mirror the "My Open Cases" definition: not closed and not error.
-const OPEN_CASE_STATUSES = ['new', 'working', 'pending', 'qc', 'awaiting_client']
+const OPEN_CASE_STATUSES = [
+  'new',
+  'working',
+  'pending',
+  'qc',
+  'awaiting_client',
+]
 
 const RISK_LIST_LIMIT = 8
 const MAX_TREND_DAYS = 120
+const DASHBOARD_TIME_ZONE = sql.raw("'Asia/Karachi'")
+const DASHBOARD_TIME_ZONE_OFFSET_MINUTES = 5 * 60
 
 // ─── Range Resolution ───────────────────────────────────────────────────────
 
 function startOfDay(date: Date) {
-  const next = new Date(date)
-  next.setHours(0, 0, 0, 0)
-  return next
+  return dateKeyToStartOfDay(toDashboardDateKey(date))
 }
 
 function startOfMonth(date: Date) {
-  const next = new Date(date)
-  next.setDate(1)
-  next.setHours(0, 0, 0, 0)
-  return next
+  return dateKeyToStartOfDay(`${toDashboardDateKey(date).slice(0, 8)}01`)
 }
 
 function addDays(date: Date, days: number) {
-  const next = new Date(date)
-  next.setDate(next.getDate() + days)
-  return next
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000)
+}
+
+function toDashboardDateKey(date: Date) {
+  return new Date(
+    date.getTime() + DASHBOARD_TIME_ZONE_OFFSET_MINUTES * 60 * 1000,
+  )
+    .toISOString()
+    .slice(0, 10)
+}
+
+function dateKeyToStartOfDay(dateKey: string) {
+  return new Date(`${dateKey}T00:00:00.000+05:00`)
 }
 
 interface ResolvedRange {
@@ -81,8 +94,8 @@ function resolveRange(query: DashboardQuery): ResolvedRange {
         label: 'Month to date',
       }
     case 'custom': {
-      const fromDate = startOfDay(new Date(query.from as string))
-      const toDate = new Date(query.to as string)
+      const fromDate = dateKeyToStartOfDay(query.from as string)
+      const toDate = dateKeyToStartOfDay(query.to as string)
       const safeTo = Number.isNaN(toDate.getTime()) ? now : toDate
       const safeFrom = Number.isNaN(fromDate.getTime())
         ? startOfDay(addDays(now, -29))
@@ -115,8 +128,8 @@ function buildDateSeries(from: Date, to: Date) {
   const end = startOfDay(to)
   let guard = 0
   while (cursor.getTime() <= end.getTime() && guard < MAX_TREND_DAYS) {
-    days.push(cursor.toISOString().slice(0, 10))
-    cursor.setDate(cursor.getDate() + 1)
+    days.push(toDashboardDateKey(cursor))
+    cursor.setTime(addDays(cursor, 1).getTime())
     guard += 1
   }
   return days
@@ -142,9 +155,7 @@ export async function getDashboard(query: DashboardQuery) {
   const startWeekIso = startWeek.toISOString()
   const startMonthIso = startMonth.toISOString()
 
-  const liveMerchant = and(
-    isNull(merchants.deletedAt),
-  )
+  const liveMerchant = and(isNull(merchants.deletedAt))
 
   const [
     caseStatusRows,
@@ -188,9 +199,7 @@ export async function getDashboard(query: DashboardQuery) {
     // SLA breach summary + live open-over-sla
     db
       .select({
-        breached: int(
-          sql`count(*) filter (where ${cases.slaBreached} = true)`,
-        ),
+        breached: int(sql`count(*) filter (where ${cases.slaBreached} = true)`),
         evaluated: int(
           sql`count(*) filter (where ${cases.slaBreached} is not null)`,
         ),
@@ -274,13 +283,19 @@ export async function getDashboard(query: DashboardQuery) {
       .from(queues)
       .leftJoin(cases, eq(cases.queueId, queues.id))
       .where(eq(queues.isActive, true))
-      .groupBy(queues.id, queues.name, queues.slug, queues.slaHours, queues.isActive)
+      .groupBy(
+        queues.id,
+        queues.name,
+        queues.slug,
+        queues.slaHours,
+        queues.isActive,
+      )
       .orderBy(queues.name),
 
     // Submission trend (daily)
     db
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${merchants.submittedAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
         count: int(sql`count(*)`),
       })
       .from(merchants)
@@ -291,12 +306,14 @@ export async function getDashboard(query: DashboardQuery) {
           lt(merchants.submittedAt, addDays(startOfDay(to), 1)),
         ),
       )
-      .groupBy(sql`date_trunc('day', ${merchants.submittedAt})`),
+      .groupBy(
+        sql`to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
+      ),
 
     // New cases trend (daily)
     db
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${cases.createdAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
         count: int(sql`count(*)`),
       })
       .from(cases)
@@ -306,12 +323,14 @@ export async function getDashboard(query: DashboardQuery) {
           lt(cases.createdAt, addDays(startOfDay(to), 1)),
         ),
       )
-      .groupBy(sql`date_trunc('day', ${cases.createdAt})`),
+      .groupBy(
+        sql`to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
+      ),
 
     // Cases closed trend (daily)
     db
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${cases.closedAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
         count: int(sql`count(*)`),
       })
       .from(cases)
@@ -321,7 +340,9 @@ export async function getDashboard(query: DashboardQuery) {
           lt(cases.closedAt, addDays(startOfDay(to), 1)),
         ),
       )
-      .groupBy(sql`date_trunc('day', ${cases.closedAt})`),
+      .groupBy(
+        sql`to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
+      ),
 
     // Risk list — SLA breached cases (most recent)
     db
@@ -530,9 +551,7 @@ export async function getDashboard(query: DashboardQuery) {
     breached: row.breached,
     atRisk: row.atRisk,
     breachRate:
-      row.closed > 0
-        ? Math.round((row.breached / row.closed) * 1000) / 10
-        : 0,
+      row.closed > 0 ? Math.round((row.breached / row.closed) * 1000) / 10 : 0,
   }))
 
   return {

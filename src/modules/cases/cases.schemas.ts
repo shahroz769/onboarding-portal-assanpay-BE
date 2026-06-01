@@ -256,6 +256,8 @@ export type AgreementEmailResponse = z.infer<
 export const saveMidCreationDetailsSchema = z
   .object({
     portalMid: z.coerce.number().int().positive(),
+    email: z.string().trim().email().max(255),
+    password: z.string().min(8).max(128),
   })
   .strict()
 
@@ -263,13 +265,7 @@ export type SaveMidCreationDetailsInput = z.infer<
   typeof saveMidCreationDetailsSchema
 >
 
-export const sendMidCreationEmailSchema = z
-  .object({
-    email: z.string().trim().email().max(255),
-    password: z.string().min(8).max(128),
-    portalMid: z.coerce.number().int().positive(),
-  })
-  .strict()
+export const sendMidCreationEmailSchema = z.object({}).strict()
 
 export type SendMidCreationEmailInput = z.infer<
   typeof sendMidCreationEmailSchema
