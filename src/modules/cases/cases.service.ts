@@ -56,12 +56,14 @@ import { MidCreationEmail } from '../email/templates/mid-creation'
 import { LiveActivationEmail } from '../email/templates/live-activation'
 import {
   defaultPaymentMethodSettings,
+  defaultPayoutMethodSettings,
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
   getLinkDeadlineSettings,
   getMerchantPortalSettings,
   getPaymentMethodSettings,
+  getPayoutMethodSettings,
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
@@ -756,6 +758,7 @@ type MidCreationCredentials = {
   email: string
   password: string
   paymentMethods: PaymentMethodSettings
+  payoutMethods: PaymentMethodSettings
 }
 
 async function getMidCreationCredentials(
@@ -781,6 +784,7 @@ async function getMidCreationCredentials(
     email?: unknown
     password?: unknown
     paymentMethods?: unknown
+    payoutMethods?: unknown
   } | null
   if (
     typeof details?.portalMid !== 'number' ||
@@ -793,6 +797,9 @@ async function getMidCreationCredentials(
   const parsedPaymentMethods = paymentMethodSettingsSchema.safeParse(
     details.paymentMethods,
   )
+  const parsedPayoutMethods = paymentMethodSettingsSchema.safeParse(
+    details.payoutMethods,
+  )
 
   return {
     portalMid: details.portalMid,
@@ -800,8 +807,37 @@ async function getMidCreationCredentials(
     password: details.password,
     paymentMethods: parsedPaymentMethods.success
       ? parsedPaymentMethods.data
-      : defaultPaymentMethodSettings,
+      : parseLegacyMethodSettings(details.paymentMethods, 'collection') ??
+        defaultPaymentMethodSettings,
+    payoutMethods: parsedPayoutMethods.success
+      ? parsedPayoutMethods.data
+      : parseLegacyMethodSettings(details.paymentMethods, 'disbursement') ??
+        defaultPayoutMethodSettings,
   }
+}
+
+function parseLegacyMethodSettings(
+  value: unknown,
+  mode: 'collection' | 'disbursement',
+) {
+  const legacyMethods = Array.isArray(value) ? value : []
+  const migrated = legacyMethods.flatMap((method) => {
+    if (!method || typeof method !== 'object') return []
+    const record = method as Record<string, unknown>
+    const label = typeof record.label === 'string' ? record.label.trim() : ''
+    const id =
+      typeof record.key === 'string' && record.key.trim()
+        ? record.key.trim()
+        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    const enabled =
+      mode === 'collection'
+        ? record.collectionEnabled !== false
+        : record.disbursementEnabled !== false
+
+    return label && id && enabled ? [{ id, label }] : []
+  })
+  const parsed = paymentMethodSettingsSchema.safeParse(migrated)
+  return parsed.success ? parsed.data : null
 }
 
 function getCaseDetailMerchant(input: {
@@ -1566,6 +1602,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     merchantDocumentReviewDetail,
     midCreationCredentials,
     paymentMethods,
+    payoutMethods,
   ] = await Promise.all([
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
@@ -1647,6 +1684,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     getLatestDocumentReviewDetailsForMerchant(caseData.merchantId),
     getMidCreationCredentials(caseData.merchantId),
     getPaymentMethodSettings(),
+    getPayoutMethodSettings(),
   ])
 
   if (!queue || !merchantRow) {
@@ -1903,6 +1941,10 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       paymentMethods:
         queue.slug === MID_CREATION_QUEUE_SLUG
           ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
+          : null,
+      payoutMethods:
+        queue.slug === MID_CREATION_QUEUE_SLUG
+          ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
           : null,
     },
     live: {
@@ -2971,6 +3013,7 @@ export async function saveMidCreationDetails(
       email: input.email,
       password: input.password,
       paymentMethods: input.paymentMethods,
+      payoutMethods: input.payoutMethods,
     },
     createdAt: savedAt,
   })
@@ -2979,6 +3022,7 @@ export async function saveMidCreationDetails(
     portalMid: input.portalMid,
     email: input.email,
     paymentMethods: input.paymentMethods,
+    payoutMethods: input.payoutMethods,
     savedAt: savedAt.toISOString(),
   }
 }

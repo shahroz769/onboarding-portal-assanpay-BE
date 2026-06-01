@@ -32,62 +32,29 @@ export const merchantPortalSettingsSchema = z
   })
   .strict()
 
-export const PAYMENT_METHOD_OPTIONS = [
-  { key: 'easypaisa', label: 'Easypaisa' },
-  { key: 'jazzcash', label: 'Jazzcash' },
-  { key: 'zindigi', label: 'Zindigi' },
-  { key: 'qr', label: 'QR' },
-  { key: 'card', label: 'Card' },
-] as const
-
-export const paymentMethodKeySchema = z.enum([
-  'easypaisa',
-  'jazzcash',
-  'zindigi',
-  'qr',
-  'card',
-])
-
 export const paymentMethodSettingsSchema = z
   .array(
     z
       .object({
-        key: paymentMethodKeySchema,
+        id: z.string().trim().min(1).max(80),
         label: z.string().trim().min(1).max(80),
-        collectionEnabled: z.boolean(),
-        disbursementEnabled: z.boolean(),
       })
       .strict(),
   )
-  .length(PAYMENT_METHOD_OPTIONS.length)
+  .max(50)
   .superRefine((methods, ctx) => {
-    const expectedKeys = new Set(PAYMENT_METHOD_OPTIONS.map((item) => item.key))
     const seen = new Set<string>()
 
     for (const method of methods) {
-      if (!expectedKeys.has(method.key)) {
+      const key = method.label.trim().toLowerCase()
+      if (seen.has(key)) {
         ctx.addIssue({
           code: 'custom',
-          message: 'Unknown payment method.',
+          message: 'Method names must be unique.',
           path: ['paymentMethods'],
         })
       }
-      if (seen.has(method.key)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Payment methods must be unique.',
-          path: ['paymentMethods'],
-        })
-      }
-      seen.add(method.key)
-    }
-
-    if (!methods.some((method) => method.collectionEnabled)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'At least one collection method must be enabled.',
-        path: ['paymentMethods'],
-      })
+      seen.add(key)
     }
   })
 
@@ -275,7 +242,6 @@ export type MerchantPortalSettings = z.infer<
   typeof merchantPortalSettingsSchema
 >
 export type PaymentMethodSettings = z.infer<typeof paymentMethodSettingsSchema>
-export type PaymentMethodKey = z.infer<typeof paymentMethodKeySchema>
 export type BusinessType = z.infer<typeof businessTypeSchema>
 export type UpdateCaseFlowConfigurationInput = z.infer<
   typeof updateCaseFlowConfigurationSchema

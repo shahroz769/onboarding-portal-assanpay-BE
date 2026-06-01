@@ -21,7 +21,6 @@ import {
   limitsAndMdrSettingsSchema,
   linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
-  PAYMENT_METHOD_OPTIONS,
   paymentMethodSettingsSchema,
   updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
@@ -40,6 +39,7 @@ const LINK_DEADLINES_KEY = 'link-deadlines'
 const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
 const MERCHANT_PORTAL_KEY = 'merchant-portal'
 const PAYMENT_METHODS_KEY = 'payment-methods'
+const PAYOUT_METHODS_KEY = 'payout-methods'
 const MAX_DRAFT_BYTES = 5 * 1024 * 1024
 const DRAFT_MIME_TYPES = new Set([
   'application/pdf',
@@ -85,12 +85,8 @@ export const defaultMerchantPortalSettings: MerchantPortalSettings = {
   loginUrl: 'https://merchant.assanpay.com/login',
 }
 
-export const defaultPaymentMethodSettings: PaymentMethodSettings =
-  PAYMENT_METHOD_OPTIONS.map((method) => ({
-    ...method,
-    collectionEnabled: true,
-    disbursementEnabled: !['qr', 'card'].includes(method.key),
-  }))
+export const defaultPaymentMethodSettings: PaymentMethodSettings = []
+export const defaultPayoutMethodSettings: PaymentMethodSettings = []
 
 async function readSetting<T>(
   key: string,
@@ -126,6 +122,50 @@ async function writeSetting(key: string, value: unknown) {
         updatedAt: new Date(),
       },
     })
+}
+
+async function readPaymentMethodSetting(
+  key: string,
+  legacyMode: 'collection' | 'disbursement',
+) {
+  let row = await getDb().query.configurationSettings.findFirst({
+    where: eq(configurationSettings.key, key),
+  })
+
+  if (!row && key === PAYOUT_METHODS_KEY) {
+    row = await getDb().query.configurationSettings.findFirst({
+      where: eq(configurationSettings.key, PAYMENT_METHODS_KEY),
+    })
+  }
+
+  if (!row) {
+    return legacyMode === 'collection'
+      ? defaultPaymentMethodSettings
+      : defaultPayoutMethodSettings
+  }
+
+  const parsed = paymentMethodSettingsSchema.safeParse(row.value)
+  if (parsed.success) return parsed.data
+
+  const legacyMethods = Array.isArray(row.value) ? row.value : []
+  const migrated = legacyMethods.flatMap((method) => {
+    if (!method || typeof method !== 'object') return []
+    const record = method as Record<string, unknown>
+    const label = typeof record.label === 'string' ? record.label.trim() : ''
+    const id =
+      typeof record.key === 'string' && record.key.trim()
+        ? record.key.trim()
+        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    const enabled =
+      legacyMode === 'collection'
+        ? record.collectionEnabled !== false
+        : record.disbursementEnabled !== false
+
+    return label && id && enabled ? [{ id, label }] : []
+  })
+
+  const migratedParsed = paymentMethodSettingsSchema.safeParse(migrated)
+  return migratedParsed.success ? migratedParsed.data : []
 }
 
 export function getLimitsAndMdrSettings() {
@@ -189,11 +229,7 @@ export async function updateMerchantPortalSettings(
 }
 
 export function getPaymentMethodSettings() {
-  return readSetting(
-    PAYMENT_METHODS_KEY,
-    defaultPaymentMethodSettings,
-    paymentMethodSettingsSchema,
-  )
+  return readPaymentMethodSetting(PAYMENT_METHODS_KEY, 'collection')
 }
 
 export async function updatePaymentMethodSettings(
@@ -204,6 +240,16 @@ export async function updatePaymentMethodSettings(
   return value
 }
 
+export function getPayoutMethodSettings() {
+  return readPaymentMethodSetting(PAYOUT_METHODS_KEY, 'disbursement')
+}
+
+export async function updatePayoutMethodSettings(input: PaymentMethodSettings) {
+  const value = paymentMethodSettingsSchema.parse(input)
+  await writeSetting(PAYOUT_METHODS_KEY, value)
+  return value
+}
+
 export async function getConfigurationOverview() {
   const [
     limitsAndMdr,
@@ -211,6 +257,7 @@ export async function getConfigurationOverview() {
     emailSendingMode,
     merchantPortal,
     paymentMethods,
+    payoutMethods,
     agreementDrafts,
     subMerchants,
   ] = await Promise.all([
@@ -219,6 +266,7 @@ export async function getConfigurationOverview() {
     getEmailSendingModeSettings(),
     getMerchantPortalSettings(),
     getPaymentMethodSettings(),
+    getPayoutMethodSettings(),
     listAgreementDrafts(),
     listSubMerchantDrafts(),
   ])
@@ -229,6 +277,7 @@ export async function getConfigurationOverview() {
     emailSendingMode,
     merchantPortal,
     paymentMethods,
+    payoutMethods,
     agreementDrafts,
     subMerchants,
     businessTypes: BUSINESS_TYPE_OPTIONS,

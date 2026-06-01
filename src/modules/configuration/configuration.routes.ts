@@ -11,6 +11,7 @@ import {
   updateLinkDeadlineSettings,
   updateMerchantPortalSettings,
   updatePaymentMethodSettings,
+  updatePayoutMethodSettings,
   uploadAgreementDraft,
   createSubMerchantDraft,
   getCaseFlowConfiguration,
@@ -98,6 +99,15 @@ configurationRoutes.put(
   async (c) => {
     const input = c.req.valid('json' as never) as PaymentMethodSettings
     return c.json(await updatePaymentMethodSettings(input))
+  },
+)
+
+configurationRoutes.put(
+  '/payout-methods',
+  zodValidator('json', paymentMethodSettingsSchema),
+  async (c) => {
+    const input = c.req.valid('json' as never) as PaymentMethodSettings
+    return c.json(await updatePayoutMethodSettings(input))
   },
 )
 

@@ -261,6 +261,7 @@ export const saveMidCreationDetailsSchema = z
     email: z.string().trim().email().max(255),
     password: z.string().min(8).max(128),
     paymentMethods: paymentMethodSettingsSchema,
+    payoutMethods: paymentMethodSettingsSchema,
   })
   .strict()
 

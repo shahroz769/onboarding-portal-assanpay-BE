@@ -32,6 +32,7 @@ import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import {
   getLimitsAndMdrSettings,
   getPaymentMethodSettings,
+  getPayoutMethodSettings,
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type {
@@ -919,6 +920,60 @@ async function getLatestMidCreationPaymentMethods(merchantId: string) {
 
   const details = entry?.details as { paymentMethods?: unknown } | null
   const parsed = paymentMethodSettingsSchema.safeParse(details?.paymentMethods)
+  return (
+    parsed.success
+      ? parsed.data
+      : parseLegacyMethodSettings(details?.paymentMethods, 'collection')
+  )
+}
+
+async function getLatestMidCreationPayoutMethods(merchantId: string) {
+  const [entry] = await getDb()
+    .select({ details: caseHistory.details })
+    .from(caseHistory)
+    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(caseHistory.action, 'mid_creation_saved'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  const details = entry?.details as {
+    paymentMethods?: unknown
+    payoutMethods?: unknown
+  } | null
+  const parsed = paymentMethodSettingsSchema.safeParse(details?.payoutMethods)
+  return (
+    parsed.success
+      ? parsed.data
+      : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement')
+  )
+}
+
+function parseLegacyMethodSettings(
+  value: unknown,
+  mode: 'collection' | 'disbursement',
+) {
+  const legacyMethods = Array.isArray(value) ? value : []
+  const migrated = legacyMethods.flatMap((method) => {
+    if (!method || typeof method !== 'object') return []
+    const record = method as Record<string, unknown>
+    const label = typeof record.label === 'string' ? record.label.trim() : ''
+    const id =
+      typeof record.key === 'string' && record.key.trim()
+        ? record.key.trim()
+        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    const enabled =
+      mode === 'collection'
+        ? record.collectionEnabled !== false
+        : record.disbursementEnabled !== false
+
+    return label && id && enabled ? [{ id, label }] : []
+  })
+  const parsed = paymentMethodSettingsSchema.safeParse(migrated)
   return parsed.success ? parsed.data : null
 }
 
@@ -1017,12 +1072,19 @@ export async function getMerchantDetail(merchantId: string) {
     timeline.find((event) => event.action === 'testing_limits_applied')
       ?.createdAt ?? null
 
-  const [globalLimitsAndMdr, globalPaymentMethods, savedPaymentMethods] =
-    await Promise.all([
-      getLimitsAndMdrSettings(),
-      getPaymentMethodSettings(),
-      getLatestMidCreationPaymentMethods(merchantId),
-    ])
+  const [
+    globalLimitsAndMdr,
+    globalPaymentMethods,
+    globalPayoutMethods,
+    savedPaymentMethods,
+    savedPayoutMethods,
+  ] = await Promise.all([
+    getLimitsAndMdrSettings(),
+    getPaymentMethodSettings(),
+    getPayoutMethodSettings(),
+    getLatestMidCreationPaymentMethods(merchantId),
+    getLatestMidCreationPayoutMethods(merchantId),
+  ])
   const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
 
   return {
@@ -1045,6 +1107,7 @@ export async function getMerchantDetail(merchantId: string) {
       isOverridden: override !== null,
     },
     paymentMethods: savedPaymentMethods ?? globalPaymentMethods,
+    payoutMethods: savedPayoutMethods ?? globalPayoutMethods,
   }
 }
 
