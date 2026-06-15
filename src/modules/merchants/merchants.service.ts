@@ -377,20 +377,6 @@ export async function assertMerchantContactValuesUnused(
     input.activeWhatsappNumber,
   ])
 
-  if (submittedEmails.length < 2) {
-    throw new AppError(
-      409,
-      'Submitter email and business email must be different.',
-    )
-  }
-
-  if (submittedPhones.length < 3) {
-    throw new AppError(
-      409,
-      'Owner phone, business phone, and active WhatsApp number must be different.',
-    )
-  }
-
   const duplicateConditions = [
     ...submittedEmails.flatMap((email) => [
       eq(merchants.submitterEmail, email),
@@ -431,7 +417,7 @@ export async function assertMerchantContactValuesUnused(
   if (duplicateEmail) {
     throw new AppError(
       409,
-      'This email address has already been used for another merchant.',
+      'This email address has already been used in another submission.',
     )
   }
 
@@ -444,7 +430,7 @@ export async function assertMerchantContactValuesUnused(
   if (duplicatePhone) {
     throw new AppError(
       409,
-      'This phone number has already been used for another merchant.',
+      'This phone number has already been used in another submission.',
     )
   }
 
@@ -920,11 +906,9 @@ async function getLatestMidCreationPaymentMethods(merchantId: string) {
 
   const details = entry?.details as { paymentMethods?: unknown } | null
   const parsed = paymentMethodSettingsSchema.safeParse(details?.paymentMethods)
-  return (
-    parsed.success
-      ? parsed.data
-      : parseLegacyMethodSettings(details?.paymentMethods, 'collection')
-  )
+  return parsed.success
+    ? parsed.data
+    : parseLegacyMethodSettings(details?.paymentMethods, 'collection')
 }
 
 async function getLatestMidCreationPayoutMethods(merchantId: string) {
@@ -946,11 +930,9 @@ async function getLatestMidCreationPayoutMethods(merchantId: string) {
     payoutMethods?: unknown
   } | null
   const parsed = paymentMethodSettingsSchema.safeParse(details?.payoutMethods)
-  return (
-    parsed.success
-      ? parsed.data
-      : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement')
-  )
+  return parsed.success
+    ? parsed.data
+    : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement')
 }
 
 function parseLegacyMethodSettings(

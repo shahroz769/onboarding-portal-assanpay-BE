@@ -15,6 +15,7 @@ import {
   uploadAgreementDraft,
   createSubMerchantDraft,
   getCaseFlowConfiguration,
+  listSubMerchantDrafts,
   updateCaseFlowConfiguration,
 } from './configuration.service'
 import {
@@ -36,7 +37,19 @@ import type {
 
 export const configurationRoutes = new Hono<AppEnv>()
 
-configurationRoutes.use('*', requireAuth, requireRoles('admin'))
+configurationRoutes.use('*', requireAuth)
+
+configurationRoutes.get('/sub-merchants', async (c) => {
+  const subMerchants = await listSubMerchantDrafts()
+  return c.json(
+    subMerchants.map(({ id, name }) => ({
+      id,
+      name,
+    })),
+  )
+})
+
+configurationRoutes.use('*', requireRoles('admin'))
 
 configurationRoutes.get('/', async (c) => {
   return c.json(await getConfigurationOverview())

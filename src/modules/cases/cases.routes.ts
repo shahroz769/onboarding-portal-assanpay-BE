@@ -163,15 +163,15 @@ caseRoutes.post(
   },
 )
 
-// PATCH /api/cases/:id/status — Update case status (admin, supervisor)
+// PATCH /api/cases/:id/status — Update status (case owner only)
 caseRoutes.patch(
   '/:id/status',
-  requireRoles('admin', 'supervisor'),
   zodValidator('json', updateCaseStatusSchema),
   async (c) => {
+    const auth = c.get('auth')
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as UpdateCaseStatusInput
-    const result = await updateCaseStatus(id, input)
+    const result = await updateCaseStatus(id, auth.userId, input)
     return c.json(result)
   },
 )
@@ -210,7 +210,7 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
   return c.json(result)
 })
 
-// PATCH /api/cases/:id/assign — Assign case owner (admin, supervisor)
+// PATCH /api/cases/:id/assign — Assign, transfer, or unassign (admin, supervisor)
 caseRoutes.patch(
   '/:id/assign',
   requireRoles('admin', 'supervisor'),
@@ -224,7 +224,7 @@ caseRoutes.patch(
   },
 )
 
-// PATCH /api/cases/:id/priority — Update case priority (admin, supervisor)
+// PATCH /api/cases/:id/priority — Update priority (admin, supervisor)
 caseRoutes.patch(
   '/:id/priority',
   requireRoles('admin', 'supervisor'),

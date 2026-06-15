@@ -242,15 +242,45 @@ async function assertOwnerCanWorkCases(
   if (!access) return
 
   const rows = await getDb()
-    .select({ queueId: cases.queueId })
+    .select({
+      queueId: cases.queueId,
+      queueName: queues.name,
+    })
     .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
     .where(inArray(cases.id, caseIds))
 
   const workQueueIds = new Set(access.workQueueIds)
-  if (rows.some((row) => !workQueueIds.has(row.queueId))) {
+  const inaccessibleQueueNames = Array.from(
+    new Set(
+      rows
+        .filter((row) => !workQueueIds.has(row.queueId))
+        .map((row) => row.queueName),
+    ),
+  )
+
+  if (inaccessibleQueueNames.length > 0) {
     throw new AppError(
       403,
-      'Selected owner does not have working access to one or more queues.',
+      `Selected employee does not have work access to: ${inaccessibleQueueNames.join(', ')}.`,
+    )
+  }
+}
+
+async function assertCaseOwner(caseId: string, userId: string) {
+  const caseRow = await getDb().query.cases.findFirst({
+    where: eq(cases.id, caseId),
+    columns: { ownerId: true },
+  })
+
+  if (!caseRow) {
+    throw new AppError(404, 'Case not found.')
+  }
+
+  if (caseRow.ownerId !== userId) {
+    throw new AppError(
+      403,
+      'Only the current case owner can work on this case.',
     )
   }
 }
@@ -807,12 +837,12 @@ async function getMidCreationCredentials(
     password: details.password,
     paymentMethods: parsedPaymentMethods.success
       ? parsedPaymentMethods.data
-      : parseLegacyMethodSettings(details.paymentMethods, 'collection') ??
-        defaultPaymentMethodSettings,
+      : (parseLegacyMethodSettings(details.paymentMethods, 'collection') ??
+        defaultPaymentMethodSettings),
     payoutMethods: parsedPayoutMethods.success
       ? parsedPayoutMethods.data
-      : parseLegacyMethodSettings(details.paymentMethods, 'disbursement') ??
-        defaultPayoutMethodSettings,
+      : (parseLegacyMethodSettings(details.paymentMethods, 'disbursement') ??
+        defaultPayoutMethodSettings),
   }
 }
 
@@ -1208,13 +1238,15 @@ export async function bulkAssignCases(
   const nextOwner = ownerId
     ? await db.query.users.findFirst({
         where: eq(users.id, ownerId),
-        columns: { id: true, name: true },
+        columns: { id: true, name: true, status: true },
       })
     : null
 
-  // Verify owner exists if provided
   if (ownerId && !nextOwner) {
     throw new AppError(404, 'User not found.')
+  }
+  if (nextOwner && nextOwner.status !== 'active') {
+    throw new AppError(403, 'Inactive employees cannot own cases.')
   }
 
   const existingCases = await db
@@ -1222,9 +1254,14 @@ export async function bulkAssignCases(
       id: cases.id,
       ownerId: cases.ownerId,
       ownerName: users.name,
+      queueId: cases.queueId,
+      currentStageId: cases.currentStageId,
+      currentStageName: queueStages.name,
+      currentStageCategory: queueStages.category,
     })
     .from(cases)
     .leftJoin(users, eq(cases.ownerId, users.id))
+    .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
     .where(inArray(cases.id, uniqueCaseIds))
 
   if (existingCases.length !== uniqueCaseIds.length) {
@@ -1233,43 +1270,123 @@ export async function bulkAssignCases(
 
   await assertOwnerCanWorkCases(ownerId, uniqueCaseIds)
 
-  const historyEntries = existingCases
-    .filter((caseRecord) => caseRecord.ownerId !== ownerId)
-    .map((caseRecord) => ({
-      caseId: caseRecord.id,
-      actorId,
-      action: 'owner_changed',
-      details: {
-        fromOwner: caseRecord.ownerName ?? 'Unassigned',
-        toOwner: nextOwner?.name ?? 'Unassigned',
-      },
-    }))
+  const stageRows = await db
+    .select({
+      id: queueStages.id,
+      queueId: queueStages.queueId,
+      name: queueStages.name,
+      slug: queueStages.slug,
+      category: queueStages.category,
+    })
+    .from(queueStages)
+    .where(
+      inArray(
+        queueStages.queueId,
+        existingCases.map((item) => item.queueId),
+      ),
+    )
+
+  const stageByQueue = new Map<
+    string,
+    {
+      newStageId: string
+      workingStageId: string
+      newStageName: string
+      workingStageName: string
+    }
+  >()
+  for (const caseRecord of existingCases) {
+    const queueStageRows = stageRows.filter(
+      (stage) => stage.queueId === caseRecord.queueId,
+    )
+    const newStage = queueStageRows.find((stage) => stage.category === 'new')
+    const workingStage = queueStageRows.find(
+      (stage) => stage.slug === 'working',
+    )
+    if (!newStage || !workingStage) {
+      throw new AppError(
+        500,
+        'Required New and Working stages are not configured.',
+      )
+    }
+    stageByQueue.set(caseRecord.queueId, {
+      newStageId: newStage.id,
+      workingStageId: workingStage.id,
+      newStageName: newStage.name,
+      workingStageName: workingStage.name,
+    })
+  }
 
   const updatedCases = await db.transaction(async (tx) => {
-    const updatedRows = await tx
-      .update(cases)
-      .set({
-        ownerId,
-        updatedAt: new Date(),
-      })
-      .where(inArray(cases.id, uniqueCaseIds))
-      .returning({ id: cases.id })
+    const changedCases = existingCases.filter(
+      (caseRecord) => caseRecord.ownerId !== ownerId,
+    )
 
-    if (historyEntries.length > 0) {
-      await tx.insert(caseHistory).values(historyEntries)
+    for (const caseRecord of changedCases) {
+      const stages = stageByQueue.get(caseRecord.queueId)
+      if (!stages) throw new AppError(500, 'Queue stages are not configured.')
+
+      const shouldStartWorking =
+        ownerId !== null && caseRecord.currentStageCategory === 'new'
+      const updateData =
+        ownerId === null
+          ? {
+              ownerId: null,
+              currentStageId: stages.newStageId,
+              status: 'new' as const,
+              closeOutcome: null,
+              closeReason: null,
+              closedAt: null,
+              slaBreached: null,
+              updatedAt: new Date(),
+            }
+          : {
+              ownerId,
+              ...(shouldStartWorking
+                ? {
+                    currentStageId: stages.workingStageId,
+                    status: 'working' as const,
+                  }
+                : {}),
+              updatedAt: new Date(),
+            }
+
+      await tx.update(cases).set(updateData).where(eq(cases.id, caseRecord.id))
+
+      await tx.insert(caseHistory).values({
+        caseId: caseRecord.id,
+        actorId,
+        action:
+          ownerId === null
+            ? 'owner_unassigned'
+            : caseRecord.ownerId
+              ? 'owner_transferred'
+              : 'owner_assigned',
+        details: {
+          fromOwner: caseRecord.ownerName ?? 'AP System',
+          toOwner: nextOwner?.name ?? 'AP System',
+          fromStage: caseRecord.currentStageName,
+          toStage:
+            ownerId === null
+              ? stages.newStageName
+              : shouldStartWorking
+                ? stages.workingStageName
+                : caseRecord.currentStageName,
+        },
+      })
     }
 
-    return updatedRows
+    return changedCases
   })
 
-  if (historyEntries.length > 0) {
+  if (updatedCases.length > 0) {
     // Notifications (best-effort) for each affected case
     try {
       const actor = await db.query.users.findFirst({
         where: eq(users.id, actorId),
         columns: { name: true },
       })
-      const affectedIds = historyEntries.map((h) => h.caseId)
+      const affectedIds = updatedCases.map((item) => item.id)
       const metas = await db
         .select({
           id: cases.id,
@@ -1310,9 +1427,11 @@ export async function bulkAssignCases(
 
 export async function updateCaseStatus(
   caseId: string,
+  userId: string,
   input: UpdateCaseStatusInput,
 ) {
   const db = getDb()
+  await assertCaseOwner(caseId, userId)
 
   const [existing] = await db
     .select({
@@ -1406,7 +1525,7 @@ export async function assignCase(
   const nextOwner = ownerId
     ? await db.query.users.findFirst({
         where: eq(users.id, ownerId),
-        columns: { id: true, name: true },
+        columns: { id: true, name: true, status: true },
       })
     : null
 
@@ -1416,9 +1535,14 @@ export async function assignCase(
       id: cases.id,
       ownerId: cases.ownerId,
       ownerName: users.name,
+      queueId: cases.queueId,
+      currentStageId: cases.currentStageId,
+      currentStageName: queueStages.name,
+      currentStageCategory: queueStages.category,
     })
     .from(cases)
     .leftJoin(users, eq(cases.ownerId, users.id))
+    .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
     .where(eq(cases.id, caseId))
     .limit(1)
 
@@ -1428,20 +1552,65 @@ export async function assignCase(
     throw new AppError(404, 'Case not found.')
   }
 
-  // Verify owner exists if provided
   if (ownerId && !nextOwner) {
     throw new AppError(404, 'User not found.')
+  }
+  if (nextOwner && nextOwner.status !== 'active') {
+    throw new AppError(403, 'Inactive employees cannot own cases.')
+  }
+
+  if (existingCase.ownerId === ownerId) {
+    return {
+      id: existingCase.id,
+      ownerId: existingCase.ownerId,
+      updatedAt: new Date(),
+    }
   }
 
   await assertOwnerCanWorkCases(ownerId, [caseId])
 
+  const stageRows = await db
+    .select()
+    .from(queueStages)
+    .where(eq(queueStages.queueId, existingCase.queueId))
+  const newStage = stageRows.find((stage) => stage.category === 'new')
+  const workingStage = stageRows.find((stage) => stage.slug === 'working')
+  if (!newStage || !workingStage) {
+    throw new AppError(
+      500,
+      'Required New and Working stages are not configured.',
+    )
+  }
+
+  const shouldStartWorking =
+    ownerId !== null && existingCase.currentStageCategory === 'new'
+  const updateData =
+    ownerId === null
+      ? {
+          ownerId: null,
+          currentStageId: newStage.id,
+          status: 'new' as const,
+          closeOutcome: null,
+          closeReason: null,
+          closedAt: null,
+          slaBreached: null,
+          updatedAt: new Date(),
+        }
+      : {
+          ownerId,
+          ...(shouldStartWorking
+            ? {
+                currentStageId: workingStage.id,
+                status: 'working' as const,
+              }
+            : {}),
+          updatedAt: new Date(),
+        }
+
   const [updated] = await db.transaction(async (tx) => {
     const updatedRows = await tx
       .update(cases)
-      .set({
-        ownerId,
-        updatedAt: new Date(),
-      })
+      .set(updateData)
       .where(eq(cases.id, caseId))
       .returning({
         id: cases.id,
@@ -1449,17 +1618,27 @@ export async function assignCase(
         updatedAt: cases.updatedAt,
       })
 
-    if (existingCase.ownerId !== ownerId) {
-      await tx.insert(caseHistory).values({
-        caseId,
-        actorId,
-        action: 'owner_changed',
-        details: {
-          fromOwner: existingCase.ownerName ?? 'Unassigned',
-          toOwner: nextOwner?.name ?? 'Unassigned',
-        },
-      })
-    }
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId,
+      action:
+        ownerId === null
+          ? 'owner_unassigned'
+          : existingCase.ownerId
+            ? 'owner_transferred'
+            : 'owner_assigned',
+      details: {
+        fromOwner: existingCase.ownerName ?? 'AP System',
+        toOwner: nextOwner?.name ?? 'AP System',
+        fromStage: existingCase.currentStageName,
+        toStage:
+          ownerId === null
+            ? newStage.name
+            : shouldStartWorking
+              ? workingStage.name
+              : existingCase.currentStageName,
+      },
+    })
 
     return updatedRows
   })
@@ -2038,8 +2217,12 @@ export async function takeOwnership(caseId: string, userId: string) {
         status: newStatus,
         updatedAt: new Date(),
       })
-      .where(eq(cases.id, caseId))
+      .where(and(eq(cases.id, caseId), isNull(cases.ownerId)))
       .returning()
+
+    if (!updatedRows[0]) {
+      throw new AppError(409, 'Case was assigned by another user.')
+    }
 
     await tx.insert(caseHistory).values({
       caseId,
@@ -3346,16 +3529,7 @@ export async function createCaseComment(
   input: CreateCommentInput,
 ) {
   const db = getDb()
-
-  // Verify case exists
-  const existing = await db.query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { id: true },
-  })
-
-  if (!existing) {
-    throw new AppError(404, 'Case not found.')
-  }
+  await assertCaseOwner(caseId, userId)
 
   // Verify parent comment exists if provided
   if (input.parentId) {
