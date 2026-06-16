@@ -132,11 +132,16 @@ const RESUBMISSION_EMAIL_PROOF_KIND = 'resubmission_email_proof'
 const AGREEMENT_EMAIL_PROOF_KIND = 'agreement_email_proof'
 const MID_CREATION_EMAIL_PROOF_KIND = 'mid_creation_email_proof'
 const LIVE_ACTIVATION_EMAIL_PROOF_KIND = 'live_activation_email_proof'
+const RESUBMISSION_WHATSAPP_PROOF_KIND = 'resubmission_whatsapp_proof'
+const AGREEMENT_WHATSAPP_PROOF_KIND = 'agreement_whatsapp_proof'
+const MID_CREATION_WHATSAPP_PROOF_KIND = 'mid_creation_whatsapp_proof'
+const LIVE_ACTIVATION_WHATSAPP_PROOF_KIND = 'live_activation_whatsapp_proof'
 const EMAIL_PROOF_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
 ])
+type ManualCommunicationChannel = 'email' | 'whatsapp'
 const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 const MAX_PHYSICAL_AGREEMENT_BYTES = 10 * 1024 * 1024
 const PHYSICAL_AGREEMENT_MIME_TYPES = new Set([
@@ -3618,10 +3623,51 @@ export async function listCaseHistory(caseId: string) {
       desc(caseHistory.id),
     )
 
-  return history.map((entry) => ({
+  const sanitizedHistory = history.map((entry) => ({
     ...entry,
     details: sanitizeCaseHistoryDetails(entry.action, entry.details),
   }))
+  const screenshotFileIds = sanitizedHistory
+    .map((entry) =>
+      getStringDetail(entry.details, 'screenshotFileId'),
+    )
+    .filter((id): id is string => Boolean(id))
+
+  if (screenshotFileIds.length === 0) return sanitizedHistory
+
+  const proofFiles = await db
+    .select({
+      id: caseFiles.id,
+      originalName: caseFiles.originalName,
+      mimeType: caseFiles.mimeType,
+      sizeBytes: caseFiles.sizeBytes,
+      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      createdAt: caseFiles.createdAt,
+    })
+    .from(caseFiles)
+    .where(inArray(caseFiles.id, screenshotFileIds))
+  const proofFileById = new Map(proofFiles.map((file) => [file.id, file]))
+
+  return sanitizedHistory.map((entry) => {
+    const screenshotFileId = getStringDetail(entry.details, 'screenshotFileId')
+    const proofFile = screenshotFileId
+      ? proofFileById.get(screenshotFileId)
+      : null
+
+    if (!proofFile) return entry
+
+    return {
+      ...entry,
+      details: {
+        ...(entry.details as Record<string, unknown>),
+        proofFile: {
+          ...proofFile,
+          createdAt: proofFile.createdAt.toISOString(),
+        },
+      },
+    }
+  })
 }
 
 function sanitizeCaseHistoryDetails(action: string, details: unknown) {
@@ -3638,6 +3684,12 @@ function sanitizeCaseHistoryDetails(action: string, details: unknown) {
     unknown
   >
   return safeDetails
+}
+
+function getStringDetail(details: unknown, key: string) {
+  if (!details || typeof details !== 'object') return null
+  const value = (details as Record<string, unknown>)[key]
+  return typeof value === 'string' && value ? value : null
 }
 
 // ─── Send For Resubmission ──────────────────────────────────────────────────
@@ -3821,10 +3873,10 @@ export async function getResubmissionEmailPreview(
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send for resubmission.')
   }
-  if (row.status !== 'working') {
+  if (row.status !== 'working' && row.status !== 'awaiting_client') {
     throw new AppError(
       400,
-      'The case must be in the working stage to send for resubmission.',
+      'The case must be in the working or awaiting-client stage to send for resubmission.',
     )
   }
   if (!row.merchantSubmitterEmail) {
@@ -3952,11 +4004,16 @@ export type ManualEmailResult = {
 export async function confirmResubmissionEmailManual(
   caseId: string,
   userId: string,
-  input: { tokenId: string; file: File },
+  input: {
+    tokenId: string
+    file: File
+    channel?: ManualCommunicationChannel
+  },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
   const db = getDb()
   validateEmailProofFile(input.file)
+  const channel = input.channel ?? 'email'
 
   const [row] = await db
     .select({
@@ -3981,7 +4038,10 @@ export async function confirmResubmissionEmailManual(
   if (!row) throw new AppError(404, 'Case not found.')
   if (row.ownerId !== userId)
     throw new AppError(403, 'Only the case owner can confirm this.')
-  if (row.status !== 'working')
+  if (
+    row.status !== 'working' &&
+    !(channel === 'whatsapp' && row.status === 'awaiting_client')
+  )
     throw new AppError(400, 'The case must be in the working stage.')
   if (!row.merchantSubmitterEmail)
     throw new AppError(400, 'No submitter email on file.')
@@ -4037,45 +4097,57 @@ export async function confirmResubmissionEmailManual(
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_client stage configured.')
 
-  const [reservedCase] = await db
-    .update(cases)
-    .set({
-      status: 'awaiting_client',
-      currentStageId: awaitingStage.id,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-    .returning({ id: cases.id })
-  if (!reservedCase)
-    throw new AppError(409, 'This case has already been sent for resubmission.')
+  if (row.status === 'working') {
+    const [reservedCase] = await db
+      .update(cases)
+      .set({
+        status: 'awaiting_client',
+        currentStageId: awaitingStage.id,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+      .returning({ id: cases.id })
+    if (!reservedCase)
+      throw new AppError(
+        409,
+        'This case has already been sent for resubmission.',
+      )
+  }
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
     userId,
     input.file,
-    RESUBMISSION_EMAIL_PROOF_KIND,
+    channel === 'whatsapp'
+      ? RESUBMISSION_WHATSAPP_PROOF_KIND
+      : RESUBMISSION_EMAIL_PROOF_KIND,
     row.caseNumber,
     row.merchantName,
   )
 
   const now = new Date()
   await db.transaction(async (tx) => {
+    if (row.status === 'working') {
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'rejections_prepared',
+        details: {
+          total: rejectedFieldNames.length,
+          rejected: rejectedFieldNames.length,
+          approved: 0,
+          rejectedFields: rejectedFieldNames,
+          rejectedFieldLabels,
+        },
+      })
+    }
     await tx.insert(caseHistory).values({
       caseId,
       actorId: userId,
-      action: 'rejections_prepared',
-      details: {
-        total: rejectedFieldNames.length,
-        rejected: rejectedFieldNames.length,
-        approved: 0,
-        rejectedFields: rejectedFieldNames,
-        rejectedFieldLabels,
-      },
-    })
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'resubmission_email_sent_manual',
+      action:
+        channel === 'whatsapp'
+          ? 'resubmission_whatsapp_sent_manual'
+          : 'resubmission_email_sent_manual',
       details: {
         tokenId: input.tokenId,
         expiresAt: tokenRow.expiresAt.toISOString(),
@@ -4083,6 +4155,7 @@ export async function confirmResubmissionEmailManual(
         rejectedFieldLabels,
         recipient: row.merchantSubmitterEmail,
         screenshotFileId: savedFile.id,
+        channel,
         manual: true,
       },
       createdAt: now,
@@ -4109,7 +4182,9 @@ export async function getAgreementEmailPreview(
 ): Promise<AgreementEmailPreviewResult> {
   await assertManualEmailEnabled()
   const db = getDb()
-  const caseRow = await loadAgreementCase(caseId, userId)
+  const caseRow = await loadAgreementCase(caseId, userId, {
+    allowAwaitingClient: true,
+  })
 
   if (!caseRow.merchantSubmitterEmail) {
     throw new AppError(400, 'No submitter email is on file for this merchant.')
@@ -4197,13 +4272,21 @@ AssanPay Onboarding Team`
 export async function confirmAgreementEmailManual(
   caseId: string,
   userId: string,
-  input: { tokenId: string; remarks?: string | null; file: File },
+  input: {
+    tokenId: string
+    remarks?: string | null
+    file: File
+    channel?: ManualCommunicationChannel
+  },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
   const db = getDb()
   validateEmailProofFile(input.file)
+  const channel = input.channel ?? 'email'
 
-  const caseRow = await loadAgreementCase(caseId, userId)
+  const caseRow = await loadAgreementCase(caseId, userId, {
+    allowAwaitingClient: channel === 'whatsapp',
+  })
   if (!caseRow.merchantSubmitterEmail) {
     throw new AppError(400, 'No submitter email is on file for this merchant.')
   }
@@ -4233,23 +4316,29 @@ export async function confirmAgreementEmailManual(
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_client stage configured.')
 
-  const [reservedCase] = await db
-    .update(cases)
-    .set({
-      status: 'awaiting_client',
-      currentStageId: awaitingStage.id,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-    .returning({ id: cases.id })
-  if (!reservedCase)
-    throw new AppError(409, 'This case has already been sent to the client.')
+  if (caseRow.status === 'working') {
+    const [reservedCase] = await db
+      .update(cases)
+      .set({
+        status: 'awaiting_client',
+        currentStageId: awaitingStage.id,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+      .returning({ id: cases.id })
+    if (!reservedCase)
+      throw new AppError(409, 'This case has already been sent to the client.')
+  } else if (channel !== 'whatsapp' || caseRow.status !== 'awaiting_client') {
+    throw new AppError(400, 'The case must be in the working stage.')
+  }
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
     userId,
     input.file,
-    AGREEMENT_EMAIL_PROOF_KIND,
+    channel === 'whatsapp'
+      ? AGREEMENT_WHATSAPP_PROOF_KIND
+      : AGREEMENT_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
     caseRow.merchantName,
   )
@@ -4271,13 +4360,17 @@ export async function confirmAgreementEmailManual(
     await tx.insert(caseHistory).values({
       caseId,
       actorId: userId,
-      action: 'agreement_email_sent_manual',
+      action:
+        channel === 'whatsapp'
+          ? 'agreement_whatsapp_sent_manual'
+          : 'agreement_email_sent_manual',
       details: {
         tokenId: input.tokenId,
         expiresAt: tokenRow.expiresAt.toISOString(),
         recipient: caseRow.merchantSubmitterEmail,
         remarks,
         screenshotFileId: savedFile.id,
+        channel,
         manual: true,
       },
       createdAt: now,
@@ -4509,10 +4602,15 @@ AssanPay Onboarding Team`
 export async function confirmMidCreationEmailManual(
   caseId: string,
   userId: string,
-  input: SendMidCreationEmailInput & { tokenId: string; file: File },
+  input: SendMidCreationEmailInput & {
+    tokenId: string
+    file: File
+    channel?: ManualCommunicationChannel
+  },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
   validateEmailProofFile(input.file)
+  const channel = input.channel ?? 'email'
   const caseRow = await loadMidCreationCase(caseId, userId)
   const db = getDb()
 
@@ -4537,7 +4635,9 @@ export async function confirmMidCreationEmailManual(
     caseId,
     userId,
     input.file,
-    MID_CREATION_EMAIL_PROOF_KIND,
+    channel === 'whatsapp'
+      ? MID_CREATION_WHATSAPP_PROOF_KIND
+      : MID_CREATION_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
     caseRow.merchantName,
   )
@@ -4546,13 +4646,17 @@ export async function confirmMidCreationEmailManual(
   await db.insert(caseHistory).values({
     caseId,
     actorId: userId,
-    action: 'mid_creation_email_sent_manual',
+    action:
+      channel === 'whatsapp'
+        ? 'mid_creation_whatsapp_sent_manual'
+        : 'mid_creation_email_sent_manual',
     details: {
       tokenId: input.tokenId,
       availableAt: tokenRow.availableAt.toISOString(),
       recipient: credentials.email,
       portalMid: credentials.portalMid,
       screenshotFileId: savedFile.id,
+      channel,
       manual: true,
     },
     createdAt: now,
@@ -4606,10 +4710,15 @@ export async function getLiveActivationEmailPreview(
 export async function confirmLiveActivationEmailManual(
   caseId: string,
   userId: string,
-  input: SendLiveEmailInput & { tokenId: string; file: File },
+  input: SendLiveEmailInput & {
+    tokenId: string
+    file: File
+    channel?: ManualCommunicationChannel
+  },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
   validateEmailProofFile(input.file)
+  const channel = input.channel ?? 'email'
   const caseRow = await loadLiveCase(caseId, userId)
 
   if (input.tokenId !== caseId) {
@@ -4620,7 +4729,9 @@ export async function confirmLiveActivationEmailManual(
     caseId,
     userId,
     input.file,
-    LIVE_ACTIVATION_EMAIL_PROOF_KIND,
+    channel === 'whatsapp'
+      ? LIVE_ACTIVATION_WHATSAPP_PROOF_KIND
+      : LIVE_ACTIVATION_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
     caseRow.merchantName,
   )
@@ -4630,10 +4741,14 @@ export async function confirmLiveActivationEmailManual(
     .values({
       caseId,
       actorId: userId,
-      action: 'live_activation_email_sent_manual',
+      action:
+        channel === 'whatsapp'
+          ? 'live_activation_whatsapp_sent_manual'
+          : 'live_activation_email_sent_manual',
       details: {
         recipient: input.email,
         screenshotFileId: savedFile.id,
+        channel,
         manual: true,
       },
       createdAt: new Date(),
@@ -4805,11 +4920,26 @@ export async function sendForResubmission(
 
   // 5. Issue token
   const linkDeadlines = await getLinkDeadlineSettings()
-  const issued = await issueToken(
-    caseId,
-    userId,
-    linkDeadlines.documentsReviewResubmissionHours,
-  )
+  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
+  const existingToken = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+      gt(caseResubmissionTokens.expiresAt, minExpiry),
+    ),
+    orderBy: [desc(caseResubmissionTokens.createdAt)],
+  })
+  const issued = existingToken
+    ? {
+        token: existingToken.token,
+        tokenId: existingToken.id,
+        expiresAt: existingToken.expiresAt,
+      }
+    : await issueToken(
+        caseId,
+        userId,
+        linkDeadlines.documentsReviewResubmissionHours,
+      )
 
   const preparedAt = new Date()
 
@@ -5757,7 +5887,11 @@ async function ensurePhysicalAgreementCaseForMerchant(
   return created
 }
 
-async function loadAgreementCase(caseId: string, userId: string) {
+async function loadAgreementCase(
+  caseId: string,
+  userId: string,
+  options: { allowAwaitingClient?: boolean } = {},
+) {
   const db = getDb()
   const [row] = await db
     .select({
@@ -5790,7 +5924,10 @@ async function loadAgreementCase(caseId: string, userId: string) {
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can update this case.')
   }
-  if (row.status !== 'working') {
+  if (
+    row.status !== 'working' &&
+    !(options.allowAwaitingClient && row.status === 'awaiting_client')
+  ) {
     throw new AppError(400, 'The case must be in the working stage.')
   }
 
@@ -6070,11 +6207,22 @@ export async function sendAgreementForClientUpload(
   }
 
   const linkDeadlines = await getLinkDeadlineSettings()
-  const issued = await issueToken(
-    caseId,
-    userId,
-    linkDeadlines.agreementLinkHours,
-  )
+  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
+  const existingToken = await db.query.caseResubmissionTokens.findFirst({
+    where: and(
+      eq(caseResubmissionTokens.caseId, caseId),
+      isNull(caseResubmissionTokens.consumedAt),
+      gt(caseResubmissionTokens.expiresAt, minExpiry),
+    ),
+    orderBy: [desc(caseResubmissionTokens.createdAt)],
+  })
+  const issued = existingToken
+    ? {
+        token: existingToken.token,
+        tokenId: existingToken.id,
+        expiresAt: existingToken.expiresAt,
+      }
+    : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
   const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
   const emailResult = await sendEmail({
     to: caseRow.merchantSubmitterEmail,

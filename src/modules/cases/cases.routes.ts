@@ -87,6 +87,11 @@ import {
 
 export const caseRoutes = new Hono<AppEnv>()
 
+function parseManualCommunicationChannel(value: FormDataEntryValue | null) {
+  if (value === 'whatsapp') return 'whatsapp' as const
+  return 'email' as const
+}
+
 // TEMP DEVELOPMENT: public case creation. Revert by moving this back below
 // requireAuth with requireRoles("admin", "supervisor").
 caseRoutes.post('/', zodValidator('json', createCaseSchema), async (c) => {
@@ -188,6 +193,7 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const email = formData.get('email')
+  const channel = parseManualCommunicationChannel(formData.get('channel'))
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -206,6 +212,7 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
     ...parsed.data,
     tokenId,
     file,
+    channel,
   })
   return c.json(result)
 })
@@ -544,6 +551,7 @@ caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
   })
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
+  const channel = parseManualCommunicationChannel(formData.get('channel'))
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -553,6 +561,7 @@ caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
   const result = await confirmResubmissionEmailManual(id, auth.userId, {
     file,
     tokenId,
+    channel,
   })
   return c.json(result)
 })
@@ -582,6 +591,7 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const remarks = formData.get('remarks')
+  const channel = parseManualCommunicationChannel(formData.get('channel'))
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -592,6 +602,7 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
     tokenId,
     remarks: typeof remarks === 'string' ? remarks : null,
     file,
+    channel,
   })
   return c.json(result)
 })
@@ -620,6 +631,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
   })
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
+  const channel = parseManualCommunicationChannel(formData.get('channel'))
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -633,6 +645,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
     ...parsed.data,
     tokenId,
     file,
+    channel,
   })
   return c.json(result)
 })
