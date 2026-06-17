@@ -790,6 +790,7 @@ async function getMidCreationPortalMid(
 
 type MidCreationCredentials = {
   portalMid: number
+  portalMuid: number | null
   email: string
   password: string
   paymentMethods: PaymentMethodSettings
@@ -816,6 +817,7 @@ async function getMidCreationCredentials(
   if (!entry) return null
   const details = entry.details as {
     portalMid?: unknown
+    portalMuid?: unknown
     email?: unknown
     password?: unknown
     paymentMethods?: unknown
@@ -838,6 +840,8 @@ async function getMidCreationCredentials(
 
   return {
     portalMid: details.portalMid,
+    portalMuid:
+      typeof details.portalMuid === 'number' ? details.portalMuid : null,
     email: details.email,
     password: details.password,
     paymentMethods: parsedPaymentMethods.success
@@ -2122,6 +2126,11 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         queue.slug === MID_CREATION_QUEUE_SLUG
           ? (midCreationCredentials?.portalMid ?? null)
           : null,
+      portalMuid:
+        queue.slug === MID_CREATION_QUEUE_SLUG ||
+        queue.slug === WORDPRESS_WEBSITE_QUEUE_SLUG
+          ? (midCreationCredentials?.portalMuid ?? null)
+          : null,
       paymentMethods:
         queue.slug === MID_CREATION_QUEUE_SLUG
           ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
@@ -3198,6 +3207,7 @@ export async function saveMidCreationDetails(
     action: 'mid_creation_saved',
     details: {
       portalMid: input.portalMid,
+      portalMuid: input.portalMuid,
       email: input.email,
       password: input.password,
       paymentMethods: input.paymentMethods,
@@ -3208,6 +3218,7 @@ export async function saveMidCreationDetails(
 
   return {
     portalMid: input.portalMid,
+    portalMuid: input.portalMuid,
     email: input.email,
     paymentMethods: input.paymentMethods,
     payoutMethods: input.payoutMethods,
