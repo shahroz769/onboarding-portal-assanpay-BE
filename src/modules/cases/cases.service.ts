@@ -3545,7 +3545,6 @@ export async function createCaseComment(
   input: CreateCommentInput,
 ) {
   const db = getDb()
-  await assertCaseOwner(caseId, userId)
 
   // Verify parent comment exists if provided
   if (input.parentId) {
