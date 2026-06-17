@@ -258,7 +258,7 @@ export type AgreementEmailResponse = z.infer<
 export const saveMidCreationDetailsSchema = z
   .object({
     portalMid: z.coerce.number().int().positive(),
-    portalMuid: z.coerce.number().int().positive(),
+    portalMuid: z.string().trim().uuid(),
     email: z.string().trim().email().max(255),
     password: z.string().min(8).max(128),
     paymentMethods: paymentMethodSettingsSchema.min(

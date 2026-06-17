@@ -790,7 +790,7 @@ async function getMidCreationPortalMid(
 
 type MidCreationCredentials = {
   portalMid: number
-  portalMuid: number | null
+  portalMuid: string | null
   email: string
   password: string
   paymentMethods: PaymentMethodSettings
@@ -841,7 +841,7 @@ async function getMidCreationCredentials(
   return {
     portalMid: details.portalMid,
     portalMuid:
-      typeof details.portalMuid === 'number' ? details.portalMuid : null,
+      typeof details.portalMuid === 'string' ? details.portalMuid : null,
     email: details.email,
     password: details.password,
     paymentMethods: parsedPaymentMethods.success
@@ -3639,9 +3639,7 @@ export async function listCaseHistory(caseId: string) {
     details: sanitizeCaseHistoryDetails(entry.action, entry.details),
   }))
   const screenshotFileIds = sanitizedHistory
-    .map((entry) =>
-      getStringDetail(entry.details, 'screenshotFileId'),
-    )
+    .map((entry) => getStringDetail(entry.details, 'screenshotFileId'))
     .filter((id): id is string => Boolean(id))
 
   if (screenshotFileIds.length === 0) return sanitizedHistory
