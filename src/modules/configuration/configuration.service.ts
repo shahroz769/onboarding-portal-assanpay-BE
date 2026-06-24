@@ -46,6 +46,7 @@ const DRAFT_MIME_TYPES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
+const DRAFT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
 
 export const defaultLimitsAndMdrSettings: LimitsAndMdrSettings = {
   testing: {
@@ -626,9 +627,15 @@ function validateDraftFile(file: File) {
   }
 
   const mimeType = file.type || 'application/octet-stream'
-  if (!DRAFT_MIME_TYPES.has(mimeType)) {
+  const extension = getFileExtension(file.name)
+  if (!DRAFT_MIME_TYPES.has(mimeType) && !DRAFT_EXTENSIONS.has(extension)) {
     throw new AppError(400, 'Draft file must be a PDF, DOC, or DOCX file.')
   }
+}
+
+function getFileExtension(fileName: string) {
+  const dotIndex = fileName.lastIndexOf('.')
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ''
 }
 
 function getBusinessTypeLabel(businessType: BusinessType) {

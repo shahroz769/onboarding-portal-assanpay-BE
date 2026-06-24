@@ -1136,6 +1136,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       ownerName: users.name,
       status: cases.status,
       priority: cases.priority,
+      closeOutcome: cases.closeOutcome,
       closedAt: cases.closedAt,
       createdAt: cases.createdAt,
       updatedAt: cases.updatedAt,
@@ -1264,6 +1265,9 @@ export async function bulkAssignCases(
       ownerId: cases.ownerId,
       ownerName: users.name,
       queueId: cases.queueId,
+      status: cases.status,
+      closeOutcome: cases.closeOutcome,
+      closedAt: cases.closedAt,
       currentStageId: cases.currentStageId,
       currentStageName: queueStages.name,
       currentStageCategory: queueStages.category,
@@ -1275,6 +1279,18 @@ export async function bulkAssignCases(
 
   if (existingCases.length !== uniqueCaseIds.length) {
     throw new AppError(404, 'One or more cases were not found.')
+  }
+
+  const closedCase = existingCases.find(
+    (caseRecord) =>
+      caseRecord.status === 'closed' ||
+      caseRecord.status === 'error' ||
+      caseRecord.currentStageCategory === 'closed' ||
+      Boolean(caseRecord.closeOutcome) ||
+      Boolean(caseRecord.closedAt),
+  )
+  if (closedCase) {
+    throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
   }
 
   await assertOwnerCanWorkCases(ownerId, uniqueCaseIds)
@@ -1545,6 +1561,9 @@ export async function assignCase(
       ownerId: cases.ownerId,
       ownerName: users.name,
       queueId: cases.queueId,
+      status: cases.status,
+      closeOutcome: cases.closeOutcome,
+      closedAt: cases.closedAt,
       currentStageId: cases.currentStageId,
       currentStageName: queueStages.name,
       currentStageCategory: queueStages.category,
@@ -1559,6 +1578,16 @@ export async function assignCase(
 
   if (!existingCase) {
     throw new AppError(404, 'Case not found.')
+  }
+
+  if (
+    existingCase.status === 'closed' ||
+    existingCase.status === 'error' ||
+    existingCase.currentStageCategory === 'closed' ||
+    Boolean(existingCase.closeOutcome) ||
+    Boolean(existingCase.closedAt)
+  ) {
+    throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
   }
 
   if (ownerId && !nextOwner) {
@@ -2173,6 +2202,7 @@ export async function takeOwnership(caseId: string, userId: string) {
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      status: cases.status,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -2707,6 +2737,13 @@ export async function saveFieldReviews(
 
   if (caseData.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can save field reviews.')
+  }
+
+  if (caseData.status !== 'working') {
+    throw new AppError(
+      400,
+      'Field reviews can only be saved while the case is working.',
+    )
   }
 
   if (!caseData.currentStageId) {

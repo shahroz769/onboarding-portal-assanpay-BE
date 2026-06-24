@@ -231,8 +231,6 @@ export async function createMerchantSubmission(
   input: MerchantFormSubmission,
   storage: FileStorageProvider = new GoogleDriveStorageProvider(),
 ) {
-  await assertMerchantContactValuesUnused(input)
-
   const merchantId = crypto.randomUUID()
   let folderId: string | null = null
   let submissionFolderId: string | null = null
@@ -354,100 +352,6 @@ export async function createMerchantSubmission(
 
     throw error
   }
-}
-
-export async function assertMerchantContactValuesUnused(
-  input: Pick<
-    MerchantFormSubmission,
-    | 'email'
-    | 'businessEmail'
-    | 'ownerPhone'
-    | 'businessPhone'
-    | 'activeWhatsappNumber'
-  >,
-  options: { excludeMerchantId?: string } = {},
-) {
-  const submittedEmails = uniqueNonEmptyValues([
-    input.email,
-    input.businessEmail,
-  ])
-  const submittedPhones = uniqueNonEmptyValues([
-    input.ownerPhone,
-    input.businessPhone,
-    input.activeWhatsappNumber,
-  ])
-
-  const duplicateConditions = [
-    ...submittedEmails.flatMap((email) => [
-      eq(merchants.submitterEmail, email),
-      eq(merchants.businessEmail, email),
-    ]),
-    ...submittedPhones.flatMap((phone) => [
-      eq(merchants.ownerPhone, phone),
-      eq(merchants.businessPhone, phone),
-      eq(merchants.activeWhatsappNumber, phone),
-    ]),
-  ]
-
-  const whereCondition = options.excludeMerchantId
-    ? and(
-        ne(merchants.id, options.excludeMerchantId),
-        or(...duplicateConditions),
-      )
-    : or(...duplicateConditions)
-
-  const [existing] = await getDb()
-    .select({
-      submitterEmail: merchants.submitterEmail,
-      businessEmail: merchants.businessEmail,
-      ownerPhone: merchants.ownerPhone,
-      businessPhone: merchants.businessPhone,
-      activeWhatsappNumber: merchants.activeWhatsappNumber,
-    })
-    .from(merchants)
-    .where(whereCondition)
-    .limit(1)
-
-  if (!existing) return
-
-  const duplicateEmail = submittedEmails.find(
-    (email) =>
-      existing.submitterEmail === email || existing.businessEmail === email,
-  )
-  if (duplicateEmail) {
-    throw new AppError(
-      409,
-      'This email address has already been used in another submission.',
-    )
-  }
-
-  const duplicatePhone = submittedPhones.find(
-    (phone) =>
-      existing.ownerPhone === phone ||
-      existing.businessPhone === phone ||
-      existing.activeWhatsappNumber === phone,
-  )
-  if (duplicatePhone) {
-    throw new AppError(
-      409,
-      'This phone number has already been used in another submission.',
-    )
-  }
-
-  throw new AppError(
-    409,
-    'This email address or phone number has already been used.',
-  )
-}
-
-function uniqueNonEmptyValues(values: Array<string | null | undefined>) {
-  return Array.from(
-    new Set(
-      values
-        .map((value) => value?.trim().toLowerCase())
-        .filter((value): value is string => Boolean(value)),
-    ),
-  )
 }
 
 function buildFolderName(merchantId: string, businessName: string) {

@@ -30,7 +30,6 @@ import {
   validateStoredMerchantScalarValues,
 } from './merchants.schemas'
 import type { MerchantDocumentType } from './merchants.schemas'
-import { assertMerchantContactValuesUnused } from './merchants.service'
 import { notifyOnResubmission } from '../notifications/notifications.service'
 
 export const resubmissionRoutes = new Hono<AppEnv>()
@@ -334,17 +333,6 @@ resubmissionRoutes.post('/:token', async (c) => {
     nextOfKinRelation:
       submittedTextFields.get('nextOfKinRelation') ?? caseRow.nextOfKinRelation,
   })
-
-  await assertMerchantContactValuesUnused(
-    {
-      email: validatedMerchantValues.submitterEmail,
-      businessEmail: validatedMerchantValues.businessEmail,
-      ownerPhone: validatedMerchantValues.ownerPhone,
-      businessPhone: validatedMerchantValues.businessPhone,
-      activeWhatsappNumber: validatedMerchantValues.activeWhatsappNumber,
-    },
-    { excludeMerchantId: caseRow.merchantId },
-  )
 
   const storage = new GoogleDriveStorageProvider()
   const replaceActions = Array.from(documentActions.entries()).filter(
