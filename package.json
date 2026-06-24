@@ -10,19 +10,19 @@
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.9",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.25",
+    "hono": "^4.12.27",
     "hono-rate-limiter": "^0.5.3",
     "jose": "^6.2.3",
-    "nanoid": "^5.1.11",
+    "nanoid": "^5.1.15",
     "postgres": "^3.4.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "resend": "^6.12.4",
+    "resend": "^6.14.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.10"
