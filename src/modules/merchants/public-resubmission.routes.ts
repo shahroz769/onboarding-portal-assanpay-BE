@@ -428,17 +428,21 @@ resubmissionRoutes.post('/:token', async (c) => {
 
     const now = new Date()
     const fieldsUpdated = Array.from(allowedFieldNames)
-    const resubmittedFieldIds = fieldsUpdated
-      .map((fieldName) => reviewByField.get(fieldName)?.id)
-      .filter((id): id is string => Boolean(id))
-    const fieldsUpdatedDetails = fieldsUpdated.map((fieldName) => {
-      if (!isDocumentFieldName(fieldName)) {
-        return {
-          fieldName,
-          label: MERCHANT_FIELD_LABELS[fieldName] ?? fieldName,
-          type: 'text' as const,
-        }
+  const resubmittedFieldIds = fieldsUpdated
+    .map((fieldName) => reviewByField.get(fieldName)?.id)
+    .filter((id): id is string => Boolean(id))
+  const fieldsUpdatedDetails = fieldsUpdated.map((fieldName) => {
+    const review = reviewByField.get(fieldName)
+    if (!isDocumentFieldName(fieldName)) {
+      return {
+        fieldName,
+        label: MERCHANT_FIELD_LABELS[fieldName] ?? fieldName,
+        type: 'text' as const,
+        rejectionReason: review?.remarks ?? null,
+        previousValue: String(caseRow[fieldName as keyof typeof caseRow] ?? ''),
+        submittedValue: submittedTextFields.get(fieldName) ?? null,
       }
+    }
 
       const docId = getDocumentIdFromFieldName(fieldName)!
       const existing = existingDocsById.get(docId)!
@@ -452,6 +456,7 @@ resubmissionRoutes.post('/:token', async (c) => {
           ],
         type: 'document' as const,
         action: documentActions.get(fieldName),
+        rejectionReason: review?.remarks ?? null,
         previousFileName: existing.originalName,
         previousFileUrl: existing.googleDriveWebViewLink,
         nextFileName: uploaded?.uploaded.fileName ?? null,
@@ -575,6 +580,12 @@ resubmissionRoutes.post('/:token', async (c) => {
           fieldsUpdated,
           fieldsUpdatedLabels: fieldsUpdatedDetails.map((item) => item.label),
           fieldsUpdatedDetails,
+          rejectedFieldDetails: fieldsUpdatedDetails.map((item) => ({
+            fieldName: item.fieldName,
+            label: item.label,
+            type: item.type,
+            rejectionReason: item.rejectionReason,
+          })),
           documentActions: Array.from(documentActions.entries()).map(
             ([fieldName, action]) => ({
               fieldName,

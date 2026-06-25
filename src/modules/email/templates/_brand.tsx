@@ -660,6 +660,8 @@ export function LinkFallback({
 }
 
 export function ExpiryNote({ expiresAt }: { expiresAt: string }) {
+  const hasExpiry = expiresAt.trim().toLowerCase() !== 'no expiry'
+
   return (
     <Text
       style={{
@@ -670,9 +672,17 @@ export function ExpiryNote({ expiresAt }: { expiresAt: string }) {
         color: brand.muted,
       }}
     >
-      This secure link expires{' '}
-      <strong style={{ color: brand.ink, fontWeight: 700 }}>{expiresAt}</strong>{' '}
-      and can be used only once.
+      {hasExpiry ? (
+        <>
+          This secure link expires{' '}
+          <strong style={{ color: brand.ink, fontWeight: 700 }}>
+            {expiresAt}
+          </strong>{' '}
+          and can be used only once.
+        </>
+      ) : (
+        <>This secure link can be used only once.</>
+      )}
     </Text>
   )
 }

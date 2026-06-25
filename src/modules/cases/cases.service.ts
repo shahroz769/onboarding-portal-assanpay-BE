@@ -3856,6 +3856,11 @@ function formatExpiryDate(date: Date): string {
   }).format(date)
 }
 
+function formatExpiryLine(expiresAt: string): string {
+  if (expiresAt.trim().toLowerCase() === 'no expiry') return ''
+  return `\n\nThis link expires ${expiresAt}.`
+}
+
 function formatEmailDateTime(date: Date): string {
   return new Intl.DateTimeFormat('en-PK', {
     day: 'numeric',
@@ -4119,9 +4124,7 @@ Items to update:
 ${itemLines}
 
 Please use the secure link below to update your submission:
-${resubmissionUrl}
-
-This link expires ${expiresAt}.
+${resubmissionUrl}${formatExpiryLine(expiresAt)}
 
 If you have any questions, please reply to this email.
 
@@ -4222,6 +4225,12 @@ export async function confirmResubmissionEmailManual(
   const rejectedFieldLabels = rejectedReviews.map((r) =>
     getRejectionLabel(r.fieldName, documentTypeById),
   )
+  const rejectedFieldDetails = rejectedReviews.map((review) => ({
+    fieldName: review.fieldName,
+    label: getRejectionLabel(review.fieldName, documentTypeById),
+    type: isDocumentFieldName(review.fieldName) ? 'document' : 'text',
+    rejectionReason: review.remarks,
+  }))
 
   const stages = await ensureQueueStages(db, {
     id: row.queueId,
@@ -4274,6 +4283,7 @@ export async function confirmResubmissionEmailManual(
           approved: 0,
           rejectedFields: rejectedFieldNames,
           rejectedFieldLabels,
+          rejectedFieldDetails,
         },
       })
     }
@@ -4289,6 +4299,7 @@ export async function confirmResubmissionEmailManual(
         expiresAt: tokenRow.expiresAt.toISOString(),
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
+        rejectedFieldDetails,
         recipient:
           channel === 'whatsapp'
             ? row.merchantWhatsappNumber
@@ -4400,7 +4411,7 @@ Please review and sign the agreement for ${merchantName} using the secure link b
     body += `\n\nAdditional notes from our team:\n${remarks}`
   }
 
-  body += `\n\nAgreement link:\n${agreementUrl}\n\nThis link expires ${expiresAt}.
+  body += `\n\nAgreement link:\n${agreementUrl}${formatExpiryLine(expiresAt)}
 
 If you have any questions, please reply to this email.
 
@@ -5025,6 +5036,12 @@ export async function sendForResubmission(
   }))
   const rejectedFieldNames = rejectedReviews.map((r) => r.fieldName)
   const rejectedFieldLabels = rejections.map((rejection) => rejection.label)
+  const rejectedFieldDetails = rejectedReviews.map((review) => ({
+    fieldName: review.fieldName,
+    label: getRejectionLabel(review.fieldName, documentTypeById),
+    type: isDocumentFieldName(review.fieldName) ? 'document' : 'text',
+    rejectionReason: review.remarks,
+  }))
 
   // 4. Ensure queue stages are fully seeded, then resolve awaiting_client
   const stages = await ensureQueueStages(db, {
@@ -5154,6 +5171,7 @@ export async function sendForResubmission(
         approved: 0,
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
+        rejectedFieldDetails,
       },
       createdAt: preparedAt,
     })
@@ -5167,6 +5185,7 @@ export async function sendForResubmission(
         expiresAt: issued.expiresAt.toISOString(),
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
+        rejectedFieldDetails,
         emailLogId: emailResult.emailLogId,
         recipient: row.merchantSubmitterEmail,
       },
