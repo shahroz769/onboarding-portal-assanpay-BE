@@ -141,6 +141,11 @@ const EMAIL_PROOF_MIME_TYPES = new Set([
   'image/png',
   'image/webp',
 ])
+const DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS = [
+  'resubmission_email_sent',
+  'resubmission_email_sent_manual',
+  'resubmission_whatsapp_sent_manual',
+] as const
 type ManualCommunicationChannel = 'email' | 'whatsapp'
 const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 const MAX_PHYSICAL_AGREEMENT_BYTES = 10 * 1024 * 1024
@@ -491,6 +496,21 @@ async function getLiveLimitsAppliedEntry(caseId: string) {
       ),
     )
     .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  return entry ?? null
+}
+
+async function getDocumentReviewResubmissionSentEntry(caseId: string) {
+  const [entry] = await getDb()
+    .select({ id: caseHistory.id })
+    .from(caseHistory)
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        inArray(caseHistory.action, DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS),
+      ),
+    )
     .limit(1)
 
   return entry ?? null
@@ -1858,7 +1878,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .where(
         and(
           eq(caseHistory.caseId, caseId),
-          eq(caseHistory.action, 'resubmission_email_sent'),
+          inArray(caseHistory.action, DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS),
         ),
       )
       .orderBy(desc(caseHistory.createdAt))
@@ -2203,6 +2223,8 @@ export async function takeOwnership(caseId: string, userId: string) {
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
       status: cases.status,
+      closeOutcome: cases.closeOutcome,
+      closedAt: cases.closedAt,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -2213,6 +2235,15 @@ export async function takeOwnership(caseId: string, userId: string) {
   }
 
   const caseData = existing[0]
+
+  if (
+    caseData.status === 'closed' ||
+    caseData.status === 'error' ||
+    Boolean(caseData.closeOutcome) ||
+    Boolean(caseData.closedAt)
+  ) {
+    throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
+  }
 
   if (caseData.ownerId) {
     throw new AppError(400, 'Case already has an owner.')
@@ -2351,6 +2382,15 @@ export async function advanceStage(caseId: string, userId: string) {
     const documentReviewDetail = await getDocumentReviewDetails(caseId)
     if (!documentReviewDetail?.subMerchantName) {
       throw new AppError(400, 'Select a sub-merchant before closing this case.')
+    }
+
+    const resubmissionSentEntry =
+      await getDocumentReviewResubmissionSentEntry(caseId)
+    if (!resubmissionSentEntry) {
+      throw new AppError(
+        400,
+        'Send the resubmission request by auto email, manual Gmail, or WhatsApp before closing this case.',
+      )
     }
 
     targetStage = await db.query.queueStages.findFirst({
@@ -2724,6 +2764,7 @@ export async function saveFieldReviews(
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      status: cases.status,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -2737,6 +2778,13 @@ export async function saveFieldReviews(
 
   if (caseData.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can save field reviews.')
+  }
+
+  if (caseData.status === 'awaiting_client') {
+    throw new AppError(
+      400,
+      'Rejection changes are locked while awaiting client resubmission.',
+    )
   }
 
   if (caseData.status !== 'working') {
@@ -3635,7 +3683,7 @@ export async function listCaseHistory(caseId: string) {
   // Verify case exists
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
-    columns: { id: true },
+    columns: { id: true, merchantId: true },
   })
 
   if (!existing) {
@@ -3670,9 +3718,19 @@ export async function listCaseHistory(caseId: string) {
       desc(caseHistory.id),
     )
 
+  const merchantContact = await db.query.merchants.findFirst({
+    where: eq(merchants.id, existing.merchantId),
+    columns: { activeWhatsappNumber: true },
+  })
+  const activeWhatsappNumber = merchantContact?.activeWhatsappNumber ?? null
+
   const sanitizedHistory = history.map((entry) => ({
     ...entry,
-    details: sanitizeCaseHistoryDetails(entry.action, entry.details),
+    details: enrichResubmissionWhatsappHistoryDetails(
+      entry.action,
+      sanitizeCaseHistoryDetails(entry.action, entry.details),
+      activeWhatsappNumber,
+    ),
   }))
   const screenshotFileIds = sanitizedHistory
     .map((entry) => getStringDetail(entry.details, 'screenshotFileId'))
@@ -3729,6 +3787,35 @@ function sanitizeCaseHistoryDetails(action: string, details: unknown) {
     unknown
   >
   return safeDetails
+}
+
+function enrichResubmissionWhatsappHistoryDetails(
+  action: string,
+  details: unknown,
+  activeWhatsappNumber: string | null,
+) {
+  if (
+    action !== 'resubmission_whatsapp_sent_manual' ||
+    !activeWhatsappNumber ||
+    !details ||
+    typeof details !== 'object'
+  ) {
+    return details
+  }
+
+  const safeDetails = details as Record<string, unknown>
+  if (
+    typeof safeDetails.whatsappRecipient === 'string' &&
+    safeDetails.whatsappRecipient.trim()
+  ) {
+    return details
+  }
+
+  return {
+    ...safeDetails,
+    recipient: activeWhatsappNumber,
+    whatsappRecipient: activeWhatsappNumber,
+  }
 }
 
 function getStringDetail(details: unknown, key: string) {
@@ -3901,6 +3988,7 @@ export async function getResubmissionEmailPreview(
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantWhatsappNumber: merchants.activeWhatsappNumber,
     })
     .from(cases)
     .innerJoin(queues, eq(cases.queueId, queues.id))
@@ -4090,6 +4178,9 @@ export async function confirmResubmissionEmailManual(
     throw new AppError(400, 'The case must be in the working stage.')
   if (!row.merchantSubmitterEmail)
     throw new AppError(400, 'No submitter email on file.')
+  if (channel === 'whatsapp' && !row.merchantWhatsappNumber) {
+    throw new AppError(400, 'No active WhatsApp number is on file.')
+  }
 
   const tokenRow = await db.query.caseResubmissionTokens.findFirst({
     where: and(
@@ -4198,7 +4289,12 @@ export async function confirmResubmissionEmailManual(
         expiresAt: tokenRow.expiresAt.toISOString(),
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
-        recipient: row.merchantSubmitterEmail,
+        recipient:
+          channel === 'whatsapp'
+            ? row.merchantWhatsappNumber
+            : row.merchantSubmitterEmail,
+        emailRecipient: row.merchantSubmitterEmail,
+        whatsappRecipient: row.merchantWhatsappNumber,
         screenshotFileId: savedFile.id,
         channel,
         manual: true,
