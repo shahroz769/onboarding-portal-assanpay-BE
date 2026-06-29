@@ -1,8 +1,19 @@
-import { and, asc, desc, eq, gte, isNull, lt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
-import { cases, merchants, queues, users } from '../../db/schema'
-import type { DashboardQuery, DashboardRangeKey } from './dashboard.schemas'
+import {
+  caseHistory,
+  cases,
+  merchants,
+  portalMidLimitApplications,
+  queues,
+  users,
+} from '../../db/schema'
+import type {
+  ApplyPortalMidLimitsInput,
+  DashboardQuery,
+  DashboardRangeKey,
+} from './dashboard.schemas'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -31,6 +42,7 @@ const RISK_LIST_LIMIT = 8
 const MAX_TREND_DAYS = 120
 const DASHBOARD_TIME_ZONE = sql.raw("'Asia/Karachi'")
 const DASHBOARD_TIME_ZONE_OFFSET_MINUTES = 5 * 60
+const MID_CREATION_QUEUE_SLUG = 'merchant-id'
 
 // ─── Range Resolution ───────────────────────────────────────────────────────
 
@@ -122,6 +134,217 @@ function resolveRange(query: DashboardQuery): ResolvedRange {
 
 const int = (expr: ReturnType<typeof sql>) => sql<number>`${expr}::int`
 
+type PendingPortalMidLimitRow = {
+  merchantId: string
+  merchantName: string
+  caseId: string
+  caseNumber: string
+  portalMid: number
+  midKind: 'portal' | 'internal'
+  savedAt: Date | string | null
+}
+
+type AppliedPortalMidLimitRow = {
+  portalMid: number
+  merchantId: string | null
+  appliedByName: string | null
+  appliedAt: Date | string | null
+}
+
+function normalizePortalMids(portalMids: number[]) {
+  return Array.from(new Set(portalMids)).sort((a, b) => a - b)
+}
+
+function toPendingPortalMidLimit(row: PendingPortalMidLimitRow) {
+  return {
+    merchantId: row.merchantId,
+    merchantName: row.merchantName,
+    caseId: row.caseId,
+    caseNumber: row.caseNumber,
+    portalMid: row.portalMid,
+    midKind: row.midKind,
+    savedAt: serializeTimestamp(row.savedAt),
+  }
+}
+
+function toAppliedPortalMidLimit(row: AppliedPortalMidLimitRow) {
+  return {
+    portalMid: row.portalMid,
+    merchantId: row.merchantId,
+    appliedByName: row.appliedByName,
+    appliedAt: serializeTimestamp(row.appliedAt),
+  }
+}
+
+function serializeTimestamp(value: Date | string | null) {
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  if (typeof value === 'string') {
+    return new Date(value).toISOString()
+  }
+
+  return new Date(0).toISOString()
+}
+
+async function listPendingPortalMidLimitRows(
+  filterPortalMids?: number[],
+): Promise<PendingPortalMidLimitRow[]> {
+  if (filterPortalMids && filterPortalMids.length === 0) {
+    return []
+  }
+
+  const db = getDb()
+  const portalMidFilter =
+    filterPortalMids && filterPortalMids.length > 0
+      ? sql`and candidate_mid."portalMid" in (${sql.join(
+          filterPortalMids.map((portalMid) => sql`${portalMid}`),
+          sql`, `,
+        )})`
+      : sql``
+
+  const rows = await db.execute(sql<PendingPortalMidLimitRow>`
+    with latest_mid as (
+      select distinct on (${cases.merchantId})
+        ${cases.merchantId} as "merchantId",
+        ${merchants.businessName} as "merchantName",
+        ${cases.id} as "caseId",
+        ${cases.caseNumber} as "caseNumber",
+        ${caseHistory.details} as "details",
+        ${caseHistory.createdAt} as "savedAt"
+      from ${caseHistory}
+      inner join ${cases} on ${caseHistory.caseId} = ${cases.id}
+      inner join ${queues} on ${cases.queueId} = ${queues.id}
+      inner join ${merchants} on ${cases.merchantId} = ${merchants.id}
+      where ${caseHistory.action} = 'mid_creation_saved'
+        and ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
+        and ${cases.status} = 'closed'
+        and ${cases.closeOutcome} = 'successful'
+        and ${merchants.deletedAt} is null
+        and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
+      order by ${cases.merchantId}, ${caseHistory.createdAt} desc
+    )
+    , candidate_mid as (
+      select
+        latest_mid."merchantId",
+        latest_mid."merchantName",
+        latest_mid."caseId",
+        latest_mid."caseNumber",
+        (latest_mid.details ->> 'portalMid')::int as "portalMid",
+        'portal'::text as "midKind",
+        latest_mid."savedAt"
+      from latest_mid
+      union all
+      select
+        latest_mid."merchantId",
+        latest_mid."merchantName",
+        latest_mid."caseId",
+        latest_mid."caseNumber",
+        (latest_mid.details ->> 'internalPortalMid')::int as "portalMid",
+        'internal'::text as "midKind",
+        latest_mid."savedAt"
+      from latest_mid
+      where (latest_mid.details ->> 'internalPortalMid') ~ '^[0-9]+$'
+        and (latest_mid.details ->> 'internalPortalMid')::int <> (latest_mid.details ->> 'portalMid')::int
+    )
+    select
+      latest_mid."merchantId",
+      latest_mid."merchantName",
+      latest_mid."caseId",
+      latest_mid."caseNumber",
+      candidate_mid."portalMid",
+      candidate_mid."midKind" as "midKind",
+      latest_mid."savedAt"
+    from candidate_mid
+    inner join latest_mid
+      on latest_mid."caseId" = candidate_mid."caseId"
+    left join ${portalMidLimitApplications}
+      on ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
+    where ${portalMidLimitApplications.portalMid} is null
+      ${portalMidFilter}
+    order by "portalMid" asc
+  `)
+
+  return Array.from(rows) as PendingPortalMidLimitRow[]
+}
+
+async function listAppliedPortalMidLimitRows(): Promise<
+  AppliedPortalMidLimitRow[]
+> {
+  const db = getDb()
+  const rows = await db
+    .select({
+      portalMid: portalMidLimitApplications.portalMid,
+      merchantId: portalMidLimitApplications.merchantId,
+      appliedByName: users.name,
+      appliedAt: portalMidLimitApplications.appliedAt,
+    })
+    .from(portalMidLimitApplications)
+    .leftJoin(users, eq(portalMidLimitApplications.appliedBy, users.id))
+    .orderBy(asc(portalMidLimitApplications.portalMid))
+
+  return rows
+}
+
+export async function getPendingPortalMidLimits() {
+  const [pending, appliedRows] = await Promise.all([
+    listPendingPortalMidLimitRows(),
+    listAppliedPortalMidLimitRows(),
+  ])
+  const portalMids = pending.map(toPendingPortalMidLimit)
+  const appliedLimits = appliedRows.map(toAppliedPortalMidLimit)
+
+  return {
+    pendingLimits: portalMids,
+    appliedLimits,
+    csv: portalMids.map((item) => item.portalMid).join(','),
+    appliedCsv: appliedLimits.map((item) => item.portalMid).join(','),
+  }
+}
+
+export async function applyPortalMidLimits(
+  input: ApplyPortalMidLimitsInput,
+  userId: string,
+) {
+  const db = getDb()
+  const requested = normalizePortalMids(input.portalMids)
+  const existingRows =
+    requested.length > 0
+      ? await db
+          .select({ portalMid: portalMidLimitApplications.portalMid })
+          .from(portalMidLimitApplications)
+          .where(inArray(portalMidLimitApplications.portalMid, requested))
+      : []
+  const alreadyApplied = normalizePortalMids(
+    existingRows.map((row) => row.portalMid),
+  )
+  const alreadyAppliedSet = new Set(alreadyApplied)
+  const candidates = requested.filter((mid) => !alreadyAppliedSet.has(mid))
+  const pendingRows = await listPendingPortalMidLimitRows(candidates)
+  const pendingByMid = new Map(pendingRows.map((row) => [row.portalMid, row]))
+  const now = new Date()
+
+  if (candidates.length > 0) {
+    await db
+      .insert(portalMidLimitApplications)
+      .values(
+        candidates.map((portalMid) => ({
+          portalMid,
+          merchantId: pendingByMid.get(portalMid)?.merchantId ?? null,
+          appliedBy: userId,
+          appliedAt: now,
+        })),
+      )
+      .onConflictDoNothing()
+  }
+
+  const applied = normalizePortalMids(candidates)
+  const notFound: number[] = []
+
+  return { applied, alreadyApplied, notFound }
+}
+
 function buildDateSeries(from: Date, to: Date) {
   const days: string[] = []
   const cursor = startOfDay(from)
@@ -174,6 +397,7 @@ export async function getDashboard(query: DashboardQuery) {
     highPriorityOpenCases,
     recentMerchants,
     recentClosedCases,
+    portalMids,
   ] = await Promise.all([
     // Case counts by status (snapshot)
     db
@@ -463,6 +687,8 @@ export async function getDashboard(query: DashboardQuery) {
       .where(sql`${cases.closedAt} is not null`)
       .orderBy(desc(cases.closedAt))
       .limit(RISK_LIST_LIMIT),
+
+    getPendingPortalMidLimits(),
   ])
 
   // ─── Shape Case Status Counts ─────────────────────────────────────────────
@@ -619,6 +845,7 @@ export async function getDashboard(query: DashboardQuery) {
         closedAt: row.closedAt ? row.closedAt.toISOString() : null,
       })),
     },
+    portalMids,
   }
 }
 

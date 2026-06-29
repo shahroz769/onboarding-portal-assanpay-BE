@@ -30,16 +30,21 @@ export function AgreementEmail({
 }: AgreementEmailProps) {
   return (
     <EmailShell
-      preview={`Your AssanPay merchant agreement is ready — ${merchantName}`}
+      preview={`Your AssanPay merchant agreement is ready - ${merchantName}`}
       eyebrow="Agreement ready"
-      title="Review & sign your agreement"
-      intro={`We’ve prepared the AssanPay merchant agreement for ${merchantName}. Open it, review the terms, and upload the signed copy.`}
+      title="Review and sign your agreement"
+      intro={`We've prepared the AssanPay merchant agreement for ${merchantName}. Open it, review the terms, and upload the signed copy.`}
     >
       <Paragraph>Hi {ownerName},</Paragraph>
       <Paragraph>
         The link below is unique to your onboarding case. Please review the
-        agreement carefully and upload the fully signed copy — including every
-        page — so we can move to the next step.
+        agreement carefully and upload the fully signed copy, including every
+        page, so we can move to the next step.
+      </Paragraph>
+      <Paragraph>
+        Before Go-Live can proceed, send the signed physical agreement to
+        AssanPay Head Office. This physical agreement copy is required for live
+        activation.
       </Paragraph>
 
       {remarks ? (

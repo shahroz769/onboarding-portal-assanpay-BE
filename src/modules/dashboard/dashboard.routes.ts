@@ -1,11 +1,18 @@
 import { Hono } from 'hono'
 
 import { requireAuth } from '../../middleware/auth'
+import { requireRoles } from '../../middleware/rbac'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
-import { dashboardQuerySchema } from './dashboard.schemas'
-import type { DashboardQuery } from './dashboard.schemas'
-import { getDashboard } from './dashboard.service'
+import {
+  applyPortalMidLimitsSchema,
+  dashboardQuerySchema,
+} from './dashboard.schemas'
+import type {
+  ApplyPortalMidLimitsInput,
+  DashboardQuery,
+} from './dashboard.schemas'
+import { applyPortalMidLimits, getDashboard } from './dashboard.service'
 
 export const dashboardRoutes = new Hono<AppEnv>()
 
@@ -18,6 +25,18 @@ dashboardRoutes.get(
   async (c) => {
     const query = c.req.valid('query' as never) as DashboardQuery
     const result = await getDashboard(query)
+    return c.json(result)
+  },
+)
+
+dashboardRoutes.post(
+  '/portal-mids/apply-limits',
+  requireRoles('admin', 'supervisor'),
+  zodValidator('json', applyPortalMidLimitsSchema),
+  async (c) => {
+    const input = c.req.valid('json' as never) as ApplyPortalMidLimitsInput
+    const auth = c.get('auth')
+    const result = await applyPortalMidLimits(input, auth.userId)
     return c.json(result)
   },
 )

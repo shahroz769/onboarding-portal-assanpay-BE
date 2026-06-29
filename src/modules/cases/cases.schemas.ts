@@ -255,19 +255,22 @@ export type AgreementEmailResponse = z.infer<
   typeof agreementEmailResponseSchema
 >
 
+export const merchantPortalRoleValues = [
+  'merchant_admin',
+  'international_merchant_admin',
+] as const
+
+export type MerchantPortalRole = (typeof merchantPortalRoleValues)[number]
+
 export const saveMidCreationDetailsSchema = z
   .object({
     portalMid: z.coerce.number().int().positive(),
-    portalMuid: z.string().trim().uuid(),
+    internalPortalMid: z.coerce.number().int().positive(),
     email: z.string().trim().email().max(255),
-    password: z.string().min(8).max(128),
+    merchantRole: z.enum(merchantPortalRoleValues),
     paymentMethods: paymentMethodSettingsSchema.min(
       1,
       'Select at least one payment method.',
-    ),
-    payoutMethods: paymentMethodSettingsSchema.min(
-      1,
-      'Select at least one payout method.',
     ),
   })
   .strict()
@@ -278,9 +281,7 @@ export type SaveMidCreationDetailsInput = z.infer<
 
 export const sendMidCreationEmailSchema = z.object({}).strict()
 
-export type SendMidCreationEmailInput = z.infer<
-  typeof sendMidCreationEmailSchema
->
+export type SendMidCreationEmailInput = object
 
 export const sendLiveEmailSchema = z
   .object({

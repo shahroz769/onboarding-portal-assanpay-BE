@@ -16,7 +16,9 @@ import {
 
 import { getDb } from '../../db/client'
 import {
+  agreementCaseDetails,
   caseHistory,
+  caseFiles,
   cases,
   merchantDocuments,
   merchants,
@@ -35,6 +37,7 @@ import {
   getPayoutMethodSettings,
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
+import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -50,6 +53,11 @@ import {
   merchantLimitsMdrSchema,
   priorityValues,
 } from './merchants.schemas'
+import {
+  PRIVATE_KYC_PENDING_PATH,
+  buildMerchantRootFolderName,
+  getSubmissionFolderName,
+} from './merchant-drive-folders'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType
@@ -61,6 +69,8 @@ type UploadedDocumentRecord = {
   googleDriveDownloadLink: string | null
   googleDriveFolderId: string
 }
+
+const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 
 const priorityValueSet = new Set<string>(priorityValues)
 const businessScopeValueSet = new Set<string>(businessScopeValues)
@@ -237,13 +247,14 @@ export async function createMerchantSubmission(
 
   try {
     const folder = await storage.createMerchantFolder(
-      buildFolderName(merchantId, input.businessName),
+      buildMerchantRootFolderName(merchantId, input.businessName),
+      'private',
     )
     folderId = folder.folderId
-    const submissionFolder = await storage.createFolder(
-      folderId,
+    const submissionFolder = await storage.ensureFolderPath(folderId, [
+      ...PRIVATE_KYC_PENDING_PATH,
       getSubmissionFolderName(1),
-    )
+    ])
     submissionFolderId = submissionFolder.folderId
     const uploadFolderId = submissionFolderId
 
@@ -298,6 +309,7 @@ export async function createMerchantSubmission(
           accountNumberIban: input.accountNumberIban,
           swiftCode: input.swiftCode,
           nextOfKinRelation: input.nextOfKinRelation,
+          googleDrivePrivateFolderId: folderId,
           status: 'pending',
           submittedAt: new Date(),
           updatedAt: new Date(),
@@ -354,16 +366,6 @@ export async function createMerchantSubmission(
   }
 }
 
-function buildFolderName(merchantId: string, businessName: string) {
-  const slug = businessName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48)
-
-  return `${slug || 'merchant'}-${merchantId}`
-}
-
 function buildDocumentFileName(
   documentType: MerchantDocumentType,
   originalName: string,
@@ -373,19 +375,6 @@ function buildDocumentFileName(
     : ''
 
   return `${documentType}${extension}`
-}
-
-function getSubmissionFolderName(index: number) {
-  switch (index) {
-    case 1:
-      return 'First Submission'
-    case 2:
-      return 'Second Submission'
-    case 3:
-      return 'Third Submission'
-    default:
-      return `Submission ${index}`
-  }
 }
 
 // ─── List / Update / Delete ─────────────────────────────────────────────────
@@ -876,7 +865,13 @@ export async function getMerchantDetail(merchantId: string) {
 
   const owner = aliasedTable(users, 'history_actor')
 
-  const [documents, merchantCases, timeline] = await Promise.all([
+  const [
+    documents,
+    merchantCases,
+    timeline,
+    clientAgreement,
+    physicalAgreement,
+  ] = await Promise.all([
     db
       .select({
         id: merchantDocuments.id,
@@ -936,6 +931,56 @@ export async function getMerchantDetail(merchantId: string) {
       .leftJoin(owner, eq(caseHistory.actorId, owner.id))
       .where(eq(cases.merchantId, merchantId))
       .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id)),
+    db
+      .select({
+        id: caseFiles.id,
+        caseId: caseFiles.caseId,
+        caseNumber: cases.caseNumber,
+        originalName: caseFiles.originalName,
+        mimeType: caseFiles.mimeType,
+        sizeBytes: caseFiles.sizeBytes,
+        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+        createdAt: caseFiles.createdAt,
+      })
+      .from(agreementCaseDetails)
+      .innerJoin(cases, eq(agreementCaseDetails.caseId, cases.id))
+      .innerJoin(
+        caseFiles,
+        eq(agreementCaseDetails.clientAgreementFileId, caseFiles.id),
+      )
+      .where(
+        and(
+          eq(cases.merchantId, merchantId),
+          eq(caseFiles.fileKind, AGREEMENT_CLIENT_FILE_KIND),
+        ),
+      )
+      .orderBy(desc(caseFiles.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db
+      .select({
+        id: caseFiles.id,
+        caseId: caseFiles.caseId,
+        caseNumber: cases.caseNumber,
+        originalName: caseFiles.originalName,
+        mimeType: caseFiles.mimeType,
+        sizeBytes: caseFiles.sizeBytes,
+        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+        createdAt: caseFiles.createdAt,
+      })
+      .from(caseFiles)
+      .innerJoin(cases, eq(caseFiles.caseId, cases.id))
+      .where(
+        and(
+          eq(cases.merchantId, merchantId),
+          eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
+        ),
+      )
+      .orderBy(desc(caseFiles.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
   ])
 
   const now = new Date()
@@ -979,6 +1024,10 @@ export async function getMerchantDetail(merchantId: string) {
       limitsMdrOverride: override,
     },
     documents,
+    agreements: {
+      clientSignedAgreement: clientAgreement,
+      physicalAgreement,
+    },
     cases: casesWithSla,
     timeline,
     milestones: {

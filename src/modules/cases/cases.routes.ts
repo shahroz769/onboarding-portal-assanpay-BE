@@ -638,11 +638,10 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
     throw new AppError(400, 'tokenId is required.')
   const parsed = sendMidCreationEmailSchema.safeParse({})
   if (!parsed.success)
-    throw new AppError(400, parsed.error.errors[0]?.message ?? 'Invalid input.')
+    throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid input.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmMidCreationEmailManual(id, auth.userId, {
-    ...parsed.data,
     tokenId,
     file,
     channel,

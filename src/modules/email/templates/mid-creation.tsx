@@ -16,7 +16,6 @@ export type MidCreationEmailProps = {
   merchantName: string
   portalEmail: string
   portalPassword: string
-  portalMid: number
   merchantPortalUrl: string
   goLiveUrl: string
   availableAt: string
@@ -31,6 +30,7 @@ export type MidCreationEmailProps = {
     eWallets: number
     card: number
     payout: number
+    payoutLabel?: string
   }
 }
 
@@ -38,7 +38,6 @@ export function MidCreationEmail({
   merchantName,
   portalEmail,
   portalPassword,
-  portalMid,
   merchantPortalUrl,
   goLiveUrl,
   availableAt,
@@ -53,6 +52,7 @@ export function MidCreationEmail({
     eWallets: 2.5,
     card: 3,
     payout: 0,
+    payoutLabel: 'Bank Settlement',
   },
 }: MidCreationEmailProps) {
   return (
@@ -66,8 +66,11 @@ export function MidCreationEmail({
         <SectionLabel>Login credentials</SectionLabel>
         <KeyRow label="Portal email" value={portalEmail} mono />
         <KeyRow label="Temporary password" value={portalPassword} mono />
-        <KeyRow label="MID" value={String(portalMid)} mono />
       </Panel>
+      <Paragraph>
+        For your security, update this temporary password after your first
+        login.
+      </Paragraph>
 
       <ButtonRow>
         <CTAButton href={merchantPortalUrl}>Open merchant portal</CTAButton>
@@ -91,7 +94,7 @@ export function MidCreationEmail({
         <SectionLabel>Applicable rates</SectionLabel>
         <KeyRow label="E-wallets & QR" value={`${rates.eWallets}% + tax`} />
         <KeyRow label="Card" value={`${rates.card}% + tax`} />
-        <KeyRow label="Bank settlement" value={`${rates.payout}%`} />
+        <KeyRow label={rates.payoutLabel ?? 'Payout'} value={`${rates.payout}%`} />
       </Panel>
 
       <Divider />
@@ -132,8 +135,7 @@ export function MidCreationEmail({
 MidCreationEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   portalEmail: 'merchant@example.com',
-  portalPassword: 'secret-password',
-  portalMid: 10001,
+  portalPassword: 'merchant@123',
   merchantPortalUrl: 'https://merchant.assanpay.com/login',
   goLiveUrl: 'https://app.example.com/onboarding-form/go-live/abc123',
   availableAt: 'May 8, 2026, 12:00 PM',

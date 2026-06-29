@@ -24,3 +24,13 @@ export const dashboardQuerySchema = z
   )
 
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>
+
+export const applyPortalMidLimitsSchema = z
+  .object({
+    portalMids: z.array(z.coerce.number().int().positive()).min(1),
+  })
+  .strict()
+
+export type ApplyPortalMidLimitsInput = z.infer<
+  typeof applyPortalMidLimitsSchema
+>

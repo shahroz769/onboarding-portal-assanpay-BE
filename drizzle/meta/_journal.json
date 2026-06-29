@@ -246,6 +246,27 @@
       "when": 1780876800000,
       "tag": "0035_active_whatsapp_number",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780963200000,
+      "tag": "0036_remove_mid_creation_stored_secrets",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1782777600000,
+      "tag": "0037_merchant_drive_roots",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1782864000000,
+      "tag": "0038_portal_mid_limit_applications",
+      "breakpoints": true
     }
   ]
 }

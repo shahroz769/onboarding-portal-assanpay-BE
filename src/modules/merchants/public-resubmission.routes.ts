@@ -31,12 +31,15 @@ import {
 } from './merchants.schemas'
 import type { MerchantDocumentType } from './merchants.schemas'
 import { notifyOnResubmission } from '../notifications/notifications.service'
+import {
+  PRIVATE_KYC_PENDING_PATH,
+  ensureMerchantFolderPath,
+  getSubmissionFolderName,
+} from './merchant-drive-folders'
 
 export const resubmissionRoutes = new Hono<AppEnv>()
 
 const DOCUMENT_ACTION_PREFIX = '__document_action__:'
-const submissionFolderPattern =
-  /^(first|second|third)\s+submission$|^submission\s+\d+$/i
 
 // GET /api/public/resubmission/:token - Load context for the resubmission form
 resubmissionRoutes.get('/:token', async (c) => {
@@ -86,6 +89,7 @@ resubmissionRoutes.post('/:token', async (c) => {
       accountNumberIban: merchants.accountNumberIban,
       swiftCode: merchants.swiftCode,
       nextOfKinRelation: merchants.nextOfKinRelation,
+      googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
     })
     .from(cases)
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
@@ -364,14 +368,21 @@ resubmissionRoutes.post('/:token', async (c) => {
       throw new AppError(400, 'Unable to resolve the current document folder.')
     }
 
-    const merchantFolderId = await resolveMerchantFolderId(
-      storage,
-      firstDocument.googleDriveFolderId,
-    )
-    const createdFolder = await storage.createFolder(
-      merchantFolderId,
-      getSubmissionFolderName(submissionIndex),
-    )
+    const createdFolder = caseRow.googleDrivePrivateFolderId
+      ? await storage.ensureFolderPath(caseRow.googleDrivePrivateFolderId, [
+          ...PRIVATE_KYC_PENDING_PATH,
+          getSubmissionFolderName(submissionIndex),
+        ])
+      : await ensureMerchantFolderPath({
+          merchantId: caseRow.merchantId,
+          merchantName: caseRow.merchantName,
+          visibility: 'private',
+          path: [
+            ...PRIVATE_KYC_PENDING_PATH,
+            getSubmissionFolderName(submissionIndex),
+          ],
+          storage,
+        })
     nextSubmissionFolderId = createdFolder.folderId
   }
 
@@ -621,40 +632,6 @@ resubmissionRoutes.post('/:token', async (c) => {
     throw error
   }
 })
-
-async function resolveMerchantFolderId(
-  storage: GoogleDriveStorageProvider,
-  currentFolderId: string,
-) {
-  const folder = await storage.getFileMetadata(currentFolderId)
-
-  if (!submissionFolderPattern.test(folder.name)) {
-    return currentFolderId
-  }
-
-  const merchantFolderId = folder.parents?.[0]
-  if (!merchantFolderId) {
-    throw new AppError(
-      500,
-      'Unable to resolve the merchant folder for this resubmission.',
-    )
-  }
-
-  return merchantFolderId
-}
-
-function getSubmissionFolderName(index: number) {
-  switch (index) {
-    case 1:
-      return 'First Submission'
-    case 2:
-      return 'Second Submission'
-    case 3:
-      return 'Third Submission'
-    default:
-      return `Submission ${index}`
-  }
-}
 
 function buildDocumentFileName(
   documentType: MerchantDocumentType,

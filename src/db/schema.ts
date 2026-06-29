@@ -383,6 +383,12 @@ export const merchants = pgTable(
       .notNull(),
     currency: varchar('currency', { length: 8 }).default('PKR').notNull(),
     limitsMdrOverride: jsonb('limits_mdr_override'),
+    googleDrivePrivateFolderId: varchar('google_drive_private_folder_id', {
+      length: 255,
+    }),
+    googleDrivePublicFolderId: varchar('google_drive_public_folder_id', {
+      length: 255,
+    }),
     liveAt: timestamp('live_at', { withTimezone: true }),
     submittedAt: timestamp('submitted_at', { withTimezone: true })
       .defaultNow()
@@ -945,6 +951,31 @@ export const midGoLiveTokens = pgTable(
   }),
 )
 
+export const portalMidLimitApplications = pgTable(
+  'portal_mid_limit_applications',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    portalMid: integer('portal_mid').notNull().unique(),
+    merchantId: uuid('merchant_id').references(() => merchants.id, {
+      onDelete: 'cascade',
+    }),
+    appliedBy: uuid('applied_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    appliedAt: timestamp('applied_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    portalMidLimitApplicationsMidIdx: uniqueIndex(
+      'portal_mid_limit_applications_mid_idx',
+    ).on(table.portalMid),
+    portalMidLimitApplicationsMerchantIdx: index(
+      'portal_mid_limit_applications_merchant_idx',
+    ).on(table.merchantId),
+  }),
+)
+
 export const notifications = pgTable(
   'notifications',
   {
@@ -1153,6 +1184,10 @@ export type QueueStage = typeof queueStages.$inferSelect
 export type NewQueueStage = typeof queueStages.$inferInsert
 export type MidGoLiveToken = typeof midGoLiveTokens.$inferSelect
 export type NewMidGoLiveToken = typeof midGoLiveTokens.$inferInsert
+export type PortalMidLimitApplication =
+  typeof portalMidLimitApplications.$inferSelect
+export type NewPortalMidLimitApplication =
+  typeof portalMidLimitApplications.$inferInsert
 export type CaseFieldReview = typeof caseFieldReviews.$inferSelect
 export type NewCaseFieldReview = typeof caseFieldReviews.$inferInsert
 export type DocumentReviewDetails = typeof documentReviewDetails.$inferSelect

@@ -8,6 +8,9 @@ const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 const GOOGLE_DRIVE_UPLOAD_URL =
   'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,parents'
 const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
+
+export type GoogleDriveVisibility = 'private' | 'public'
 
 type GoogleAccessToken = {
   accessToken: string
@@ -45,14 +48,29 @@ export type StorageUploadResult = {
 }
 
 export interface FileStorageProvider {
-  createMerchantFolder: (folderName: string) => Promise<{ folderId: string }>
+  createMerchantFolder: (
+    folderName: string,
+    visibility?: GoogleDriveVisibility,
+  ) => Promise<{ folderId: string }>
   createFolder: (
     parentFolderId: string,
     folderName: string,
   ) => Promise<{ folderId: string }>
+  findOrCreateFolder: (
+    parentFolderId: string,
+    folderName: string,
+  ) => Promise<{ folderId: string }>
+  ensureFolderPath: (
+    parentFolderId: string,
+    folderPath: string[],
+  ) => Promise<{ folderId: string }>
   uploadFile: (
     folderId: string,
     input: StorageUploadInput,
+  ) => Promise<StorageUploadResult>
+  moveFile: (
+    fileId: string,
+    destinationFolderId: string,
   ) => Promise<StorageUploadResult>
   deleteFile: (fileId: string) => Promise<void>
 }
@@ -62,14 +80,21 @@ let credentialsCache: GoogleServiceAccountCredentials | null = null
 let tokenPromise: Promise<string> | null = null
 
 export class GoogleDriveStorageProvider implements FileStorageProvider {
-  async createMerchantFolder(folderName: string) {
-    const parentFolderId = getRequiredEnv('GOOGLE_DRIVE_PARENT_FOLDER_ID')
-    return this.createFolder(parentFolderId, folderName)
+  async createMerchantFolder(
+    folderName: string,
+    visibility: GoogleDriveVisibility = 'private',
+  ) {
+    const parentFolderId = getRequiredEnv(
+      visibility === 'public'
+        ? 'GOOGLE_DRIVE_PARENT_FOLDER_ID_PUBLIC'
+        : 'GOOGLE_DRIVE_PARENT_FOLDER_ID',
+    )
+    return this.findOrCreateFolder(parentFolderId, folderName)
   }
 
   async createFolder(parentFolderId: string, folderName: string) {
     const accessToken = await getGoogleAccessToken()
-    const response = await fetch(
+    const response = await fetchGoogleApi(
       `${GOOGLE_DRIVE_FILES_URL}?supportsAllDrives=true`,
       {
         method: 'POST',
@@ -79,10 +104,11 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
         },
         body: JSON.stringify({
           name: folderName,
-          mimeType: 'application/vnd.google-apps.folder',
+          mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
           parents: [parentFolderId],
         }),
       },
+      'Unable to connect to Google Drive while creating a folder.',
     )
 
     if (!response.ok) {
@@ -98,6 +124,26 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
 
     const data = (await response.json()) as { id: string }
     return { folderId: data.id }
+  }
+
+  async findOrCreateFolder(parentFolderId: string, folderName: string) {
+    const existingFolderId = await this.findFolder(parentFolderId, folderName)
+    if (existingFolderId) return { folderId: existingFolderId }
+    return this.createFolder(parentFolderId, folderName)
+  }
+
+  async ensureFolderPath(parentFolderId: string, folderPath: string[]) {
+    let folderId = parentFolderId
+
+    for (const folderName of folderPath) {
+      const trimmedFolderName = folderName.trim()
+      if (!trimmedFolderName) continue
+
+      const folder = await this.findOrCreateFolder(folderId, trimmedFolderName)
+      folderId = folder.folderId
+    }
+
+    return { folderId }
   }
 
   async uploadFile(folderId: string, input: StorageUploadInput) {
@@ -116,14 +162,18 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
       `\r\n--${boundary}--`,
     ])
 
-    const response = await fetch(GOOGLE_DRIVE_UPLOAD_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': `multipart/related; boundary=${boundary}`,
+    const response = await fetchGoogleApi(
+      GOOGLE_DRIVE_UPLOAD_URL,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body,
       },
-      body,
-    })
+      `Unable to connect to Google Drive while uploading "${input.fileName}".`,
+    )
 
     if (!response.ok) {
       throw await toStorageError(
@@ -151,7 +201,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
 
   async deleteFile(fileId: string) {
     const accessToken = await getGoogleAccessToken()
-    const response = await fetch(
+    const response = await fetchGoogleApi(
       `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true`,
       {
         method: 'DELETE',
@@ -159,6 +209,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
           Authorization: `Bearer ${accessToken}`,
         },
       },
+      `Unable to connect to Google Drive while deleting file "${fileId}".`,
     )
 
     if (!response.ok && response.status !== 404) {
@@ -169,9 +220,57 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     }
   }
 
+  async moveFile(fileId: string, destinationFolderId: string) {
+    const metadata = await this.getFileMetadata(fileId)
+    const currentParentIds = metadata.parents ?? []
+    const removeParents = currentParentIds
+      .filter((parentId) => parentId !== destinationFolderId)
+      .join(',')
+
+    if (
+      currentParentIds.length === 1 &&
+      currentParentIds[0] === destinationFolderId
+    ) {
+      return toStorageUploadResult(metadata, destinationFolderId)
+    }
+
+    const accessToken = await getGoogleAccessToken()
+    const params = new URLSearchParams({
+      supportsAllDrives: 'true',
+      addParents: destinationFolderId,
+      fields: 'id,name,mimeType,webViewLink,webContentLink,parents',
+    })
+    if (removeParents) {
+      params.set('removeParents', removeParents)
+    }
+
+    const response = await fetchGoogleApi(
+      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?${params.toString()}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      },
+      `Unable to connect to Google Drive while moving file "${fileId}".`,
+    )
+
+    if (!response.ok) {
+      throw await toStorageError(
+        response,
+        `Failed to move Google Drive file "${fileId}".`,
+      )
+    }
+
+    const data = (await response.json()) as GoogleDriveFileResponse
+    return toStorageUploadResult(data, destinationFolderId)
+  }
+
   async getFileMetadata(fileId: string) {
     const accessToken = await getGoogleAccessToken()
-    const response = await fetch(
+    const response = await fetchGoogleApi(
       `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=id,name,parents,mimeType,webViewLink,webContentLink`,
       {
         method: 'GET',
@@ -179,6 +278,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
           Authorization: `Bearer ${accessToken}`,
         },
       },
+      `Unable to connect to Google Drive while reading metadata for "${fileId}".`,
     )
 
     if (!response.ok) {
@@ -190,6 +290,66 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
 
     return (await response.json()) as GoogleDriveFileResponse
   }
+
+  private async findFolder(parentFolderId: string, folderName: string) {
+    const accessToken = await getGoogleAccessToken()
+    const query = [
+      `'${escapeDriveQueryValue(parentFolderId)}' in parents`,
+      `name = '${escapeDriveQueryValue(folderName)}'`,
+      `mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}'`,
+      'trashed = false',
+    ].join(' and ')
+    const params = new URLSearchParams({
+      supportsAllDrives: 'true',
+      includeItemsFromAllDrives: 'true',
+      q: query,
+      fields: 'files(id,name)',
+      pageSize: '1',
+    })
+    const response = await fetchGoogleApi(
+      `${GOOGLE_DRIVE_FILES_URL}?${params.toString()}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+      'Unable to connect to Google Drive while searching for a folder.',
+    )
+
+    if (!response.ok) {
+      throw await toStorageError(
+        response,
+        'Failed to search for folder in Google Drive.',
+        {
+          operation: 'create-folder',
+          fileId: parentFolderId,
+        },
+      )
+    }
+
+    const data = (await response.json()) as { files?: Array<{ id: string }> }
+    return data.files?.[0]?.id ?? null
+  }
+}
+
+function toStorageUploadResult(
+  data: GoogleDriveFileResponse,
+  folderId: string,
+): StorageUploadResult {
+  return {
+    fileId: data.id,
+    fileName: data.name,
+    mimeType: data.mimeType,
+    sizeBytes: 0,
+    webViewLink: data.webViewLink,
+    downloadLink: data.webContentLink ?? null,
+    folderId,
+  }
+}
+
+function escapeDriveQueryValue(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
 
 async function getGoogleAccessToken() {
@@ -218,16 +378,20 @@ async function getGoogleAccessToken() {
       .setExpirationTime(nowInSeconds + 3600)
       .sign(key)
 
-    const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+    const tokenResponse = await fetchGoogleApi(
+      GOOGLE_TOKEN_URL,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion,
+        }),
       },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        assertion,
-      }),
-    })
+      'Unable to connect to Google OAuth while authenticating Google Drive.',
+    )
 
     if (!tokenResponse.ok) {
       throw await toStorageError(
@@ -253,6 +417,22 @@ async function getGoogleAccessToken() {
     return await tokenPromise
   } finally {
     tokenPromise = null
+  }
+}
+
+async function fetchGoogleApi(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  failureMessage: string,
+) {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    console.error('[google-drive] fetch failed', error)
+    throw new AppError(
+      502,
+      `${failureMessage} Check the server network connection, firewall/proxy settings, and outbound HTTPS access to Google APIs.`,
+    )
   }
 }
 
@@ -333,7 +513,9 @@ async function getGoogleDriveCredentials() {
   return credentialsCache
 }
 
-function getRequiredEnv(key: 'GOOGLE_DRIVE_PARENT_FOLDER_ID') {
+function getRequiredEnv(
+  key: 'GOOGLE_DRIVE_PARENT_FOLDER_ID' | 'GOOGLE_DRIVE_PARENT_FOLDER_ID_PUBLIC',
+) {
   const value = env[key]
 
   if (!value) {

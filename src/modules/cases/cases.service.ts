@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   gt,
@@ -26,6 +27,7 @@ import {
   midGoLiveTokens,
   merchantDocuments,
   merchants,
+  portalMidLimitApplications,
   queues,
   queueCaseSequences,
   queueStages,
@@ -74,6 +76,15 @@ import {
 } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import {
+  PRIVATE_INTERNAL_CASE_FILES_PATH,
+  PRIVATE_KYC_APPROVED_PATH,
+  PRIVATE_KYC_REJECTED_PATH,
+  PUBLIC_AGREEMENT_PATH,
+  buildCaseFolderName,
+  ensureMerchantFolderPath,
+  getRejectedRoundFolderName,
+} from '../merchants/merchant-drive-folders'
+import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
   getDocumentIdFromFieldName,
@@ -89,6 +100,7 @@ import type {
   ListCasesQuery,
   MarkLiveLimitsAppliedInput,
   MarkTestingLimitsAppliedInput,
+  MerchantPortalRole,
   SaveDocumentReviewSubMerchantInput,
   SaveFieldReviewsInput,
   SaveMidCreationDetailsInput,
@@ -145,6 +157,11 @@ const DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS = [
   'resubmission_email_sent',
   'resubmission_email_sent_manual',
   'resubmission_whatsapp_sent_manual',
+] as const
+const MID_CREATION_CREDENTIALS_SENT_ACTIONS = [
+  'mid_creation_email_sent',
+  'mid_creation_email_sent_manual',
+  'mid_creation_whatsapp_sent_manual',
 ] as const
 type ManualCommunicationChannel = 'email' | 'whatsapp'
 const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
@@ -471,6 +488,28 @@ async function getTestingLimitsAppliedEntry(caseId: string) {
       and(
         eq(caseHistory.caseId, caseId),
         eq(caseHistory.action, 'testing_limits_applied'),
+      ),
+    )
+    .orderBy(desc(caseHistory.createdAt))
+    .limit(1)
+
+  return entry ?? null
+}
+
+async function getMidCreationCredentialsSentEntry(caseId: string) {
+  const db = getDb()
+  const [entry] = await db
+    .select({
+      createdAt: caseHistory.createdAt,
+      actorId: caseHistory.actorId,
+      actorName: users.name,
+    })
+    .from(caseHistory)
+    .leftJoin(users, eq(caseHistory.actorId, users.id))
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        inArray(caseHistory.action, [...MID_CREATION_CREDENTIALS_SENT_ACTIONS]),
       ),
     )
     .orderBy(desc(caseHistory.createdAt))
@@ -810,11 +849,22 @@ async function getMidCreationPortalMid(
 
 type MidCreationCredentials = {
   portalMid: number
-  portalMuid: string | null
+  internalPortalMid: number
   email: string
-  password: string
+  merchantRole: MerchantPortalRole
   paymentMethods: PaymentMethodSettings
   payoutMethods: PaymentMethodSettings
+}
+
+const DEFAULT_MERCHANT_PORTAL_ROLE: MerchantPortalRole = 'merchant_admin'
+const ROLE_PAYOUT_METHOD_LABELS: Record<MerchantPortalRole, string> = {
+  merchant_admin: 'Bank Settlement',
+  international_merchant_admin: 'All supported banks/e-wallets',
+}
+
+function buildPortalPassword(email: string) {
+  const [localPart = email] = email.trim().split('@')
+  return `${localPart.trim()}@123`
 }
 
 async function getMidCreationCredentials(
@@ -837,16 +887,15 @@ async function getMidCreationCredentials(
   if (!entry) return null
   const details = entry.details as {
     portalMid?: unknown
-    portalMuid?: unknown
+    internalPortalMid?: unknown
     email?: unknown
-    password?: unknown
+    merchantRole?: unknown
     paymentMethods?: unknown
     payoutMethods?: unknown
   } | null
   if (
     typeof details?.portalMid !== 'number' ||
-    typeof details.email !== 'string' ||
-    typeof details.password !== 'string'
+    typeof details.email !== 'string'
   ) {
     return null
   }
@@ -860,10 +909,14 @@ async function getMidCreationCredentials(
 
   return {
     portalMid: details.portalMid,
-    portalMuid:
-      typeof details.portalMuid === 'string' ? details.portalMuid : null,
+    internalPortalMid:
+      typeof details.internalPortalMid === 'number'
+        ? details.internalPortalMid
+        : details.portalMid,
     email: details.email,
-    password: details.password,
+    merchantRole: isMerchantPortalRole(details.merchantRole)
+      ? details.merchantRole
+      : DEFAULT_MERCHANT_PORTAL_ROLE,
     paymentMethods: parsedPaymentMethods.success
       ? parsedPaymentMethods.data
       : (parseLegacyMethodSettings(details.paymentMethods, 'collection') ??
@@ -873,6 +926,135 @@ async function getMidCreationCredentials(
       : (parseLegacyMethodSettings(details.paymentMethods, 'disbursement') ??
         defaultPayoutMethodSettings),
   }
+}
+
+async function getPortalMidLimitApplication(portalMid: number) {
+  const [entry] = await getDb()
+    .select({
+      appliedAt: portalMidLimitApplications.appliedAt,
+      appliedBy: portalMidLimitApplications.appliedBy,
+      appliedByName: users.name,
+    })
+    .from(portalMidLimitApplications)
+    .leftJoin(users, eq(portalMidLimitApplications.appliedBy, users.id))
+    .where(eq(portalMidLimitApplications.portalMid, portalMid))
+    .limit(1)
+
+  return entry ?? null
+}
+
+async function getTestingLimitsAppliedEntryForMerchant(merchantId: string) {
+  const credentials = await getMidCreationCredentials(merchantId)
+  if (!credentials) return null
+
+  const application = await getPortalMidLimitApplication(credentials.portalMid)
+  if (!application) return null
+
+  return {
+    createdAt: application.appliedAt,
+    actorId: application.appliedBy,
+    actorName: application.appliedByName,
+    portalMid: credentials.portalMid,
+  }
+}
+
+async function getInternalPortalMidLimitsAppliedEntryForMerchant(
+  merchantId: string,
+) {
+  const credentials = await getMidCreationCredentials(merchantId)
+  if (!credentials) return null
+
+  const application = await getPortalMidLimitApplication(
+    credentials.internalPortalMid,
+  )
+  if (!application) return null
+
+  return {
+    createdAt: application.appliedAt,
+    actorId: application.appliedBy,
+    actorName: application.appliedByName,
+    portalMid: credentials.internalPortalMid,
+  }
+}
+
+async function assertInternalPortalMidLimitsApplied(merchantId: string) {
+  const credentials = await getMidCreationCredentials(merchantId)
+
+  if (!credentials) {
+    throw new AppError(
+      400,
+      'Save Portal MID (Internal) in MID Creation before closing this WordPress Website case.',
+    )
+  }
+
+  const application = await getPortalMidLimitApplication(
+    credentials.internalPortalMid,
+  )
+
+  if (!application) {
+    throw new AppError(
+      400,
+      `Live limits have not been applied for Portal MID (Internal) ${credentials.internalPortalMid}. Apply limits from the dashboard before closing this WordPress Website case.`,
+    )
+  }
+}
+
+async function assertTestingLimitsAppliedForCredentials(
+  credentials: MidCreationCredentials,
+) {
+  const application = await getPortalMidLimitApplication(credentials.portalMid)
+
+  if (!application) {
+    throw new AppError(
+      400,
+      `Limits have not been applied for Portal MID ${credentials.portalMid}. Apply limits from the dashboard before sending credentials.`,
+    )
+  }
+}
+
+function isMerchantPortalRole(value: unknown): value is MerchantPortalRole {
+  return value === 'merchant_admin' || value === 'international_merchant_admin'
+}
+
+function normalizeMethodLabel(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function getClientPayoutRateLabel(role: MerchantPortalRole) {
+  return role === 'merchant_admin' ? 'Bank Settlement' : 'Payout'
+}
+
+function tokenMatchesGoLiveAvailability(
+  token: { availableAt: Date; createdAt: Date },
+  goLiveAvailabilityHours: number | null,
+) {
+  const delayMs = token.availableAt.getTime() - token.createdAt.getTime()
+  const toleranceMs = 5 * 60 * 1000
+
+  if (goLiveAvailabilityHours == null) {
+    return delayMs <= toleranceMs
+  }
+
+  const expectedDelayMs = goLiveAvailabilityHours * 60 * 60 * 1000
+  return Math.abs(delayMs - expectedDelayMs) <= toleranceMs
+}
+
+async function getPayoutMethodsForMerchantRole(role: MerchantPortalRole) {
+  const expectedLabel = ROLE_PAYOUT_METHOD_LABELS[role]
+  const normalizedExpectedLabel = normalizeMethodLabel(expectedLabel)
+  const methods = await getPayoutMethodSettings()
+  const selectedMethods = methods.filter(
+    (method) => normalizeMethodLabel(method.label) === normalizedExpectedLabel,
+  )
+
+  if (selectedMethods.length === 0) {
+    throw new AppError(
+      400,
+      `Configure "${expectedLabel}" in payout methods before saving MID details.`,
+    )
+  }
+
+  return selectedMethods
 }
 
 function parseLegacyMethodSettings(
@@ -1230,14 +1412,44 @@ function validateWordpressScreenshotFile(file: File) {
   }
 }
 
-function buildCaseUploadFolderName(caseNumber: string, merchantName: string) {
-  const safeMerchantName = merchantName
-    .replace(/[^a-zA-Z0-9._ -]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80)
+async function ensurePrivateInternalCaseFolder(input: {
+  merchantId: string
+  merchantName: string
+  caseNumber: string
+  queueName?: string | null
+  section: string
+  storage: GoogleDriveStorageProvider
+}) {
+  return ensureMerchantFolderPath({
+    merchantId: input.merchantId,
+    merchantName: input.merchantName,
+    visibility: 'private',
+    path: [
+      ...PRIVATE_INTERNAL_CASE_FILES_PATH,
+      buildCaseFolderName(
+        input.caseNumber,
+        input.merchantName,
+        input.queueName,
+      ),
+      input.section,
+    ],
+    storage: input.storage,
+  })
+}
 
-  return `${caseNumber} - ${safeMerchantName || 'Merchant'}`
+async function ensurePublicFinalAgreementFolder(input: {
+  merchantId: string
+  merchantName: string
+  caseNumber: string
+  storage: GoogleDriveStorageProvider
+}) {
+  return ensureMerchantFolderPath({
+    merchantId: input.merchantId,
+    merchantName: input.merchantName,
+    visibility: 'public',
+    path: [...PUBLIC_AGREEMENT_PATH, input.caseNumber, 'Final Agreement'],
+    storage: input.storage,
+  })
 }
 
 // ─── List Case Owners ───────────────────────────────────────────────────────
@@ -1833,6 +2045,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     agreement,
     testingLimitsAppliedEntry,
     liveLimitsAppliedEntry,
+    internalPortalMidLimitsAppliedEntry,
     wordpressWebsiteDetails,
     merchantWordpressWebsiteDetails,
     caseDocumentReviewDetail,
@@ -1878,7 +2091,10 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .where(
         and(
           eq(caseHistory.caseId, caseId),
-          inArray(caseHistory.action, DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS),
+          inArray(
+            caseHistory.action,
+            DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
+          ),
         ),
       )
       .orderBy(desc(caseHistory.createdAt))
@@ -1913,8 +2129,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       .where(eq(agreementCaseDetails.caseId, caseId))
       .limit(1)
       .then((rows) => rows[0] ?? null),
-    getTestingLimitsAppliedEntry(caseId),
+    getTestingLimitsAppliedEntryForMerchant(caseData.merchantId),
     getLiveLimitsAppliedEntry(caseId),
+    getInternalPortalMidLimitsAppliedEntryForMerchant(caseData.merchantId),
     getWordpressWebsiteDetails(caseId),
     getLatestWordpressWebsiteDetailsForMerchant(caseData.merchantId),
     getDocumentReviewDetails(caseId),
@@ -2175,10 +2392,22 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         queue.slug === MID_CREATION_QUEUE_SLUG
           ? (midCreationCredentials?.portalMid ?? null)
           : null,
-      portalMuid:
+      internalPortalMid:
         queue.slug === MID_CREATION_QUEUE_SLUG ||
         queue.slug === WORDPRESS_WEBSITE_QUEUE_SLUG
-          ? (midCreationCredentials?.portalMuid ?? null)
+          ? (midCreationCredentials?.internalPortalMid ?? null)
+          : null,
+      internalLimitsAppliedAt:
+        internalPortalMidLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
+      internalLimitsAppliedBy: internalPortalMidLimitsAppliedEntry?.actorId
+        ? {
+            id: internalPortalMidLimitsAppliedEntry.actorId,
+            name: internalPortalMidLimitsAppliedEntry.actorName ?? 'Unknown',
+          }
+        : null,
+      merchantRole:
+        queue.slug === MID_CREATION_QUEUE_SLUG
+          ? (midCreationCredentials?.merchantRole ?? null)
           : null,
       paymentMethods:
         queue.slug === MID_CREATION_QUEUE_SLUG
@@ -2515,11 +2744,12 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
-    const limitsAppliedEntry = await getTestingLimitsAppliedEntry(caseId)
-    if (!limitsAppliedEntry) {
+    const credentialsSentEntry =
+      await getMidCreationCredentialsSentEntry(caseId)
+    if (!credentialsSentEntry) {
       throw new AppError(
         400,
-        'Confirm testing limits were applied before closing this case.',
+        'Send merchant portal credentials by auto Resend, manual Gmail, or WhatsApp before closing this case.',
       )
     }
 
@@ -2616,6 +2846,8 @@ export async function advanceStage(caseId: string, userId: string) {
         'Upload the sub-merchant website logo screenshot before closing this case.',
       )
     }
+
+    await assertInternalPortalMidLimitsApplied(caseData.merchantId)
 
     targetStage = await db.query.queueStages.findFirst({
       where: and(
@@ -2764,6 +2996,7 @@ export async function saveFieldReviews(
       ownerId: cases.ownerId,
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
+      merchantId: cases.merchantId,
       status: cases.status,
     })
     .from(cases)
@@ -2827,6 +3060,14 @@ export async function saveFieldReviews(
     createdAt: now,
     updatedAt: now,
   }))
+  const documentMoves =
+    queue?.slug === 'documents-review'
+      ? await prepareDocumentReviewDocumentMoves({
+          caseId,
+          merchantId: caseData.merchantId,
+          reviews: reviewValues,
+        })
+      : []
 
   await db.transaction(async (tx) => {
     await tx
@@ -2841,6 +3082,19 @@ export async function saveFieldReviews(
           updatedAt: now,
         },
       })
+
+    for (const move of documentMoves) {
+      await tx
+        .update(merchantDocuments)
+        .set({
+          status: move.status,
+          googleDriveWebViewLink: move.googleDriveWebViewLink,
+          googleDriveDownloadLink: move.googleDriveDownloadLink,
+          googleDriveFolderId: move.googleDriveFolderId,
+          updatedAt: now,
+        })
+        .where(eq(merchantDocuments.id, move.documentId))
+    }
 
     if (queue?.slug !== 'documents-review') {
       const rejected = reviewValues.filter(
@@ -2862,6 +3116,124 @@ export async function saveFieldReviews(
 }
 
 // ─── Close Unsuccessful ─────────────────────────────────────────────────────
+
+type PreparedDocumentMove = {
+  documentId: string
+  status: 'approved' | 'rejected'
+  googleDriveWebViewLink: string
+  googleDriveDownloadLink: string | null
+  googleDriveFolderId: string
+}
+
+async function prepareDocumentReviewDocumentMoves(input: {
+  caseId: string
+  merchantId: string
+  reviews: Array<{
+    fieldName: string
+    status: string
+  }>
+}): Promise<PreparedDocumentMove[]> {
+  const documentReviews = input.reviews
+    .map((review) => ({
+      documentId: getDocumentIdFromFieldName(review.fieldName),
+      status: review.status,
+    }))
+    .filter(
+      (
+        review,
+      ): review is {
+        documentId: string
+        status: 'approved' | 'rejected'
+      } =>
+        Boolean(review.documentId) &&
+        (review.status === 'approved' || review.status === 'rejected'),
+    )
+
+  if (documentReviews.length === 0) return []
+
+  const db = getDb()
+  const merchant = await db.query.merchants.findFirst({
+    where: eq(merchants.id, input.merchantId),
+    columns: { id: true, businessName: true },
+  })
+  if (!merchant) throw new AppError(404, 'Merchant not found.')
+
+  const documentIds = Array.from(
+    new Set(documentReviews.map((review) => review.documentId)),
+  )
+  const documents = await db
+    .select({
+      id: merchantDocuments.id,
+      googleDriveFileId: merchantDocuments.googleDriveFileId,
+    })
+    .from(merchantDocuments)
+    .where(inArray(merchantDocuments.id, documentIds))
+  const documentsById = new Map(
+    documents.map((document) => [document.id, document]),
+  )
+  const storage = new GoogleDriveStorageProvider()
+  const [rejectionRoundRow] = await db
+    .select({ count: count() })
+    .from(caseHistory)
+    .where(
+      and(
+        eq(caseHistory.caseId, input.caseId),
+        inArray(
+          caseHistory.action,
+          Array.from(DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS),
+        ),
+      ),
+    )
+  const rejectedRound = Number(rejectionRoundRow?.count ?? 0) + 1
+  let approvedFolderId: string | null = null
+  let rejectedFolderId: string | null = null
+  const moves: PreparedDocumentMove[] = []
+
+  for (const review of documentReviews) {
+    const document = documentsById.get(review.documentId)
+    if (!document) continue
+
+    if (review.status === 'approved' && !approvedFolderId) {
+      const folder = await ensureMerchantFolderPath({
+        merchantId: merchant.id,
+        merchantName: merchant.businessName,
+        visibility: 'private',
+        path: [...PRIVATE_KYC_APPROVED_PATH],
+        storage,
+      })
+      approvedFolderId = folder.folderId
+    }
+
+    if (review.status === 'rejected' && !rejectedFolderId) {
+      const folder = await ensureMerchantFolderPath({
+        merchantId: merchant.id,
+        merchantName: merchant.businessName,
+        visibility: 'private',
+        path: [
+          ...PRIVATE_KYC_REJECTED_PATH,
+          getRejectedRoundFolderName(rejectedRound),
+        ],
+        storage,
+      })
+      rejectedFolderId = folder.folderId
+    }
+
+    const folderId =
+      review.status === 'approved' ? approvedFolderId : rejectedFolderId
+    if (!folderId) continue
+
+    const moved = await storage.moveFile(document.googleDriveFileId, folderId)
+    moves.push({
+      documentId: review.documentId,
+      status: review.status,
+      googleDriveWebViewLink: moved.webViewLink,
+      googleDriveDownloadLink: moved.downloadLink,
+      googleDriveFolderId: moved.folderId,
+    })
+  }
+
+  return moves
+}
 
 export async function saveDocumentReviewSubMerchant(
   caseId: string,
@@ -3285,6 +3657,9 @@ export async function saveMidCreationDetails(
     throw new AppError(400, 'MID details can only be saved in working.')
   }
 
+  const payoutMethods = await getPayoutMethodsForMerchantRole(
+    input.merchantRole,
+  )
   const savedAt = new Date()
   await db.insert(caseHistory).values({
     caseId,
@@ -3292,21 +3667,22 @@ export async function saveMidCreationDetails(
     action: 'mid_creation_saved',
     details: {
       portalMid: input.portalMid,
-      portalMuid: input.portalMuid,
+      internalPortalMid: input.internalPortalMid,
       email: input.email,
-      password: input.password,
+      merchantRole: input.merchantRole,
       paymentMethods: input.paymentMethods,
-      payoutMethods: input.payoutMethods,
+      payoutMethods,
     },
     createdAt: savedAt,
   })
 
   return {
     portalMid: input.portalMid,
-    portalMuid: input.portalMuid,
+    internalPortalMid: input.internalPortalMid,
     email: input.email,
+    merchantRole: input.merchantRole,
     paymentMethods: input.paymentMethods,
-    payoutMethods: input.payoutMethods,
+    payoutMethods,
     savedAt: savedAt.toISOString(),
   }
 }
@@ -3324,6 +3700,7 @@ async function loadWordpressWebsiteCase(caseId: string, userId: string) {
       merchantName: merchants.businessName,
       businessWebsite: merchants.businessWebsite,
       queueId: cases.queueId,
+      queueName: queues.name,
       queueSlug: queues.slug,
     })
     .from(cases)
@@ -3418,9 +3795,14 @@ export async function saveWordpressWebsiteCase(
     )
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
-  )
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    queueName: caseRow.queueName,
+    section: 'WordPress Screenshots',
+    storage,
+  })
 
   const uploadedScreenshots = await Promise.all(
     input.screenshots.map((file, index) =>
@@ -3913,13 +4295,20 @@ async function uploadEmailProofFile(
   file: File,
   fileKind: string,
   caseNumber: string,
+  merchantId: string,
   merchantName: string,
+  queueName: string | null | undefined,
 ) {
   const db = getDb()
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseNumber, merchantName),
-  )
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId,
+    merchantName,
+    caseNumber,
+    queueName,
+    section: 'Email Proofs',
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
@@ -4159,11 +4548,13 @@ export async function confirmResubmissionEmailManual(
       status: cases.status,
       queueId: cases.queueId,
       currentStageId: cases.currentStageId,
+      queueName: queues.name,
       queueSlug: queues.slug,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantWhatsappNumber: merchants.activeWhatsappNumber,
     })
     .from(cases)
     .innerJoin(queues, eq(cases.queueId, queues.id))
@@ -4267,7 +4658,9 @@ export async function confirmResubmissionEmailManual(
       ? RESUBMISSION_WHATSAPP_PROOF_KIND
       : RESUBMISSION_EMAIL_PROOF_KIND,
     row.caseNumber,
+    row.merchantId,
     row.merchantName,
+    row.queueName,
   )
 
   const now = new Date()
@@ -4405,7 +4798,9 @@ function buildAgreementEmailBody(params: {
   const { merchantName, ownerName, agreementUrl, expiresAt, remarks } = params
   let body = `Hi ${ownerName},
 
-Please review and sign the agreement for ${merchantName} using the secure link below:`
+The link below is unique to your onboarding case. Please review the agreement for ${merchantName} carefully and upload the fully signed copy, including every page, so we can move to the next step.
+
+Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.`
 
   if (remarks) {
     body += `\n\nAdditional notes from our team:\n${remarks}`
@@ -4492,7 +4887,9 @@ export async function confirmAgreementEmailManual(
       ? AGREEMENT_WHATSAPP_PROOF_KIND
       : AGREEMENT_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
+    caseRow.merchantId,
     caseRow.merchantName,
+    caseRow.queueName,
   )
 
   const remarks = input.remarks?.trim() || null
@@ -4558,6 +4955,7 @@ export async function getMidCreationEmailPreview(
       'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
   }
+  await assertTestingLimitsAppliedForCredentials(credentials)
 
   const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
     getLinkDeadlineSettings(),
@@ -4576,7 +4974,7 @@ export async function getMidCreationEmailPreview(
 
   // Reuse an unconsumed pending go-live token
   const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
-  const existingToken = await db.query.midGoLiveTokens.findFirst({
+  const existingTokenCandidate = await db.query.midGoLiveTokens.findFirst({
     where: and(
       eq(midGoLiveTokens.caseId, caseId),
       isNull(midGoLiveTokens.consumedAt),
@@ -4584,6 +4982,14 @@ export async function getMidCreationEmailPreview(
     ),
     orderBy: [desc(midGoLiveTokens.createdAt)],
   })
+  const existingToken =
+    existingTokenCandidate &&
+    tokenMatchesGoLiveAvailability(
+      existingTokenCandidate,
+      linkDeadlines.goLiveAvailabilityHours,
+    )
+      ? existingTokenCandidate
+      : null
 
   let tokenId: string
   let goLiveToken: string
@@ -4608,11 +5014,12 @@ export async function getMidCreationEmailPreview(
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
   const isShopify = caseRow.websiteCms === 'shopify'
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
+  const portalPassword = buildPortalPassword(credentials.email)
+  const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
   const body = buildMidCreationMessageBody({
     merchantName: caseRow.merchantName,
     portalEmail: credentials.email,
-    portalPassword: credentials.password,
-    portalMid: String(credentials.portalMid),
+    portalPassword,
     merchantPortalUrl: merchantPortal.loginUrl,
     goLiveUrl,
     availableAt: formatEmailDateTime(resolvedAvailableAt),
@@ -4623,6 +5030,7 @@ export async function getMidCreationEmailPreview(
       : `${limitsAndMdr.rates.cardDefault}%`,
     eWalletsRate: `${limitsAndMdr.rates.eWallets}%`,
     payoutRate: `${limitsAndMdr.rates.payout}%`,
+    payoutRateLabel,
   })
 
   return {
@@ -4638,7 +5046,6 @@ function buildMidCreationEmailBody(params: {
   merchantName: string
   portalEmail: string
   portalPassword: string
-  portalMid: string
   merchantPortalUrl: string
   goLiveUrl: string
   availableAt: string
@@ -4651,12 +5058,12 @@ function buildMidCreationEmailBody(params: {
   cardRate: string
   eWalletsRate: string
   payoutRate: string
+  payoutRateLabel: string
 }): string {
   const {
     merchantName,
     portalEmail,
     portalPassword,
-    portalMid,
     merchantPortalUrl,
     goLiveUrl,
     availableAt,
@@ -4665,6 +5072,7 @@ function buildMidCreationEmailBody(params: {
     cardRate,
     eWalletsRate,
     payoutRate,
+    payoutRateLabel,
   } = params
   const goLiveAvailabilityLabel =
     goLiveAvailabilityHours == null
@@ -4675,7 +5083,8 @@ function buildMidCreationEmailBody(params: {
 Portal Login: ${merchantPortalUrl}
 Email: ${portalEmail}
 Password: ${portalPassword}
-MID: ${portalMid}
+
+For your security, update this temporary password after your first login.
 
 Testing Limits:
 • Per Transaction: PKR ${testingLimits.transactionLimit.toLocaleString()}
@@ -4685,7 +5094,7 @@ Testing Limits:
 Rates:
 • Card: ${cardRate}
 • eWallets: ${eWalletsRate}
-• Payout: ${payoutRate}
+• ${payoutRateLabel}: ${payoutRate}
 
 Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${goLiveUrl}
@@ -4703,7 +5112,6 @@ function buildMidCreationMessageBody(params: {
   merchantName: string
   portalEmail: string
   portalPassword: string
-  portalMid: string
   merchantPortalUrl: string
   goLiveUrl: string
   availableAt: string
@@ -4717,6 +5125,7 @@ function buildMidCreationMessageBody(params: {
   cardRate: string
   eWalletsRate: string
   payoutRate: string
+  payoutRateLabel: string
 }): string {
   const goLiveAvailabilityLabel =
     params.goLiveAvailabilityHours == null
@@ -4728,7 +5137,8 @@ function buildMidCreationMessageBody(params: {
 Portal Login: ${params.merchantPortalUrl}
 Email: ${params.portalEmail}
 Password: ${params.portalPassword}
-MID: ${params.portalMid}
+
+For your security, update this temporary password after your first login.
 
 Testing Limits:
 - Collection: PKR ${params.testingLimits.collectionMin.toLocaleString()}-${params.testingLimits.collectionMax.toLocaleString()}
@@ -4737,7 +5147,7 @@ Testing Limits:
 Rates:
 - Card: ${params.cardRate}
 - eWallets: ${params.eWalletsRate}
-- Payout: ${params.payoutRate}
+- ${params.payoutRateLabel}: ${params.payoutRate}
 
 Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${params.goLiveUrl}
@@ -4773,6 +5183,7 @@ export async function confirmMidCreationEmailManual(
       'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
   }
+  await assertTestingLimitsAppliedForCredentials(credentials)
 
   const tokenRow = await db.query.midGoLiveTokens.findFirst({
     where: and(
@@ -4791,7 +5202,9 @@ export async function confirmMidCreationEmailManual(
       ? MID_CREATION_WHATSAPP_PROOF_KIND
       : MID_CREATION_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
+    caseRow.merchantId,
     caseRow.merchantName,
+    caseRow.queueName,
   )
 
   const now = new Date()
@@ -4885,7 +5298,9 @@ export async function confirmLiveActivationEmailManual(
       ? LIVE_ACTIVATION_WHATSAPP_PROOF_KIND
       : LIVE_ACTIVATION_EMAIL_PROOF_KIND,
     caseRow.caseNumber,
+    caseRow.merchantId,
     caseRow.merchantName,
+    caseRow.queueName,
   )
 
   await getDb()
@@ -5216,6 +5631,7 @@ async function loadSubMerchantFormCase(caseId: string, userId: string) {
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
       queueId: cases.queueId,
+      queueName: queues.name,
       queueSlug: queues.slug,
       priority: cases.priority,
     })
@@ -5357,9 +5773,14 @@ export async function uploadSubMerchantFinalForm(
     : null
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
-  )
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    queueName: caseRow.queueName,
+    section: 'Sub-Merchant Final Form',
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
@@ -5500,9 +5921,14 @@ export async function uploadSubMerchantEmailProof(
   })
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
-  )
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    queueName: caseRow.queueName,
+    section: 'Email Proofs',
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
@@ -5602,6 +6028,7 @@ async function loadMidCreationCase(caseId: string, userId: string) {
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       websiteCms: merchants.websiteCms,
+      queueName: queues.name,
       queueSlug: queues.slug,
     })
     .from(cases)
@@ -5634,6 +6061,7 @@ async function loadLiveCase(caseId: string, userId: string) {
       status: cases.status,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
+      queueName: queues.name,
       queueSlug: queues.slug,
     })
     .from(cases)
@@ -5671,6 +6099,7 @@ export async function sendMidCreationCredentialsEmail(
       'Save the merchant portal credentials in MID Creation before sending credentials.',
     )
   }
+  await assertTestingLimitsAppliedForCredentials(credentials)
 
   const now = new Date()
   const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
@@ -5706,6 +6135,8 @@ export async function sendMidCreationCredentialsEmail(
   const cardRate = isShopify
     ? `${limitsAndMdr.rates.cardShopify}%`
     : `${limitsAndMdr.rates.cardDefault}%`
+  const portalPassword = buildPortalPassword(credentials.email)
+  const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
 
   const emailResult = await sendEmail({
     to: credentials.email,
@@ -5714,8 +6145,7 @@ export async function sendMidCreationCredentialsEmail(
     react: MidCreationEmail({
       merchantName: caseRow.merchantName,
       portalEmail: credentials.email,
-      portalPassword: credentials.password,
-      portalMid: credentials.portalMid,
+      portalPassword,
       merchantPortalUrl: merchantPortal.loginUrl,
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
@@ -5727,6 +6157,7 @@ export async function sendMidCreationCredentialsEmail(
           ? limitsAndMdr.rates.cardShopify
           : limitsAndMdr.rates.cardDefault,
         payout: limitsAndMdr.rates.payout,
+        payoutLabel: payoutRateLabel,
       },
     }),
     caseId,
@@ -5906,7 +6337,9 @@ async function loadPhysicalAgreementCase(caseId: string, userId: string) {
       caseNumber: cases.caseNumber,
       ownerId: cases.ownerId,
       status: cases.status,
+      merchantId: cases.merchantId,
       merchantName: merchants.businessName,
+      queueName: queues.name,
       queueSlug: queues.slug,
     })
     .from(cases)
@@ -6066,6 +6499,7 @@ async function loadAgreementCase(
       merchantSubmitterEmail: merchants.submitterEmail,
       merchantType: merchants.merchantType,
       queueId: cases.queueId,
+      queueName: queues.name,
       queueSlug: queues.slug,
     })
     .from(cases)
@@ -6150,9 +6584,12 @@ export async function uploadAgreementFinalAgreement(
     : null
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
-  )
+  const folder = await ensurePublicFinalAgreementFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
@@ -6247,9 +6684,14 @@ export async function uploadPhysicalAgreementCopy(
   })
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    buildCaseUploadFolderName(caseRow.caseNumber, caseRow.merchantName),
-  )
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    queueName: caseRow.queueName,
+    section: 'Physical Agreement',
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
@@ -6657,6 +7099,7 @@ export type MidGoLiveContext = {
   caseNumber: string
   merchantName: string
   availableAt: string
+  availableInHours: number
   liveCaseNumber: string | null
 }
 
@@ -6670,6 +7113,7 @@ export async function getMidGoLiveContext(
       availableAt: midGoLiveTokens.availableAt,
       consumedAt: midGoLiveTokens.consumedAt,
       liveCaseId: midGoLiveTokens.liveCaseId,
+      createdAt: midGoLiveTokens.createdAt,
       midCaseNumber: cases.caseNumber,
       merchantName: merchants.businessName,
     })
@@ -6685,6 +7129,12 @@ export async function getMidGoLiveContext(
 
   const isStarted = Boolean(row.consumedAt && row.liveCaseId)
   const isReady = row.availableAt.getTime() <= Date.now()
+  const availableInHours = Math.max(
+    0,
+    Math.round(
+      (row.availableAt.getTime() - row.createdAt.getTime()) / (60 * 60 * 1000),
+    ),
+  )
   const liveCase = row.liveCaseId
     ? await db.query.cases.findFirst({
         where: eq(cases.id, row.liveCaseId),
@@ -6697,6 +7147,7 @@ export async function getMidGoLiveContext(
     caseNumber: row.midCaseNumber,
     merchantName: row.merchantName,
     availableAt: row.availableAt.toISOString(),
+    availableInHours,
     liveCaseNumber: liveCase?.caseNumber ?? null,
   }
 }
@@ -6750,7 +7201,10 @@ export async function activateMidGoLive(token: string) {
     }
 
     if (tokenRow.availableAt.getTime() > Date.now()) {
-      throw new AppError(425, 'This Go-Live link works after 72 hours only.')
+      throw new AppError(
+        425,
+        `This Go-Live link works after ${formatEmailDateTime(tokenRow.availableAt)}.`,
+      )
     }
 
     const liveQueue = await tx.query.queues.findFirst({

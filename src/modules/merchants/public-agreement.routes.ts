@@ -18,6 +18,10 @@ import { validateToken } from '../cases/case-resubmission-tokens.service'
 import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
 import { getAgreementUploadContext } from '../cases/cases.service'
 import { notifyOnResubmission } from '../notifications/notifications.service'
+import {
+  PRIVATE_MERCHANT_RETURNS_PATH,
+  ensureMerchantFolderPath,
+} from './merchant-drive-folders'
 
 export const agreementUploadRoutes = new Hono<AppEnv>()
 
@@ -84,9 +88,17 @@ agreementUploadRoutes.post('/:token', async (c) => {
   }
 
   const storage = new GoogleDriveStorageProvider()
-  const folder = await storage.createMerchantFolder(
-    `${caseRow.caseNumber} - ${caseRow.merchantName}`.slice(0, 120),
-  )
+  const folder = await ensureMerchantFolderPath({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    visibility: 'private',
+    path: [
+      ...PRIVATE_MERCHANT_RETURNS_PATH,
+      caseRow.caseNumber,
+      'Signed By Merchant',
+    ],
+    storage,
+  })
   const uploaded = await storage.uploadFile(folder.folderId, {
     fileName: file.name,
     mimeType: file.type,
