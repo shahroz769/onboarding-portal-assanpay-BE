@@ -13,16 +13,16 @@
     "hono": "^4.12.27",
     "hono-rate-limiter": "^0.5.3",
     "jose": "^6.2.3",
-    "nanoid": "^5.1.15",
+    "nanoid": "^5.1.16",
     "postgres": "^3.4.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "resend": "^6.14.0",
+    "resend": "^6.16.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.10"
