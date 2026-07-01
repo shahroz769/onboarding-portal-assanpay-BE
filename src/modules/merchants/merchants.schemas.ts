@@ -33,6 +33,7 @@ export const baseDocumentTypes = [
   'owner_cnic_back',
   'next_of_kin_cnic_front',
   'next_of_kin_cnic_back',
+  'utility_bill',
 ] as const
 
 export const merchantSpecificDocumentMap = {
@@ -214,9 +215,9 @@ export const scalarMerchantSchema = z
       .trim()
       .email('Submitter email must be a valid email.')
       .transform(toLower),
+    activeWhatsappNumber: localMobileNumberSchema,
     ownerFullName: sanitizedStringSchema,
     ownerPhone: localMobileNumberSchema,
-    activeWhatsappNumber: localMobileNumberSchema,
     businessName: sanitizedStringSchema,
     businessPhone: digitsOnlyPhoneNumberSchema,
     businessEmail: z
@@ -271,9 +272,9 @@ export const scalarMerchantSchema = z
 export const storedMerchantScalarSchema = z
   .object({
     submitterEmail: scalarMerchantSchema.shape.email,
+    activeWhatsappNumber: localMobileNumberSchema.nullable(),
     ownerFullName: scalarMerchantSchema.shape.ownerFullName,
     ownerPhone: scalarMerchantSchema.shape.ownerPhone,
-    activeWhatsappNumber: localMobileNumberSchema.nullable(),
     businessName: scalarMerchantSchema.shape.businessName,
     businessPhone: scalarMerchantSchema.shape.businessPhone,
     businessEmail: scalarMerchantSchema.shape.businessEmail,

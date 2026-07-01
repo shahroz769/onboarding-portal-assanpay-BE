@@ -6,9 +6,9 @@ import type { MerchantDocumentType } from '../merchants/merchants.schemas'
  */
 export const MERCHANT_FIELD_LABELS: Record<string, string> = {
   submitterEmail: 'Submitter Email',
-  ownerFullName: 'Owner Full Name',
-  ownerPhone: 'Owner Phone Number',
   activeWhatsappNumber: 'Active WhatsApp Number',
+  ownerFullName: 'Full Name',
+  ownerPhone: 'Phone Number',
   businessName: 'Business Name',
   businessPhone: 'Business Phone Number',
   businessEmail: 'Business Email',
@@ -37,6 +37,7 @@ export const DOCUMENT_TYPE_LABELS: Record<MerchantDocumentType, string> = {
   owner_cnic_back: 'Owner CNIC Back',
   next_of_kin_cnic_front: 'Next Of Kin CNIC Front',
   next_of_kin_cnic_back: 'Next Of Kin CNIC Back',
+  utility_bill: 'Utility Bill',
   company_ntn: 'Company NTN',
   authority_letter: 'Authority Letter',
   taxpayer_registration_certificate: 'Taxpayer Registration Certificate',

@@ -56,6 +56,7 @@ File field names:
 - `owner_cnic_back`
 - `next_of_kin_cnic_front`
 - `next_of_kin_cnic_back`
+- `utility_bill`
 - Merchant-type-specific fields:
   `company_ntn`, `authority_letter`, `taxpayer_registration_certificate`,
   `company_incorporation_certificate`, `memorandum_articles`, `form_ii`,
@@ -69,6 +70,7 @@ Validation rules:
 - Max file size: `10 MB`
 - Allowed file formats: `PDF`, `JPG`, `JPEG`, `PNG`, `WEBP`
 - Required file fields depend on `merchantType`
+- `utility_bill` is required for every submission
 - `bankName` must match the approved bank-name list configured in the backend
 
 Success response:

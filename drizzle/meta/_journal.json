@@ -267,6 +267,13 @@
       "when": 1782864000000,
       "tag": "0038_portal_mid_limit_applications",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1782945600000,
+      "tag": "0039_utility_bill_document",
+      "breakpoints": true
     }
   ]
 }

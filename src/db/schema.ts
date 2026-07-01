@@ -95,6 +95,7 @@ export const merchantDocumentTypeEnum = pgEnum('merchant_document_type', [
   'owner_cnic_back',
   'next_of_kin_cnic_front',
   'next_of_kin_cnic_back',
+  'utility_bill',
   'company_ntn',
   'authority_letter',
   'taxpayer_registration_certificate',
