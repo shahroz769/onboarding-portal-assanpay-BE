@@ -34,13 +34,15 @@ Refresh cookie details:
 - Cleared by logout
 - Path: `/`
 - `HttpOnly`: `true`
-- `SameSite`: `lax`
+- `SameSite`: depends on backend `COOKIE_SAME_SITE`
+  Defaults to `lax`. Use `none` for separate hosted frontend/backend origins.
 - `Secure`: depends on backend env config
   Defaults to `false` outside production so localhost over plain HTTP can persist the cookie.
 
 Frontend note:
 
 - If your frontend and backend are on different origins, send requests with `credentials: "include"` when refresh cookie support is needed.
+- Hosted cross-site refresh requires `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, HTTPS on the backend, and the frontend origin in `CORS_ORIGIN`.
 
 ## Common User Object
 

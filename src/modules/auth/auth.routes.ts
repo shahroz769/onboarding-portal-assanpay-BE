@@ -22,11 +22,16 @@ import {
 } from './auth.service'
 
 const REFRESH_COOKIE_NAME = 'refresh_token'
+const cookieSameSite = {
+  lax: 'Lax',
+  strict: 'Strict',
+  none: 'None',
+} as const
 
 function getCookieOptions() {
   return {
     httpOnly: true,
-    sameSite: 'lax' as const,
+    sameSite: cookieSameSite[env.COOKIE_SAME_SITE],
     secure: env.COOKIE_SECURE,
     path: '/',
     domain: env.COOKIE_DOMAIN,
