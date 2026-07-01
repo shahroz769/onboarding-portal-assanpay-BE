@@ -1,1 +1,1 @@
-ALTER TYPE "public"."merchant_document_type" ADD VALUE 'utility_bill';
+ALTER TYPE "public"."merchant_document_type" ADD VALUE IF NOT EXISTS 'utility_bill';
