@@ -84,6 +84,9 @@ export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
 
 export const defaultMerchantPortalSettings: MerchantPortalSettings = {
   loginUrl: 'https://merchant.assanpay.com/login',
+  officeAddress: '',
+  whatsappSupportNumber: '',
+  supportEmail: '',
 }
 
 export const defaultPaymentMethodSettings: PaymentMethodSettings = []

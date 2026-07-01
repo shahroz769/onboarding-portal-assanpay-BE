@@ -224,6 +224,13 @@ export type SendForResubmissionResponse = z.infer<
   typeof sendForResubmissionResponseSchema
 >
 
+export const emailRecipientTypeValues = ['submitter', 'business'] as const
+export type EmailRecipientType = (typeof emailRecipientTypeValues)[number]
+
+export const emailRecipientSelectionSchema = z.object({
+  recipientEmailType: z.enum(emailRecipientTypeValues).default('submitter'),
+})
+
 // ─── Sub-Merchant Form Schemas ───────────────────────────────────────────────
 
 export const selectSubMerchantFormSchema = z
@@ -239,6 +246,8 @@ export type SelectSubMerchantFormInput = z.infer<
 export const sendAgreementEmailSchema = z
   .object({
     remarks: z.string().max(2000).optional().nullable(),
+    recipientEmailType:
+      emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
   })
   .strict()
 
@@ -279,13 +288,14 @@ export type SaveMidCreationDetailsInput = z.infer<
   typeof saveMidCreationDetailsSchema
 >
 
-export const sendMidCreationEmailSchema = z.object({}).strict()
+export const sendMidCreationEmailSchema = emailRecipientSelectionSchema.strict()
 
-export type SendMidCreationEmailInput = object
+export type SendMidCreationEmailInput = z.infer<typeof sendMidCreationEmailSchema>
 
 export const sendLiveEmailSchema = z
   .object({
-    email: z.string().trim().email().max(255),
+    recipientEmailType:
+      emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
   })
   .strict()
 

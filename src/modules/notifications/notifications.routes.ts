@@ -90,9 +90,10 @@ notificationRoutes.patch('/:id/read', async (c) => {
 notificationRoutes.get('/stream', (c) => {
   const auth = c.get('auth')
 
+  c.header('Content-Type', 'text/event-stream; charset=utf-8')
   c.header('Cache-Control', 'no-cache, no-transform')
-  c.header('Connection', 'keep-alive')
-  c.header('Content-Encoding', 'Identity')
+  c.header('Content-Encoding', 'identity')
+  c.header('Vary', 'Origin, Authorization, Cookie')
   c.header('X-Accel-Buffering', 'no')
 
   return streamSSE(

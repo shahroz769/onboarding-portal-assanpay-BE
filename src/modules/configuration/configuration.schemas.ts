@@ -5,6 +5,8 @@ const nullableHoursField = z.preprocess(
   z.number().int().min(1).max(8760).nullable(),
 )
 
+const emailAddressSchema = z.string().email()
+
 export const linkDeadlineSettingsSchema = z
   .object({
     passwordResetHours: nullableHoursField,
@@ -29,6 +31,24 @@ export const emailSendingModeSettingsSchema = z
 export const merchantPortalSettingsSchema = z
   .object({
     loginUrl: z.string().trim().url().max(2048),
+    officeAddress: z.string().trim().max(1000).default(''),
+    whatsappSupportNumber: z
+      .string()
+      .trim()
+      .max(32)
+      .regex(/^\d*$/, 'WhatsApp support number must contain numbers only.')
+      .default(''),
+    supportEmail: z
+      .string()
+      .trim()
+      .max(320)
+      .refine(
+        (value) => value === '' || emailAddressSchema.safeParse(value).success,
+        {
+          message: 'Enter a valid support email.',
+        },
+      )
+      .default(''),
   })
   .strict()
 

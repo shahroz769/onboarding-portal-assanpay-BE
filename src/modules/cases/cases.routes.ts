@@ -11,6 +11,7 @@ import {
   closeUnsuccessfulSchema,
   createCaseSchema,
   createCommentSchema,
+  emailRecipientSelectionSchema,
   listCasesQuerySchema,
   markLiveLimitsAppliedSchema,
   markTestingLimitsAppliedSchema,
@@ -44,6 +45,7 @@ import type {
   SelectSubMerchantFormInput,
   UpdateCasePriorityInput,
   UpdateCaseStatusInput,
+  EmailRecipientType,
 } from './cases.schemas'
 import {
   advanceStage,
@@ -90,6 +92,21 @@ export const caseRoutes = new Hono<AppEnv>()
 function parseManualCommunicationChannel(value: FormDataEntryValue | null) {
   if (value === 'whatsapp') return 'whatsapp' as const
   return 'email' as const
+}
+
+function parseEmailRecipientType(
+  value: FormDataEntryValue | null,
+): EmailRecipientType {
+  const parsed = emailRecipientSelectionSchema.safeParse({
+    recipientEmailType: typeof value === 'string' ? value : undefined,
+  })
+  if (!parsed.success) {
+    throw new AppError(
+      400,
+      parsed.error.issues[0]?.message ?? 'Invalid recipient email type.',
+    )
+  }
+  return parsed.data.recipientEmailType
 }
 
 // TEMP DEVELOPMENT: public case creation. Revert by moving this back below
@@ -192,14 +209,15 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
   })
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
-  const email = formData.get('email')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
+  const recipientEmailType = parseEmailRecipientType(
+    formData.get('recipientEmailType'),
+  )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
     throw new AppError(400, 'tokenId is required.')
-  if (typeof email !== 'string') throw new AppError(400, 'email is required.')
-  const parsed = sendLiveEmailSchema.safeParse({ email })
+  const parsed = sendLiveEmailSchema.safeParse({ recipientEmailType })
   if (!parsed.success) {
     throw new AppError(
       400,
@@ -385,12 +403,19 @@ caseRoutes.patch(
 )
 
 // POST /api/cases/:id/send-for-resubmission — Email client + move to awaiting_client
-caseRoutes.post('/:id/send-for-resubmission', async (c) => {
-  const auth = c.get('auth')
-  const id = c.req.param('id')
-  const result = await sendForResubmission(id, auth.userId)
-  return c.json(result)
-})
+caseRoutes.post(
+  '/:id/send-for-resubmission',
+  zodValidator('json', emailRecipientSelectionSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as {
+      recipientEmailType: EmailRecipientType
+    }
+    const result = await sendForResubmission(id, auth.userId, input)
+    return c.json(result)
+  },
+)
 
 // PUT /api/cases/:id/sub-merchant-form/selection — Select sub-merchant
 caseRoutes.put(
@@ -533,12 +558,19 @@ caseRoutes.post(
 )
 
 // POST /api/cases/:id/send-for-resubmission/preview - Get resubmission email preview
-caseRoutes.post('/:id/send-for-resubmission/preview', async (c) => {
-  const auth = c.get('auth')
-  const id = c.req.param('id')
-  const result = await getResubmissionEmailPreview(id, auth.userId)
-  return c.json(result)
-})
+caseRoutes.post(
+  '/:id/send-for-resubmission/preview',
+  zodValidator('json', emailRecipientSelectionSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as {
+      recipientEmailType: EmailRecipientType
+    }
+    const result = await getResubmissionEmailPreview(id, auth.userId, input)
+    return c.json(result)
+  },
+)
 
 // POST /api/cases/:id/send-for-resubmission/manual - Confirm manual resubmission email
 caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
@@ -552,6 +584,9 @@ caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
+  const recipientEmailType = parseEmailRecipientType(
+    formData.get('recipientEmailType'),
+  )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -562,6 +597,7 @@ caseRoutes.post('/:id/send-for-resubmission/manual', async (c) => {
     file,
     tokenId,
     channel,
+    recipientEmailType,
   })
   return c.json(result)
 })
@@ -592,6 +628,9 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
   const tokenId = formData.get('tokenId')
   const remarks = formData.get('remarks')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
+  const recipientEmailType = parseEmailRecipientType(
+    formData.get('recipientEmailType'),
+  )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
@@ -603,6 +642,7 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
     remarks: typeof remarks === 'string' ? remarks : null,
     file,
     channel,
+    recipientEmailType,
   })
   return c.json(result)
 })
@@ -632,11 +672,14 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
   const file = formData.get('file')
   const tokenId = formData.get('tokenId')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
+  const recipientEmailType = parseEmailRecipientType(
+    formData.get('recipientEmailType'),
+  )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
   if (typeof tokenId !== 'string' || !tokenId)
     throw new AppError(400, 'tokenId is required.')
-  const parsed = sendMidCreationEmailSchema.safeParse({})
+  const parsed = sendMidCreationEmailSchema.safeParse({ recipientEmailType })
   if (!parsed.success)
     throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid input.')
   const auth = c.get('auth')
@@ -645,6 +688,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
     tokenId,
     file,
     channel,
+    recipientEmailType: parsed.data.recipientEmailType,
   })
   return c.json(result)
 })

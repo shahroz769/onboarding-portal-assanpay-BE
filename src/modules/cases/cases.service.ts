@@ -106,8 +106,10 @@ import type {
   SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
   SelectSubMerchantFormInput,
+  SendAgreementEmailInput,
   SendLiveEmailInput,
   SendMidCreationEmailInput,
+  EmailRecipientType,
   UpdateCaseStatusInput,
 } from './cases.schemas'
 import {
@@ -4279,6 +4281,24 @@ async function assertManualEmailEnabled(): Promise<void> {
 
 // ─── Email proof upload helper ────────────────────────────────────────────────
 
+function resolveMerchantEmailRecipient(
+  merchant: { submitterEmail: string | null; businessEmail: string | null },
+  recipientEmailType: EmailRecipientType = 'submitter',
+) {
+  const email =
+    recipientEmailType === 'business'
+      ? merchant.businessEmail
+      : merchant.submitterEmail
+  const label =
+    recipientEmailType === 'business' ? 'business email' : 'submitter email'
+
+  if (!email) {
+    throw new AppError(400, `No ${label} is on file for this merchant.`)
+  }
+
+  return { email, recipientEmailType }
+}
+
 function validateEmailProofFile(file: File) {
   if (file.size > 10 * 1024 * 1024) {
     throw new AppError(400, 'Screenshot must be 10 MB or smaller.')
@@ -4367,6 +4387,7 @@ export type ResubmissionEmailPreviewResult = {
 export async function getResubmissionEmailPreview(
   caseId: string,
   userId: string,
+  input: { recipientEmailType?: EmailRecipientType } = {},
 ): Promise<ResubmissionEmailPreviewResult> {
   await assertManualEmailEnabled()
   const db = getDb()
@@ -4382,6 +4403,7 @@ export async function getResubmissionEmailPreview(
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
       merchantWhatsappNumber: merchants.activeWhatsappNumber,
     })
     .from(cases)
@@ -4406,9 +4428,13 @@ export async function getResubmissionEmailPreview(
       'The case must be in the working or awaiting-client stage to send for resubmission.',
     )
   }
-  if (!row.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: row.merchantSubmitterEmail,
+      businessEmail: row.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const rejectedReviews = await db
     .select({
@@ -4485,7 +4511,7 @@ export async function getResubmissionEmailPreview(
   })
 
   return {
-    recipient: row.merchantSubmitterEmail,
+    recipient: recipient.email,
     subject,
     body,
     tokenId: issued.tokenId,
@@ -4533,6 +4559,7 @@ export async function confirmResubmissionEmailManual(
     tokenId: string
     file: File
     channel?: ManualCommunicationChannel
+    recipientEmailType?: EmailRecipientType
   },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
@@ -4554,6 +4581,7 @@ export async function confirmResubmissionEmailManual(
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
       merchantWhatsappNumber: merchants.activeWhatsappNumber,
     })
     .from(cases)
@@ -4570,8 +4598,13 @@ export async function confirmResubmissionEmailManual(
     !(channel === 'whatsapp' && row.status === 'awaiting_client')
   )
     throw new AppError(400, 'The case must be in the working stage.')
-  if (!row.merchantSubmitterEmail)
-    throw new AppError(400, 'No submitter email on file.')
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: row.merchantSubmitterEmail,
+      businessEmail: row.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
   if (channel === 'whatsapp' && !row.merchantWhatsappNumber) {
     throw new AppError(400, 'No active WhatsApp number is on file.')
   }
@@ -4696,8 +4729,9 @@ export async function confirmResubmissionEmailManual(
         recipient:
           channel === 'whatsapp'
             ? row.merchantWhatsappNumber
-            : row.merchantSubmitterEmail,
-        emailRecipient: row.merchantSubmitterEmail,
+            : recipient.email,
+        emailRecipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
         whatsappRecipient: row.merchantWhatsappNumber,
         screenshotFileId: savedFile.id,
         channel,
@@ -4723,7 +4757,10 @@ export type AgreementEmailPreviewResult = {
 export async function getAgreementEmailPreview(
   caseId: string,
   userId: string,
-  input: { remarks?: string | null } = {},
+  input: {
+    remarks?: string | null
+    recipientEmailType?: EmailRecipientType
+  } = {},
 ): Promise<AgreementEmailPreviewResult> {
   await assertManualEmailEnabled()
   const db = getDb()
@@ -4731,9 +4768,13 @@ export async function getAgreementEmailPreview(
     allowAwaitingClient: true,
   })
 
-  if (!caseRow.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const details = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
@@ -4780,7 +4821,7 @@ export async function getAgreementEmailPreview(
   })
 
   return {
-    recipient: caseRow.merchantSubmitterEmail,
+    recipient: recipient.email,
     subject,
     body,
     tokenId: issued.tokenId,
@@ -4824,6 +4865,7 @@ export async function confirmAgreementEmailManual(
     remarks?: string | null
     file: File
     channel?: ManualCommunicationChannel
+    recipientEmailType?: EmailRecipientType
   },
 ): Promise<ManualEmailResult> {
   await assertManualEmailEnabled()
@@ -4834,9 +4876,13 @@ export async function confirmAgreementEmailManual(
   const caseRow = await loadAgreementCase(caseId, userId, {
     allowAwaitingClient: channel === 'whatsapp',
   })
-  if (!caseRow.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const details = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
@@ -4900,7 +4946,7 @@ export async function confirmAgreementEmailManual(
       .set({
         emailStatus: 'sent',
         emailSentAt: now,
-        emailRecipient: caseRow.merchantSubmitterEmail,
+        emailRecipient: recipient.email,
         lastRejectionRemarks: remarks,
         updatedAt: now,
       })
@@ -4916,7 +4962,8 @@ export async function confirmAgreementEmailManual(
       details: {
         tokenId: input.tokenId,
         expiresAt: tokenRow.expiresAt.toISOString(),
-        recipient: caseRow.merchantSubmitterEmail,
+        recipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
         remarks,
         screenshotFileId: savedFile.id,
         channel,
@@ -4956,6 +5003,13 @@ export async function getMidCreationEmailPreview(
     )
   }
   await assertTestingLimitsAppliedForCredentials(credentials)
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    _input.recipientEmailType,
+  )
 
   const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
     getLinkDeadlineSettings(),
@@ -5034,7 +5088,7 @@ export async function getMidCreationEmailPreview(
   })
 
   return {
-    recipient: credentials.email,
+    recipient: recipient.email,
     subject,
     body,
     tokenId,
@@ -5184,6 +5238,13 @@ export async function confirmMidCreationEmailManual(
     )
   }
   await assertTestingLimitsAppliedForCredentials(credentials)
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const tokenRow = await db.query.midGoLiveTokens.findFirst({
     where: and(
@@ -5218,7 +5279,8 @@ export async function confirmMidCreationEmailManual(
     details: {
       tokenId: input.tokenId,
       availableAt: tokenRow.availableAt.toISOString(),
-      recipient: credentials.email,
+      recipient: recipient.email,
+      recipientEmailType: recipient.recipientEmailType,
       portalMid: credentials.portalMid,
       screenshotFileId: savedFile.id,
       channel,
@@ -5257,10 +5319,17 @@ export async function getLiveActivationEmailPreview(
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
   const subject = `AssanPay account is live for ${caseRow.merchantName}`
 
   return {
-    recipient: input.email,
+    recipient: recipient.email,
     subject,
     body: buildLiveActivationEmailBody({
       merchantName: caseRow.merchantName,
@@ -5285,6 +5354,13 @@ export async function confirmLiveActivationEmailManual(
   validateEmailProofFile(input.file)
   const channel = input.channel ?? 'email'
   const caseRow = await loadLiveCase(caseId, userId)
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   if (input.tokenId !== caseId) {
     throw new AppError(400, 'Invalid preview token.')
@@ -5313,7 +5389,8 @@ export async function confirmLiveActivationEmailManual(
           ? 'live_activation_whatsapp_sent_manual'
           : 'live_activation_email_sent_manual',
       details: {
-        recipient: input.email,
+        recipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
         screenshotFileId: savedFile.id,
         channel,
         manual: true,
@@ -5355,6 +5432,7 @@ If you need any help, just reply to this email.
 export async function sendForResubmission(
   caseId: string,
   userId: string,
+  input: { recipientEmailType?: EmailRecipientType } = {},
 ): Promise<SendForResubmissionResult> {
   await assertAutoEmailEnabled()
   const db = getDb()
@@ -5373,6 +5451,7 @@ export async function sendForResubmission(
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
     })
     .from(cases)
     .innerJoin(queues, eq(cases.queueId, queues.id))
@@ -5402,9 +5481,13 @@ export async function sendForResubmission(
     )
   }
 
-  if (!row.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: row.merchantSubmitterEmail,
+      businessEmail: row.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   // 2. Load rejected field reviews
   const rejectedReviews = await db
@@ -5519,7 +5602,7 @@ export async function sendForResubmission(
   // 6. Send the email
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const emailResult = await sendEmail({
-    to: row.merchantSubmitterEmail,
+    to: recipient.email,
     subject: 'Action required to update your onboarding submission',
     template: 'document-resubmission',
     react: DocumentResubmissionEmail({
@@ -5535,6 +5618,7 @@ export async function sendForResubmission(
     metadata: {
       tokenId: issued.tokenId,
       rejectedFields: rejectedFieldNames,
+      recipientEmailType: recipient.recipientEmailType,
     },
   })
 
@@ -5602,7 +5686,8 @@ export async function sendForResubmission(
         rejectedFieldLabels,
         rejectedFieldDetails,
         emailLogId: emailResult.emailLogId,
-        recipient: row.merchantSubmitterEmail,
+        recipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
       },
       createdAt: sentAt,
     })
@@ -6027,6 +6112,8 @@ async function loadMidCreationCase(caseId: string, userId: string) {
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
       websiteCms: merchants.websiteCms,
       queueName: queues.name,
       queueSlug: queues.slug,
@@ -6061,6 +6148,8 @@ async function loadLiveCase(caseId: string, userId: string) {
       status: cases.status,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
+      merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
       queueName: queues.name,
       queueSlug: queues.slug,
     })
@@ -6087,7 +6176,7 @@ async function loadLiveCase(caseId: string, userId: string) {
 export async function sendMidCreationCredentialsEmail(
   caseId: string,
   userId: string,
-  _input: SendMidCreationEmailInput,
+  input: SendMidCreationEmailInput,
 ): Promise<MidCreationEmailResult> {
   await assertAutoEmailEnabled()
   const db = getDb()
@@ -6100,6 +6189,13 @@ export async function sendMidCreationCredentialsEmail(
     )
   }
   await assertTestingLimitsAppliedForCredentials(credentials)
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const now = new Date()
   const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
@@ -6139,7 +6235,7 @@ export async function sendMidCreationCredentialsEmail(
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
 
   const emailResult = await sendEmail({
-    to: credentials.email,
+    to: recipient.email,
     subject: `AssanPay merchant portal credentials for ${caseRow.merchantName}`,
     template: 'mid-creation',
     react: MidCreationEmail({
@@ -6166,6 +6262,8 @@ export async function sendMidCreationCredentialsEmail(
     metadata: {
       tokenId: tokenRow.id,
       availableAt: availableAt.toISOString(),
+      recipient: recipient.email,
+      recipientEmailType: recipient.recipientEmailType,
       portalEmail: credentials.email,
       portalMid: credentials.portalMid,
       websiteCms: caseRow.websiteCms,
@@ -6203,7 +6301,8 @@ export async function sendMidCreationCredentialsEmail(
     details: {
       tokenId: tokenRow.id,
       emailLogId: emailResult.emailLogId,
-      recipient: credentials.email,
+      recipient: recipient.email,
+      recipientEmailType: recipient.recipientEmailType,
       portalMid: credentials.portalMid,
       availableAt:
         emailResult.status === 'sent' ? availableAt.toISOString() : null,
@@ -6239,9 +6338,16 @@ export async function sendLiveActivationEmail(
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const emailResult = await sendEmail({
-    to: input.email,
+    to: recipient.email,
     subject: `AssanPay account is live for ${caseRow.merchantName}`,
     template: 'live-activation',
     react: LiveActivationEmail({
@@ -6253,7 +6359,8 @@ export async function sendLiveActivationEmail(
     merchantId: caseRow.merchantId,
     idempotencyKey: `live-activation/${caseId}`,
     metadata: {
-      recipient: input.email,
+      recipient: recipient.email,
+      recipientEmailType: recipient.recipientEmailType,
       merchantPortalUrl: merchantPortal.loginUrl,
       liveLimits: limitsAndMdr.live,
     },
@@ -6268,7 +6375,8 @@ export async function sendLiveActivationEmail(
         : 'live_activation_email_failed',
     details: {
       emailLogId: emailResult.emailLogId,
-      recipient: input.email,
+      recipient: recipient.email,
+      recipientEmailType: recipient.recipientEmailType,
       error: emailResult.error ?? null,
     },
   })
@@ -6497,6 +6605,7 @@ async function loadAgreementCase(
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
+      merchantBusinessEmail: merchants.businessEmail,
       merchantType: merchants.merchantType,
       queueId: cases.queueId,
       queueName: queues.name,
@@ -6757,15 +6866,19 @@ export async function uploadPhysicalAgreementCopy(
 export async function sendAgreementForClientUpload(
   caseId: string,
   userId: string,
-  input: { remarks?: string | null } = {},
+  input: SendAgreementEmailInput = {},
 ): Promise<AgreementEmailResult> {
   await assertAutoEmailEnabled()
   const db = getDb()
   const caseRow = await loadAgreementCase(caseId, userId)
 
-  if (!caseRow.merchantSubmitterEmail) {
-    throw new AppError(400, 'No submitter email is on file for this merchant.')
-  }
+  const recipient = resolveMerchantEmailRecipient(
+    {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    input.recipientEmailType,
+  )
 
   const details = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
@@ -6827,7 +6940,7 @@ export async function sendAgreementForClientUpload(
     : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
   const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
   const emailResult = await sendEmail({
-    to: caseRow.merchantSubmitterEmail,
+    to: recipient.email,
     subject: `Agreement for ${caseRow.merchantName}`,
     template: 'agreement',
     react: AgreementEmail({
@@ -6844,6 +6957,7 @@ export async function sendAgreementForClientUpload(
       tokenId: issued.tokenId,
       finalAgreementFileId: details.finalAgreementFileId,
       remarks,
+      recipientEmailType: recipient.recipientEmailType,
     },
   })
 
@@ -6870,7 +6984,7 @@ export async function sendAgreementForClientUpload(
         emailStatus: emailResult.status,
         emailLogId: emailResult.emailLogId,
         emailSentAt: emailResult.status === 'sent' ? now : null,
-        emailRecipient: caseRow.merchantSubmitterEmail,
+        emailRecipient: recipient.email,
         lastRejectionRemarks: remarks,
         updatedAt: now,
       })
@@ -6888,7 +7002,8 @@ export async function sendAgreementForClientUpload(
         expiresAt:
           emailResult.status === 'sent' ? issued.expiresAt.toISOString() : null,
         emailLogId: emailResult.emailLogId,
-        recipient: caseRow.merchantSubmitterEmail,
+        recipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
         remarks,
         error: emailResult.error ?? null,
       },

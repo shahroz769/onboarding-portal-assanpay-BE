@@ -6,17 +6,16 @@ import {
   cases,
   notifications,
   queues,
-  users
-  
+  users,
 } from '../../db/schema'
-import type {NewNotification} from '../../db/schema';
+import type { NewNotification } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import {
   buildCommentSnippet,
   buildNotificationCopy,
 } from './notifications.copy'
-import { publish  } from './notifications.events'
-import type {NotificationStreamEvent} from './notifications.events';
+import { publish } from './notifications.events'
+import type { NotificationStreamEvent } from './notifications.events'
 import type {
   ListNotificationsQuery,
   NotificationType,

@@ -201,6 +201,11 @@ export const localMobileNumberSchema = z
   .string()
   .trim()
   .regex(/^03\d{9}$/, 'Must be a valid mobile number.')
+export const digitsOnlyPhoneNumberSchema = z
+  .string()
+  .trim()
+  .min(1, 'Business phone number is required.')
+  .regex(/^\d+$/, 'Business phone number must contain numbers only.')
 
 export const scalarMerchantSchema = z
   .object({
@@ -213,7 +218,7 @@ export const scalarMerchantSchema = z
     ownerPhone: localMobileNumberSchema,
     activeWhatsappNumber: localMobileNumberSchema,
     businessName: sanitizedStringSchema,
-    businessPhone: trimmedStringSchema,
+    businessPhone: digitsOnlyPhoneNumberSchema,
     businessEmail: z
       .string()
       .trim()
