@@ -1,5 +1,6 @@
 import { lt, or, eq, and, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import { cors } from 'hono/cors'
 
 import { env } from './config/env'
@@ -43,14 +44,23 @@ app.get('/', (c) => {
   })
 })
 
-app.get('/health/db', async (c) => {
-  const result = await getDb().execute(sql`select 1 as ok`)
+async function databaseReadiness(c: Context<AppEnv>) {
+  try {
+    const result = await getDb().execute(sql`select 1 as ok`)
+    const ready = result[0]?.ok === 1
 
-  return c.json({
-    status: 'ok',
-    db: result[0]?.ok === 1,
-  })
-})
+    return c.json(
+      { status: ready ? 'ok' : 'unavailable', db: ready },
+      ready ? 200 : 503,
+    )
+  } catch (error) {
+    console.error('[health] Database readiness check failed:', error)
+    return c.json({ status: 'unavailable', db: false }, 503)
+  }
+}
+
+app.get('/health/ready', databaseReadiness)
+app.get('/health/db', databaseReadiness)
 
 app.route('/api/auth', authRoutes)
 app.route('/api/public', merchantFormRoutes)
