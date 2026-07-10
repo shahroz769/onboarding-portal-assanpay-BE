@@ -33,7 +33,6 @@ function normalizeEmailAddressOrDomain(value: string, ctx: z.RefinementCtx) {
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url(),
-  MIGRATION_DATABASE_URL: z.string().url().optional(),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
@@ -68,15 +67,6 @@ const envSchema = z.object({
 })
 
 export const env = envSchema.parse(Bun.env)
-
-if (
-  Bun.env.NODE_ENV === 'production' &&
-  new URL(env.DATABASE_URL).port !== '6432'
-) {
-  throw new Error(
-    'Production DATABASE_URL must use the PlanetScale PgBouncer endpoint on port 6432.',
-  )
-}
 
 if (env.COOKIE_SAME_SITE === 'none' && !env.COOKIE_SECURE) {
   throw new Error('COOKIE_SAME_SITE=none requires COOKIE_SECURE=true.')

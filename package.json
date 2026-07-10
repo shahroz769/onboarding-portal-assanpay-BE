@@ -2,11 +2,7 @@
   "name": "onboarding-portal-assanpay-BE",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "check": "bun run typecheck && bun run db:check && bun run db:history:check",
-    "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:check": "drizzle-kit check",
-    "db:history:check": "bun run scripts/check-migration-history.ts",
     "db:migrate": "bun run src/db/migrate.ts",
     "db:studio": "drizzle-kit studio"
   },

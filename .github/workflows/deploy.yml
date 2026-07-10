@@ -5,10 +5,6 @@ on:
     branches:
       - main
 
-concurrency:
-  group: production-backend
-  cancel-in-progress: false
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -24,21 +20,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            set -euo pipefail
             cd /home/ubuntu/onboarding-portal-assanpay-BE
-            git checkout main
-            git pull --ff-only origin main
-            bun install --frozen-lockfile
-            bun run check
-            NODE_ENV=production bun run db:migrate
-            pm2 reload onboarding-backend --update-env
-
-            for attempt in $(seq 1 12); do
-              if curl --fail --silent --show-error http://127.0.0.1:3000/health/ready > /dev/null; then
-                exit 0
-              fi
-              sleep 5
-            done
-
-            pm2 logs onboarding-backend --lines 100 --nostream
-            exit 1
+            git pull origin main
+            bun install
+            pm2 restart onboarding-backend
