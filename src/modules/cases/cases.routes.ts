@@ -110,7 +110,7 @@ function parseEmailRecipientType(
 }
 
 // TEMP DEVELOPMENT: public case creation. Revert by moving this back below
-// requireAuth with requireRoles("admin", "supervisor").
+// requireAuth with requireRoles("super_admin", "admin").
 caseRoutes.post('/', zodValidator('json', createCaseSchema), async (c) => {
   const input = c.req.valid('json' as never) as CreateCaseInput
   const result = await createCase(input)
@@ -133,10 +133,10 @@ caseRoutes.get('/', zodValidator('query', listCasesQuerySchema), async (c) => {
   return c.json(result)
 })
 
-// POST /api/cases — Create case (admin, supervisor)
+// POST /api/cases — Create case (super admin, admin)
 caseRoutes.post(
   '/',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', createCaseSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as CreateCaseInput
@@ -159,10 +159,10 @@ caseRoutes.post(
   },
 )
 
-// POST /api/cases/bulk-assign — Bulk assign owner (admin, supervisor)
+// POST /api/cases/bulk-assign — Bulk assign owner (super admin, admin)
 caseRoutes.post(
   '/bulk-assign',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', bulkAssignCaseSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -235,10 +235,10 @@ caseRoutes.post('/:id/live/send-mail/manual', async (c) => {
   return c.json(result)
 })
 
-// PATCH /api/cases/:id/assign — Assign, transfer, or unassign (admin, supervisor)
+// PATCH /api/cases/:id/assign — Assign, transfer, or unassign (super admin, admin)
 caseRoutes.patch(
   '/:id/assign',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', assignCaseSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -249,10 +249,10 @@ caseRoutes.patch(
   },
 )
 
-// PATCH /api/cases/:id/priority — Update priority (admin, supervisor)
+// PATCH /api/cases/:id/priority — Update priority (super admin, admin)
 caseRoutes.patch(
   '/:id/priority',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', updateCasePrioritySchema),
   async (c) => {
     const id = c.req.param('id')

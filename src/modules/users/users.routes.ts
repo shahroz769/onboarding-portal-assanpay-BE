@@ -28,7 +28,7 @@ userRoutes.use('*', requireAuth)
 userRoutes.get(
   '/',
   zodValidator('query', listUsersQuerySchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const query = c.req.valid('query')
     const users = await listUsers(query)
@@ -39,7 +39,7 @@ userRoutes.get(
 userRoutes.post(
   '/bulk-status',
   zodValidator('json', bulkUserStatusSchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const input = c.req.valid('json')
     const result = await bulkUpdateUserStatus(
@@ -54,7 +54,7 @@ userRoutes.post(
 userRoutes.post(
   '/:id/reset-password',
   zodValidator('param', userIdParamSchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const { id } = c.req.valid('param')
     const result = await sendResetPassword(c.var.auth, id)
@@ -65,7 +65,7 @@ userRoutes.post(
 userRoutes.get(
   '/:id',
   zodValidator('param', userIdParamSchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const { id } = c.req.valid('param')
     const user = await getUserById(id)
@@ -76,7 +76,7 @@ userRoutes.get(
 userRoutes.post(
   '/',
   zodValidator('json', createUserSchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const input = c.req.valid('json')
     const user = await createUser(c.var.auth, input)
@@ -88,7 +88,7 @@ userRoutes.patch(
   '/:id',
   zodValidator('param', userIdParamSchema),
   zodValidator('json', updateUserSchema),
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const { id } = c.req.valid('param')
     const input = c.req.valid('json')
@@ -100,7 +100,7 @@ userRoutes.patch(
 userRoutes.delete(
   '/:id',
   zodValidator('param', userIdParamSchema),
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   async (c) => {
     const { id } = c.req.valid('param')
     const user = await deactivateUser(c.var.auth, id)

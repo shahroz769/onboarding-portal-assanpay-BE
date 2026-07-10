@@ -412,8 +412,8 @@ export async function updateUser(
   const isChangingRole =
     input.roleType !== undefined && input.roleType !== existingUser.roleType
 
-  if (existingUser.roleType === 'admin' && isChangingRole) {
-    throw new AppError(403, 'Admin role cannot be changed.')
+  if (existingUser.roleType === 'super_admin' && isChangingRole) {
+    throw new AppError(403, 'Super Admin role cannot be changed.')
   }
 
   if (isChangingRole) {
@@ -422,8 +422,8 @@ export async function updateUser(
     }
   }
 
-  if (actor.roleType === 'supervisor' && existingUser.roleType !== 'agent') {
-    throw new AppError(403, 'Supervisors can only update agents.')
+  if (actor.roleType === 'admin' && existingUser.roleType !== 'agent') {
+    throw new AppError(403, 'Admins can only update agents.')
   }
 
   const existingAccess = await getExistingUserQueueAccess(userId)
@@ -492,13 +492,13 @@ export async function bulkUpdateUserStatus(
     throw new AppError(400, 'You cannot deactivate your own account.')
   }
 
-  if (actor.roleType === 'supervisor') {
+  if (actor.roleType === 'admin') {
     const targetUsers = await getDb().query.users.findMany({
       where: inArray(users.id, uniqueIds),
       columns: { roleType: true },
     })
     if (targetUsers.some((user) => user.roleType !== 'agent')) {
-      throw new AppError(403, 'Supervisors can only update agents.')
+      throw new AppError(403, 'Admins can only update agents.')
     }
   }
 
@@ -533,8 +533,8 @@ export async function sendResetPassword(actor: SessionUser, userId: string) {
     throw new AppError(404, 'User not found.')
   }
 
-  if (actor.roleType === 'supervisor' && user.roleType !== 'agent') {
-    throw new AppError(403, 'Supervisors can only reset agent passwords.')
+  if (actor.roleType === 'admin' && user.roleType !== 'agent') {
+    throw new AppError(403, 'Admins can only reset agent passwords.')
   }
 
   await sendPasswordEmail({

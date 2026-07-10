@@ -37,7 +37,7 @@ queueRoutes.get('/', async (c) => {
 // POST /api/queues — Create queue (admin only)
 queueRoutes.post(
   '/',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', createQueueSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as CreateQueueInput
@@ -48,7 +48,7 @@ queueRoutes.post(
 
 queueRoutes.patch(
   '/:id/status',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', updateQueueStatusSchema),
   async (c) => {
     const id = c.req.param('id')
@@ -60,7 +60,7 @@ queueRoutes.patch(
 
 queueRoutes.patch(
   '/:id/sla',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', updateQueueSlaSchema),
   async (c) => {
     const id = c.req.param('id')

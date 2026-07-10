@@ -274,6 +274,13 @@
       "when": 1782945600000,
       "tag": "0039_utility_bill_document",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783728000000,
+      "tag": "0040_rename_user_roles",
+      "breakpoints": true
     }
   ]
 }

@@ -58,10 +58,10 @@ merchantRoutes.get('/:id', async (c) => {
   return c.json(result)
 })
 
-// PATCH /api/merchants/:id/limits-mdr — Update per-merchant limits & MDR (admin, supervisor)
+// PATCH /api/merchants/:id/limits-mdr — Update per-merchant limits & MDR (super admin, admin)
 merchantRoutes.patch(
   '/:id/limits-mdr',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', merchantLimitsMdrSchema),
   async (c) => {
     const id = c.req.param('id')
@@ -71,10 +71,10 @@ merchantRoutes.patch(
   },
 )
 
-// DELETE /api/merchants/:id/limits-mdr — Reset to global limits & MDR (admin, supervisor)
+// DELETE /api/merchants/:id/limits-mdr — Reset to global limits & MDR (super admin, admin)
 merchantRoutes.delete(
   '/:id/limits-mdr',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   async (c) => {
     const id = c.req.param('id')
     const result = await resetMerchantLimitsMdr(id)
@@ -85,7 +85,7 @@ merchantRoutes.delete(
 // PATCH /api/merchants/:id/terminate — Terminate merchant and close open cases
 merchantRoutes.patch(
   '/:id/terminate',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', terminateMerchantSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -96,10 +96,10 @@ merchantRoutes.patch(
   },
 )
 
-// PATCH /api/merchants/:id/priority — Update priority (admin, supervisor)
+// PATCH /api/merchants/:id/priority — Update priority (super admin, admin)
 merchantRoutes.patch(
   '/:id/priority',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', updatePrioritySchema),
   async (c) => {
     const id = c.req.param('id')
@@ -112,7 +112,7 @@ merchantRoutes.patch(
 // POST /api/merchants/bulk-terminate — Bulk terminate merchants and close open cases
 merchantRoutes.post(
   '/bulk-terminate',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', bulkTerminateMerchantsSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -123,7 +123,7 @@ merchantRoutes.post(
 )
 
 // DELETE /api/merchants/:id — Soft delete (admin only)
-merchantRoutes.delete('/:id', requireRoles('admin'), async (c) => {
+merchantRoutes.delete('/:id', requireRoles('super_admin'), async (c) => {
   const id = c.req.param('id')
   const result = await softDeleteMerchant(id)
   return c.json(result)
@@ -132,7 +132,7 @@ merchantRoutes.delete('/:id', requireRoles('admin'), async (c) => {
 // POST /api/merchants/bulk-delete — Bulk soft delete (admin only)
 merchantRoutes.post(
   '/bulk-delete',
-  requireRoles('admin'),
+  requireRoles('super_admin'),
   zodValidator('json', bulkIdsSchema),
   async (c) => {
     const { ids } = c.req.valid('json' as never) as BulkIdsInput
@@ -141,10 +141,10 @@ merchantRoutes.post(
   },
 )
 
-// POST /api/merchants/bulk-priority — Bulk priority update (admin, supervisor)
+// POST /api/merchants/bulk-priority — Bulk priority update (super admin, admin)
 merchantRoutes.post(
   '/bulk-priority',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', bulkPrioritySchema),
   async (c) => {
     const { ids, priority, note } = c.req.valid(

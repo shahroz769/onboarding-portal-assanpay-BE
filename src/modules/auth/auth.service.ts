@@ -14,8 +14,8 @@ import type { RoleType, SessionUser } from '../../types/auth'
 import { getLinkDeadlineSettings } from '../configuration/configuration.service'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
-  admin: ['supervisor', 'agent'],
-  supervisor: ['agent'],
+  super_admin: ['admin', 'agent'],
+  admin: ['agent'],
   agent: [],
 }
 
@@ -116,14 +116,14 @@ async function issueSession(params: {
   }
 }
 
-export async function registerAdmin(input: {
+export async function registerSuperAdmin(input: {
   name: string
   email: string
   username: string
   password: string
 }) {
-  if (!env.ALLOW_ADMIN_REGISTRATION) {
-    throw new AppError(403, 'Admin registration is disabled.')
+  if (!env.ALLOW_SUPER_ADMIN_REGISTRATION) {
+    throw new AppError(403, 'Super Admin registration is disabled.')
   }
 
   await assertUniqueUser({
@@ -140,7 +140,7 @@ export async function registerAdmin(input: {
       email: input.email,
       username: input.username,
       passwordHash,
-      roleType: 'admin',
+      roleType: 'super_admin',
       status: 'active',
     })
     .returning()

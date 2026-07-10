@@ -31,7 +31,7 @@ dashboardRoutes.get(
 
 dashboardRoutes.post(
   '/portal-mids/apply-limits',
-  requireRoles('admin', 'supervisor'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', applyPortalMidLimitsSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as ApplyPortalMidLimitsInput

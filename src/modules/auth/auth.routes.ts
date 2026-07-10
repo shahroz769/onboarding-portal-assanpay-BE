@@ -9,7 +9,7 @@ import type { AppEnv } from '../../types/auth'
 import {
   loginSchema,
   passwordTokenParamSchema,
-  registerAdminSchema,
+  registerSuperAdminSchema,
   setPasswordSchema,
 } from './auth.schemas'
 import {
@@ -17,7 +17,7 @@ import {
   login,
   logout,
   refreshSession,
-  registerAdmin,
+  registerSuperAdmin,
   setPasswordWithToken,
 } from './auth.service'
 
@@ -58,18 +58,18 @@ authRoutes.use('/refresh', csrf({ origin: env.CORS_ORIGIN }))
 authRoutes.use('/logout', csrf({ origin: env.CORS_ORIGIN }))
 
 authRoutes.use('/login', authRateLimiter)
-authRoutes.use('/register-admin', authRateLimiter)
+authRoutes.use('/register-super-admin', authRateLimiter)
 
 authRoutes.post(
-  '/register-admin',
-  zodValidator('json', registerAdminSchema),
+  '/register-super-admin',
+  zodValidator('json', registerSuperAdminSchema),
   async (c) => {
-    if (!env.ALLOW_ADMIN_REGISTRATION) {
-      return c.json({ error: 'Admin registration is disabled.' }, 403)
+    if (!env.ALLOW_SUPER_ADMIN_REGISTRATION) {
+      return c.json({ error: 'Super Admin registration is disabled.' }, 403)
     }
 
     const input = c.req.valid('json')
-    const user = await registerAdmin(input)
+    const user = await registerSuperAdmin(input)
 
     return c.json({ user }, 201)
   },
