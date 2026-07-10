@@ -1,9 +1,11 @@
 import { defineConfig } from 'drizzle-kit'
 
-const databaseUrl = process.env.DATABASE_URL
+const directDatabaseUrl = process.env.DIRECT_DATABASE_URL
 
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is required to use drizzle-kit.')
+if (!directDatabaseUrl) {
+  throw new Error(
+    'DIRECT_DATABASE_URL is required to use drizzle-kit. Use the direct PlanetScale connection (port 5432).',
+  )
 }
 
 export default defineConfig({
@@ -11,6 +13,6 @@ export default defineConfig({
   schema: './src/db/schema.ts',
   dialect: 'postgresql',
   dbCredentials: {
-    url: databaseUrl,
+    url: directDatabaseUrl,
   },
 })

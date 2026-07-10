@@ -20,6 +20,9 @@ export function getQueryClient() {
   if (!client) {
     client = postgres(getDatabaseUrl(), {
       max: 10,
+      // PlanetScale PgBouncer uses transaction pooling. Avoid session-bound
+      // prepared statements because a later transaction may use another server.
+      prepare: false,
     })
   }
 

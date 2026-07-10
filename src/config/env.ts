@@ -33,6 +33,7 @@ function normalizeEmailAddressOrDomain(value: string, ctx: z.RefinementCtx) {
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url(),
+  DIRECT_DATABASE_URL: z.string().url().optional(),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
