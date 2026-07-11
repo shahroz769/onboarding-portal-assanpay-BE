@@ -874,7 +874,8 @@ export const caseResubmissionTokens = pgTable(
     caseId: uuid('case_id')
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
-    token: varchar('token', { length: 86 }).notNull().unique(),
+    token: varchar('token', { length: 86 }).unique(),
+    tokenHash: varchar('token_hash', { length: 64 }).unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id, {
@@ -929,7 +930,8 @@ export const midGoLiveTokens = pgTable(
     caseId: uuid('case_id')
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
-    token: varchar('token', { length: 86 }).notNull().unique(),
+    token: varchar('token', { length: 86 }).unique(),
+    tokenHash: varchar('token_hash', { length: 64 }).unique(),
     availableAt: timestamp('available_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     liveCaseId: uuid('live_case_id').references(() => cases.id, {

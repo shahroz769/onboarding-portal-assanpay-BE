@@ -1,5 +1,11 @@
 # Onboarding Portal — Backend Plan
 
+> Historical design note: this document is not the current operating guide.
+> The implemented service now uses Resend, Google Drive, the
+> `super_admin`/`admin`/`agent` role model, and EC2/PM2 deployment. Refer to
+> the root README, AGENTS.md, source routes, and deployment workflow for
+> authoritative current behavior. Items below may be superseded or pending.
+
 ## Stack Recommendations
 
 ### ORM: Drizzle ORM (recommended over Prisma)

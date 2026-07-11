@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm'
+import { eq, or } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
 import { caseResubmissionTokens } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { hashToken } from '../../lib/security'
 
 export type IssuedToken = {
   token: string
@@ -30,6 +31,7 @@ export async function issueToken(
 ): Promise<IssuedToken> {
   const db = getDb()
   const tokenString = generateTokenString()
+  const tokenHash = await hashToken(tokenString)
   const expiresAt =
     ttlHours == null
       ? new Date(Date.UTC(9999, 11, 31)) // no expiry
@@ -39,7 +41,8 @@ export async function issueToken(
     .insert(caseResubmissionTokens)
     .values({
       caseId,
-      token: tokenString,
+      token: null,
+      tokenHash,
       expiresAt,
       createdBy: createdByUserId,
     })
@@ -54,6 +57,7 @@ export async function issueToken(
 
 export async function validateToken(token: string): Promise<ValidatedToken> {
   const db = getDb()
+  const tokenHash = await hashToken(token)
   const [row] = await db
     .select({
       id: caseResubmissionTokens.id,
@@ -62,7 +66,12 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
       consumedAt: caseResubmissionTokens.consumedAt,
     })
     .from(caseResubmissionTokens)
-    .where(eq(caseResubmissionTokens.token, token))
+    .where(
+      or(
+        eq(caseResubmissionTokens.tokenHash, tokenHash),
+        eq(caseResubmissionTokens.token, token),
+      ),
+    )
     .limit(1)
 
   if (!row) {

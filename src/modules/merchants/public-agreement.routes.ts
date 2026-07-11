@@ -88,6 +88,13 @@ agreementUploadRoutes.post('/:token', async (c) => {
   }
 
   const storage = new GoogleDriveStorageProvider()
+  const previousCaseFile = await db.query.caseFiles.findFirst({
+    where: and(
+      eq(caseFiles.caseId, caseRow.id),
+      eq(caseFiles.fileKind, AGREEMENT_CLIENT_FILE_KIND),
+    ),
+    columns: { googleDriveFileId: true },
+  })
   const folder = await ensureMerchantFolderPath({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,
@@ -106,7 +113,8 @@ agreementUploadRoutes.post('/:token', async (c) => {
   })
 
   const now = new Date()
-  await db.transaction(async (tx) => {
+  try {
+    await db.transaction(async (tx) => {
     const [caseFile] = await tx
       .insert(caseFiles)
       .values({
@@ -184,7 +192,24 @@ agreementUploadRoutes.post('/:token', async (c) => {
         fileUrl: uploaded.webViewLink,
       },
     })
-  })
+    })
+  } catch (error) {
+    await storage.deleteFile(uploaded.fileId).catch((cleanupError) => {
+      console.error('[agreement-upload.cleanup-new-file]', cleanupError)
+    })
+    throw error
+  }
+
+  if (
+    previousCaseFile?.googleDriveFileId &&
+    previousCaseFile.googleDriveFileId !== uploaded.fileId
+  ) {
+    await storage
+      .deleteFile(previousCaseFile.googleDriveFileId)
+      .catch((cleanupError) => {
+        console.error('[agreement-upload.cleanup-previous-file]', cleanupError)
+      })
+  }
 
   if (caseRow.ownerId) {
     await notifyOnResubmission({

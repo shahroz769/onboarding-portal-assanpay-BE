@@ -4,6 +4,7 @@ import { csrf } from 'hono/csrf'
 import { rateLimiter } from 'hono-rate-limiter'
 
 import { env } from '../../config/env'
+import { getClientIp } from '../../lib/client-ip'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
 import {
@@ -43,10 +44,7 @@ const authRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 15,
   standardHeaders: 'draft-6',
-  keyGenerator: (c) =>
-    c.req.header('x-forwarded-for') ??
-    c.req.header('cf-connecting-ip') ??
-    'unknown',
+  keyGenerator: getClientIp,
   handler: (c) =>
     c.json({ error: 'Too many attempts. Please try again later.' }, 429),
 })
@@ -80,7 +78,7 @@ authRoutes.post('/login', zodValidator('json', loginSchema), async (c) => {
   const session = await login({
     ...input,
     userAgent: c.req.header('user-agent'),
-    ipAddress: c.req.header('x-forwarded-for') ?? '',
+    ipAddress: getClientIp(c),
   })
 
   const cookieOptions = getCookieOptions()
@@ -102,7 +100,7 @@ authRoutes.post('/refresh', async (c) => {
   const session = await refreshSession({
     refreshToken,
     userAgent: c.req.header('user-agent'),
-    ipAddress: c.req.header('x-forwarded-for') ?? '',
+    ipAddress: getClientIp(c),
   })
 
   const cookieOptions = getCookieOptions()

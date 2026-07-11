@@ -281,6 +281,13 @@
       "when": 1783728000000,
       "tag": "0040_rename_user_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1783814400000,
+      "tag": "0041_hash_public_tokens",
+      "breakpoints": true
     }
   ]
 }

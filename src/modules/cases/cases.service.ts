@@ -33,11 +33,11 @@ import {
   queueStages,
   subMerchantFormDetails,
   subMerchantDraftTemplates,
-  userQueueAccess,
   users,
 } from '../../db/schema'
 import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { hashToken } from '../../lib/security'
 import { env } from '../../config/env'
 import type { SessionUser } from '../../types/auth'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
@@ -75,6 +75,7 @@ import {
   triggerCasesAfterSuccessfulClose,
 } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
+import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
   PRIVATE_INTERNAL_CASE_FILES_PATH,
   PRIVATE_KYC_APPROVED_PATH,
@@ -123,6 +124,13 @@ import {
   SUB_MERCHANT_FORM_QUEUE_SLUG,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
+import {
+  assertCanViewCase,
+  assertCanWorkCase,
+  assertCaseOwner,
+  assertOwnerCanWorkCases,
+  getAgentQueueAccess,
+} from './case-access.service'
 
 const caseStatusValueSet = new Set<string>(caseStatusValues)
 const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024
@@ -193,126 +201,6 @@ const WORDPRESS_SCREENSHOT_EXTENSIONS = new Set([
   '.png',
   '.webp',
 ])
-
-async function getAgentQueueAccess(userId: string) {
-  const user = await getDb().query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { roleType: true, queueViewScope: true },
-  })
-
-  if (!user || user.roleType !== 'agent') {
-    return null
-  }
-
-  const rows = await getDb()
-    .select({
-      queueId: userQueueAccess.queueId,
-      accessType: userQueueAccess.accessType,
-    })
-    .from(userQueueAccess)
-    .where(eq(userQueueAccess.userId, userId))
-
-  return {
-    viewScope: user.queueViewScope,
-    viewQueueIds: rows
-      .filter((row) => row.accessType === 'view')
-      .map((row) => row.queueId),
-    workQueueIds: rows
-      .filter((row) => row.accessType === 'work')
-      .map((row) => row.queueId),
-  }
-}
-
-async function assertCanViewCase(caseId: string, actor?: SessionUser) {
-  if (!actor || actor.roleType !== 'agent') return
-
-  const access = await getAgentQueueAccess(actor.userId)
-  if (!access || access.viewScope === 'all') return
-
-  const caseRow = await getDb().query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { queueId: true },
-  })
-
-  if (!caseRow) {
-    throw new AppError(404, 'Case not found.')
-  }
-
-  if (!access.viewQueueIds.includes(caseRow.queueId)) {
-    throw new AppError(403, 'You do not have access to this queue.')
-  }
-}
-
-async function assertCanWorkCase(caseId: string, userId: string) {
-  const access = await getAgentQueueAccess(userId)
-  if (!access) return
-
-  const caseRow = await getDb().query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { queueId: true },
-  })
-
-  if (!caseRow) {
-    throw new AppError(404, 'Case not found.')
-  }
-
-  if (!access.workQueueIds.includes(caseRow.queueId)) {
-    throw new AppError(403, 'You do not have working access to this queue.')
-  }
-}
-
-async function assertOwnerCanWorkCases(
-  ownerId: string | null,
-  caseIds: string[],
-) {
-  if (!ownerId) return
-
-  const access = await getAgentQueueAccess(ownerId)
-  if (!access) return
-
-  const rows = await getDb()
-    .select({
-      queueId: cases.queueId,
-      queueName: queues.name,
-    })
-    .from(cases)
-    .innerJoin(queues, eq(cases.queueId, queues.id))
-    .where(inArray(cases.id, caseIds))
-
-  const workQueueIds = new Set(access.workQueueIds)
-  const inaccessibleQueueNames = Array.from(
-    new Set(
-      rows
-        .filter((row) => !workQueueIds.has(row.queueId))
-        .map((row) => row.queueName),
-    ),
-  )
-
-  if (inaccessibleQueueNames.length > 0) {
-    throw new AppError(
-      403,
-      `Selected employee does not have work access to: ${inaccessibleQueueNames.join(', ')}.`,
-    )
-  }
-}
-
-async function assertCaseOwner(caseId: string, userId: string) {
-  const caseRow = await getDb().query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { ownerId: true },
-  })
-
-  if (!caseRow) {
-    throw new AppError(404, 'Case not found.')
-  }
-
-  if (caseRow.ownerId !== userId) {
-    throw new AppError(
-      403,
-      'Only the current case owner can work on this case.',
-    )
-  }
-}
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -2211,8 +2099,11 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       })
       .returning()
 
-    agreementRecord = createdAgreement
-      ? {
+    if (!createdAgreement) {
+      throw new AppError(500, 'Failed to initialize agreement case details.')
+    }
+
+    agreementRecord = {
           businessType: createdAgreement.businessType,
           draftKey: createdAgreement.draftKey,
           draftLabel: createdAgreement.draftLabel,
@@ -2230,7 +2121,6 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
           finalAgreementGoogleDriveDownloadLink: null,
           finalAgreementCreatedAt: null,
         }
-      : null
   }
 
   const clientAgreement = agreementRecord
@@ -2564,6 +2454,7 @@ export async function advanceStage(caseId: string, userId: string) {
       caseNumber: cases.caseNumber,
       status: cases.status,
       priority: cases.priority,
+      createdAt: cases.createdAt,
     })
     .from(cases)
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
@@ -2584,8 +2475,10 @@ export async function advanceStage(caseId: string, userId: string) {
     throw new AppError(400, 'Case has no current stage.')
   }
 
+  const currentStageId = caseData.currentStageId
+
   const currentStage = await db.query.queueStages.findFirst({
-    where: eq(queueStages.id, caseData.currentStageId),
+    where: eq(queueStages.id, currentStageId),
   })
 
   if (!currentStage || currentStage.category !== 'in_progress') {
@@ -2599,6 +2492,10 @@ export async function advanceStage(caseId: string, userId: string) {
     where: eq(queues.id, caseData.queueId),
     columns: { qcEnabled: true, slug: true, slaHours: true },
   })
+
+  if (!queue) {
+    throw new AppError(500, 'Case queue is not configured.')
+  }
 
   let targetStage = null
 
@@ -2927,7 +2824,7 @@ export async function advanceStage(caseId: string, userId: string) {
         and(
           eq(cases.id, caseId),
           eq(cases.ownerId, userId),
-          eq(cases.currentStageId, caseData.currentStageId),
+          eq(cases.currentStageId, currentStageId),
           eq(cases.status, caseData.status),
         ),
       )
@@ -3000,6 +2897,7 @@ export async function saveFieldReviews(
       queueId: cases.queueId,
       merchantId: cases.merchantId,
       status: cases.status,
+      createdAt: cases.createdAt,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -3046,7 +2944,7 @@ export async function saveFieldReviews(
 
   const queue = await db.query.queues.findFirst({
     where: eq(queues.id, caseData.queueId),
-    columns: { slug: true },
+    columns: { slug: true, slaHours: true },
   })
 
   const now = new Date()
@@ -3350,6 +3248,7 @@ export async function closeUnsuccessful(
       currentStageId: cases.currentStageId,
       queueId: cases.queueId,
       status: cases.status,
+      createdAt: cases.createdAt,
     })
     .from(cases)
     .where(eq(cases.id, caseId))
@@ -3367,7 +3266,7 @@ export async function closeUnsuccessful(
 
   const queue = await db.query.queues.findFirst({
     where: eq(queues.id, caseData.queueId),
-    columns: { slug: true },
+    columns: { slug: true, slaHours: true },
   })
 
   // Verify not already closed
@@ -3974,8 +3873,9 @@ export async function saveWordpressWebsiteCase(
   return saved
 }
 
-export async function listCaseComments(caseId: string) {
+export async function listCaseComments(caseId: string, actor: SessionUser) {
   const db = getDb()
+  await assertCanViewCase(caseId, actor)
 
   // Verify case exists
   const existing = await db.query.cases.findFirst({
@@ -4010,10 +3910,11 @@ export async function listCaseComments(caseId: string) {
 
 export async function createCaseComment(
   caseId: string,
-  userId: string,
+  actor: SessionUser,
   input: CreateCommentInput,
 ) {
   const db = getDb()
+  await assertCanWorkCase(caseId, actor.userId)
 
   // Verify parent comment exists if provided
   if (input.parentId) {
@@ -4033,7 +3934,7 @@ export async function createCaseComment(
     .insert(caseComments)
     .values({
       caseId,
-      authorId: userId,
+      authorId: actor.userId,
       content: input.content,
       parentId: input.parentId ?? null,
       mentions: input.mentions ?? null,
@@ -4047,7 +3948,7 @@ export async function createCaseComment(
         caseId,
         commentId: created.id,
         parentCommentId: input.parentId ?? null,
-        authorId: userId,
+        authorId: actor.userId,
         mentions: input.mentions ?? [],
         content: input.content,
       })
@@ -4061,8 +3962,9 @@ export async function createCaseComment(
 
 // ─── Case History ───────────────────────────────────────────────────────────
 
-export async function listCaseHistory(caseId: string) {
+export async function listCaseHistory(caseId: string, actor: SessionUser) {
   const db = getDb()
+  await assertCanViewCase(caseId, actor)
 
   // Verify case exists
   const existing = await db.query.cases.findFirst({
@@ -4488,7 +4390,7 @@ export async function getResubmissionEmailPreview(
     orderBy: [desc(caseResubmissionTokens.createdAt)],
   })
 
-  const issued = existingToken
+  const issued = existingToken?.token
     ? {
         token: existingToken.token,
         tokenId: existingToken.id,
@@ -4802,7 +4704,7 @@ export async function getAgreementEmailPreview(
     orderBy: [desc(caseResubmissionTokens.createdAt)],
   })
 
-  const issued = existingToken
+  const issued = existingToken?.token
     ? {
         token: existingToken.token,
         tokenId: existingToken.id,
@@ -5049,16 +4951,23 @@ export async function getMidCreationEmailPreview(
   let goLiveToken: string
   let resolvedAvailableAt: Date
 
-  if (existingToken) {
+  if (existingToken?.token) {
     tokenId = existingToken.id
     goLiveToken = existingToken.token
     resolvedAvailableAt = existingToken.availableAt
   } else {
     const token = generatePublicTokenString()
+    const tokenHash = await hashToken(token)
     resolvedAvailableAt = availableAt
     const [tokenRow] = await db
       .insert(midGoLiveTokens)
-      .values({ caseId, token, availableAt, createdBy: userId })
+      .values({
+        caseId,
+        token: null,
+        tokenHash,
+        availableAt,
+        createdBy: userId,
+      })
       .returning({ id: midGoLiveTokens.id })
     if (!tokenRow) throw new AppError(500, 'Failed to issue Go-Live token.')
     tokenId = tokenRow.id
@@ -6211,12 +6120,14 @@ export async function sendMidCreationCredentialsEmail(
             linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
         )
   const token = generatePublicTokenString()
+  const tokenHash = await hashToken(token)
 
   const [tokenRow] = await db
     .insert(midGoLiveTokens)
     .values({
       caseId,
-      token,
+      token: null,
+      tokenHash,
       availableAt,
       createdBy: userId,
     })
@@ -6931,7 +6842,7 @@ export async function sendAgreementForClientUpload(
     ),
     orderBy: [desc(caseResubmissionTokens.createdAt)],
   })
-  const issued = existingToken
+  const issued = existingToken?.token
     ? {
         token: existingToken.token,
         tokenId: existingToken.id,
@@ -7140,7 +7051,11 @@ export async function getResubmissionContext(
     .filter((id): id is string => id !== null)
   const docsById = new Map<
     string,
-    { documentType: string; originalName: string; currentDocumentUrl?: string }
+    {
+      documentType: MerchantDocumentType
+      originalName: string
+      currentDocumentUrl?: string
+    }
   >()
   if (docIds.length > 0) {
     const docs = await db
@@ -7222,6 +7137,7 @@ export async function getMidGoLiveContext(
   token: string,
 ): Promise<MidGoLiveContext> {
   const db = getDb()
+  const tokenHash = await hashToken(token)
   const [row] = await db
     .select({
       tokenId: midGoLiveTokens.id,
@@ -7235,7 +7151,12 @@ export async function getMidGoLiveContext(
     .from(midGoLiveTokens)
     .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-    .where(eq(midGoLiveTokens.token, token))
+    .where(
+      or(
+        eq(midGoLiveTokens.tokenHash, tokenHash),
+        eq(midGoLiveTokens.token, token),
+      ),
+    )
     .limit(1)
 
   if (!row) {
@@ -7269,8 +7190,12 @@ export async function getMidGoLiveContext(
 
 export async function activateMidGoLive(token: string) {
   const db = getDb()
+  const tokenHash = await hashToken(token)
 
   return db.transaction(async (tx) => {
+    // Serialize retries across all API processes before reading token state.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${token}))`)
+
     const [tokenRow] = await tx
       .select({
         id: midGoLiveTokens.id,
@@ -7290,7 +7215,12 @@ export async function activateMidGoLive(token: string) {
       .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
       .innerJoin(queues, eq(cases.queueId, queues.id))
       .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-      .where(eq(midGoLiveTokens.token, token))
+      .where(
+        or(
+          eq(midGoLiveTokens.tokenHash, tokenHash),
+          eq(midGoLiveTokens.token, token),
+        ),
+      )
       .limit(1)
 
     if (!tokenRow) {

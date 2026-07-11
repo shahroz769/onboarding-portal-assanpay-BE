@@ -49,6 +49,10 @@ const envSchema = z.object({
     .transform((value) => value === 'true'),
   COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('lax'),
   CORS_ORIGIN: corsOriginSchema.default(['http://localhost:5173']),
+  TRUST_PROXY_HEADERS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),

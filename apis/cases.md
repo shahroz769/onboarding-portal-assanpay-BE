@@ -12,7 +12,8 @@ Route prefix:
 /api/cases
 ```
 
-All case routes require authentication.
+All case routes require authentication. Manual case creation is restricted to
+`super_admin` and `admin`; agents are constrained by queue access.
 
 ## POST `/api/cases`
 
@@ -23,8 +24,8 @@ Purpose:
 
 Authorization:
 
+- `super_admin`
 - `admin`
-- `supervisor`
 
 Request body:
 
@@ -61,6 +62,6 @@ Error responses:
 
 - `400` invalid payload
 - `401` missing or invalid authentication
-- `403` authenticated user is not an admin or supervisor
+- `403` authenticated user is not a super admin or admin
 - `404` merchant or queue not found
 - `500` queue stage or case number generation failure

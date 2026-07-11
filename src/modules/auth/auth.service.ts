@@ -381,10 +381,39 @@ export async function setPasswordWithToken(input: {
   token: string
   password: string
 }) {
-  const row = await loadValidPasswordToken(input.token)
+  const tokenHash = await hashToken(input.token)
   const passwordHash = await Bun.password.hash(input.password)
 
   const [updatedUser] = await getDb().transaction(async (tx) => {
+    const [claimedToken] = await tx
+      .update(userPasswordTokens)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(userPasswordTokens.tokenHash, tokenHash),
+          isNull(userPasswordTokens.consumedAt),
+          gt(userPasswordTokens.expiresAt, new Date()),
+        ),
+      )
+      .returning({ userId: userPasswordTokens.userId })
+
+    if (!claimedToken) {
+      throw new AppError(410, 'This password link is expired or invalid.')
+    }
+
+    const user = await tx.query.users.findFirst({
+      where: and(
+        eq(users.id, claimedToken.userId),
+        eq(users.status, 'active'),
+        isNull(users.deletedAt),
+      ),
+      columns: { id: true },
+    })
+
+    if (!user) {
+      throw new AppError(410, 'This password link is expired or invalid.')
+    }
+
     const [updated] = await tx
       .update(users)
       .set({
@@ -392,18 +421,13 @@ export async function setPasswordWithToken(input: {
         sessionVersion: sql`${users.sessionVersion} + 1`,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, row.userId))
+      .where(eq(users.id, user.id))
       .returning()
-
-    await tx
-      .update(userPasswordTokens)
-      .set({ consumedAt: new Date() })
-      .where(eq(userPasswordTokens.id, row.tokenId))
 
     await tx
       .update(refreshTokens)
       .set({ status: 'revoked', revokedAt: new Date() })
-      .where(eq(refreshTokens.userId, row.userId))
+      .where(eq(refreshTokens.userId, user.id))
 
     return [updated]
   })

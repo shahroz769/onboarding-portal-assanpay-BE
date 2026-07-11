@@ -5,21 +5,14 @@ import { zodValidator } from '../../lib/validators'
 import { requireAuth } from '../../middleware/auth'
 import type { AppEnv } from '../../types/auth'
 import {
-  createBulkNotifications,
   getUnreadCount,
   listForUser,
   markAllRead,
   markRead,
 } from './notifications.service'
 import { subscribe } from './notifications.events'
-import {
-  listNotificationsQuerySchema,
-  testNotificationBodySchema,
-} from './notifications.schemas'
-import type {
-  ListNotificationsQuery,
-  TestNotificationBody,
-} from './notifications.schemas'
+import { listNotificationsQuerySchema } from './notifications.schemas'
+import type { ListNotificationsQuery } from './notifications.schemas'
 
 export const notificationRoutes = new Hono<AppEnv>()
 const NOTIFICATION_STREAM_HEARTBEAT_MS = 25_000
@@ -29,26 +22,6 @@ type NotificationStreamMessage = {
   data: string
   id?: string
 }
-
-// POST /api/notifications/test — public, no auth (dev/testing only)
-notificationRoutes.post(
-  '/test',
-  zodValidator('json', testNotificationBodySchema),
-  async (c) => {
-    const { userId, type, title, body } = c.req.valid(
-      'json' as never,
-    ) as TestNotificationBody
-    const defaultTitle = title ?? `[Test] ${type}`
-    const defaultBody =
-      body ?? `This is a manual test notification of type "${type}".`
-
-    const [notification] = await createBulkNotifications([
-      { userId, type, title: defaultTitle, body: defaultBody },
-    ])
-
-    return c.json({ ok: true, notification }, 201)
-  },
-)
 
 notificationRoutes.use('*', requireAuth)
 

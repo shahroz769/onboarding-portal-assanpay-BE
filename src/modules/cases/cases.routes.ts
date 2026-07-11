@@ -109,14 +109,6 @@ function parseEmailRecipientType(
   return parsed.data.recipientEmailType
 }
 
-// TEMP DEVELOPMENT: public case creation. Revert by moving this back below
-// requireAuth with requireRoles("super_admin", "admin").
-caseRoutes.post('/', zodValidator('json', createCaseSchema), async (c) => {
-  const input = c.req.valid('json' as never) as CreateCaseInput
-  const result = await createCase(input)
-  return c.json(result, 201)
-})
-
 // All routes require authentication
 caseRoutes.use('*', requireAuth)
 
@@ -695,7 +687,7 @@ caseRoutes.post('/:id/testing/send-credentials-mail/manual', async (c) => {
 
 caseRoutes.get('/:id/comments', async (c) => {
   const id = c.req.param('id')
-  const result = await listCaseComments(id)
+  const result = await listCaseComments(id, c.var.auth)
   return c.json(result)
 })
 
@@ -707,7 +699,7 @@ caseRoutes.post(
     const auth = c.get('auth')
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as CreateCommentInput
-    const result = await createCaseComment(id, auth.userId, input)
+    const result = await createCaseComment(id, auth, input)
     return c.json(result, 201)
   },
 )
@@ -715,6 +707,6 @@ caseRoutes.post(
 // GET /api/cases/:id/history — Get case history timeline
 caseRoutes.get('/:id/history', async (c) => {
   const id = c.req.param('id')
-  const result = await listCaseHistory(id)
+  const result = await listCaseHistory(id, c.var.auth)
   return c.json(result)
 })

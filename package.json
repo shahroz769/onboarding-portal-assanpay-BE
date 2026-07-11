@@ -2,6 +2,8 @@
   "name": "onboarding-portal-assanpay-BE",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
     "db:studio": "drizzle-kit studio"
@@ -25,6 +27,7 @@
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "drizzle-kit": "^0.31.10"
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.3"
   }
 }

@@ -1,11 +1,14 @@
 import { lt, or, eq, and, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { bodyLimit } from 'hono/body-limit'
+import { rateLimiter } from 'hono-rate-limiter'
 
 import { env } from './config/env'
 import { getDb } from './db/client'
 import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
+import { getClientIp } from './lib/client-ip'
 import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
 import { configurationRoutes } from './modules/configuration/configuration.routes'
@@ -22,6 +25,25 @@ import type { AppEnv } from './types/auth'
 
 const app = new Hono<AppEnv>()
 
+const publicRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-6',
+  keyGenerator: getClientIp,
+  handler: (c) =>
+    c.json({ error: 'Too many public requests. Please try again later.' }, 429),
+})
+
+const publicMultipartLimit = bodyLimit({
+  maxSize: 225 * 1024 * 1024,
+  onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
+})
+
+const agreementMultipartLimit = bodyLimit({
+  maxSize: 2 * 1024 * 1024,
+  onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
+})
+
 app.use(
   '*',
   cors({
@@ -35,6 +57,11 @@ app.use(
 )
 
 app.onError(errorHandler)
+
+app.use('/api/public/*', publicRateLimiter)
+app.use('/api/public/merchant-form', publicMultipartLimit)
+app.use('/api/public/resubmission/*', publicMultipartLimit)
+app.use('/api/public/agreement/*', agreementMultipartLimit)
 
 app.get('/', (c) => {
   return c.json({

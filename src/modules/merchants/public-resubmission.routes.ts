@@ -357,6 +357,7 @@ resubmissionRoutes.post('/:token', async (c) => {
     )
 
   const submissionIndex = Number(previousResubmissions[0]?.count ?? 0) + 2
+  const submissionAttemptFolder = `Attempt ${crypto.randomUUID()}`
   let nextSubmissionFolderId: string | null = null
 
   if (replaceActions.length > 0) {
@@ -372,6 +373,7 @@ resubmissionRoutes.post('/:token', async (c) => {
       ? await storage.ensureFolderPath(caseRow.googleDrivePrivateFolderId, [
           ...PRIVATE_KYC_PENDING_PATH,
           getSubmissionFolderName(submissionIndex),
+          submissionAttemptFolder,
         ])
       : await ensureMerchantFolderPath({
           merchantId: caseRow.merchantId,
@@ -380,6 +382,7 @@ resubmissionRoutes.post('/:token', async (c) => {
           path: [
             ...PRIVATE_KYC_PENDING_PATH,
             getSubmissionFolderName(submissionIndex),
+            submissionAttemptFolder,
           ],
           storage,
         })
