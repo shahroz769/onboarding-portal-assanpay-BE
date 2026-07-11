@@ -675,7 +675,13 @@ export async function terminateMerchant(
     const [updated] = await tx
       .update(merchants)
       .set({ status: 'terminated', updatedAt: now })
-      .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+      .where(
+        and(
+          eq(merchants.id, merchantId),
+          ne(merchants.status, 'terminated'),
+          isNull(merchants.deletedAt),
+        ),
+      )
       .returning({ id: merchants.id, status: merchants.status })
 
     if (!updated) {
@@ -693,7 +699,7 @@ export async function terminateMerchant(
   })
 
   if (!result) {
-    throw new AppError(404, 'Merchant not found.')
+    throw new AppError(409, 'Merchant is already terminated or does not exist.')
   }
 
   return result
@@ -711,7 +717,13 @@ export async function bulkTerminateMerchants(
     const updatedRows = await tx
       .update(merchants)
       .set({ status: 'terminated', updatedAt: now })
-      .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+      .where(
+        and(
+          inArray(merchants.id, ids),
+          ne(merchants.status, 'terminated'),
+          isNull(merchants.deletedAt),
+        ),
+      )
       .returning({ id: merchants.id })
 
     const updatedIds = updatedRows.map((row) => row.id)
