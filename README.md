@@ -26,7 +26,6 @@ Never expose backend credentials to the frontend.
 ```sh
 bun run dev
 bun run typecheck
-bun run test
 bun run db:migrate
 bun run db:generate
 ```
