@@ -215,6 +215,27 @@ export async function refreshSession(input: {
   const nextRefreshTokenHash = await hashToken(nextRefreshToken)
 
   return getDb().transaction(async (tx) => {
+    const user = await tx.query.users.findFirst({
+      where: and(
+        eq(users.id, payload.userId),
+        eq(users.status, 'active'),
+        isNull(users.deletedAt),
+      ),
+    })
+
+    if (!user) {
+      throw new AppError(401, 'User is not available.')
+    }
+
+    await tx.insert(refreshTokens).values({
+      id: nextSessionId,
+      userId: user.id,
+      tokenHash: nextRefreshTokenHash,
+      expiresAt: getRefreshTokenExpiresAt(),
+      userAgent: input.userAgent,
+      ipAddress: input.ipAddress,
+    })
+
     const [rotatedToken] = await tx
       .update(refreshTokens)
       .set({
@@ -238,27 +259,6 @@ export async function refreshSession(input: {
     if (!rotatedToken) {
       throw new AppError(401, 'Refresh token is expired or revoked.')
     }
-
-    const user = await tx.query.users.findFirst({
-      where: and(
-        eq(users.id, payload.userId),
-        eq(users.status, 'active'),
-        isNull(users.deletedAt),
-      ),
-    })
-
-    if (!user) {
-      throw new AppError(401, 'User is not available.')
-    }
-
-    await tx.insert(refreshTokens).values({
-      id: nextSessionId,
-      userId: user.id,
-      tokenHash: nextRefreshTokenHash,
-      expiresAt: getRefreshTokenExpiresAt(),
-      userAgent: input.userAgent,
-      ipAddress: input.ipAddress,
-    })
 
     const accessToken = await signAccessToken({
       sub: user.id,
