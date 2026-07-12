@@ -4,7 +4,10 @@ import { AppError } from '../lib/errors'
 
 export function errorHandler(error: Error, c: Context) {
   if (error instanceof AppError) {
-    return c.json({ error: error.message }, error.statusCode as never)
+    return c.json(
+      { error: error.message, ...(error.details ?? {}) },
+      error.statusCode as never,
+    )
   }
 
   console.error(error)

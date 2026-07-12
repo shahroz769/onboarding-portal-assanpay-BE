@@ -2,10 +2,15 @@ import { asc, eq } from 'drizzle-orm'
 
 import { queueStages } from '../../db/schema'
 import type { NewQueueStage, QueueStage } from '../../db/schema'
+import { AppError } from '../../lib/errors'
 import type {
   CaseStatusValue,
   StageCategoryValue,
 } from '../cases/cases.schemas'
+import {
+  getStageTemplateDefinitions,
+  type QueueWorkflowType,
+} from './queue-workflow'
 
 type QueueStageDb = {
   select: (...args: any[]) => any
@@ -17,15 +22,8 @@ type QueueStageSeedInput = {
   name: string
   slug: string
   qcEnabled: boolean
+  workflowType: QueueWorkflowType
 }
-
-const defaultStageNames = {
-  new: 'New',
-  in_progress: 'Working',
-  qc: 'QC',
-  error: 'Error',
-  closed: 'Closed',
-} as const satisfies Record<StageCategoryValue, string>
 
 function getStatusForStage(
   stage: Pick<QueueStage, 'category' | 'slug' | 'name'>,
@@ -81,139 +79,48 @@ function stageMatchesStatus(
   return getStatusForStage(stage) === status
 }
 
+/**
+ * Resolve exactly one stage for a requested status within a queue.
+ * Rejects missing or ambiguous status→stage mappings instead of guessing.
+ */
+export function resolveUniqueStageForStatus(
+  stages: Array<
+    Pick<
+      QueueStage,
+      'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'
+    >
+  >,
+  status: CaseStatusValue,
+): Pick<
+  QueueStage,
+  'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'
+> {
+  const matches = stages.filter((stage) => stageMatchesStatus(stage, status))
+
+  if (matches.length === 0) {
+    throw new AppError(
+      400,
+      `No stage in this queue maps to status "${status}".`,
+    )
+  }
+
+  if (matches.length > 1) {
+    throw new AppError(
+      400,
+      `Status "${status}" maps to multiple stages in this queue; choose an explicit stage transition.`,
+    )
+  }
+
+  return matches[0]!
+}
+
 function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
-  if (queue.slug === 'documents-review' || queue.slug === 'agreement') {
-    return [
-      {
-        name: defaultStageNames.new,
-        slug: 'new',
-        order: 1,
-        category: 'new',
-      },
-      {
-        name: defaultStageNames.in_progress,
-        slug: 'working',
-        order: 2,
-        category: 'in_progress',
-      },
-      {
-        name: 'Awaiting Client',
-        slug: 'awaiting_client',
-        order: 3,
-        category: 'in_progress',
-      },
-      {
-        name: defaultStageNames.closed,
-        slug: 'closed',
-        order: 4,
-        category: 'closed',
-      },
-    ] satisfies Array<
-      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
-    >
-  }
-
-  if (
-    queue.slug === 'sub-merchant-form' ||
-    queue.slug === 'live' ||
-    queue.slug === 'testing' ||
-    queue.slug === 'wordpress-website'
-  ) {
-    return [
-      {
-        name: defaultStageNames.new,
-        slug: 'new',
-        order: 1,
-        category: 'new',
-      },
-      {
-        name: defaultStageNames.in_progress,
-        slug: 'working',
-        order: 2,
-        category: 'in_progress',
-      },
-      {
-        name: defaultStageNames.closed,
-        slug: 'closed',
-        order: 3,
-        category: 'closed',
-      },
-    ] satisfies Array<
-      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
-    >
-  }
-
-  if (queue.slug === 'dialogpay-card') {
-    return [
-      {
-        name: defaultStageNames.new,
-        slug: 'new',
-        order: 1,
-        category: 'new',
-      },
-      {
-        name: defaultStageNames.in_progress,
-        slug: 'working',
-        order: 2,
-        category: 'in_progress',
-      },
-      {
-        name: 'Merchant Pending',
-        slug: 'merchant_pending',
-        order: 3,
-        category: 'in_progress',
-      },
-      {
-        name: 'Docs Upload',
-        slug: 'docs_upload',
-        order: 4,
-        category: 'in_progress',
-      },
-      {
-        name: 'Docs Pending',
-        slug: 'docs_pending',
-        order: 5,
-        category: 'in_progress',
-      },
-      {
-        name: defaultStageNames.closed,
-        slug: 'closed',
-        order: 6,
-        category: 'closed',
-      },
-    ] satisfies Array<
-      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
-    >
-  }
-
-  if (queue.slug === 'merchant-id') {
-    return [
-      {
-        name: defaultStageNames.new,
-        slug: 'new',
-        order: 1,
-        category: 'new',
-      },
-      {
-        name: defaultStageNames.in_progress,
-        slug: 'working',
-        order: 2,
-        category: 'in_progress',
-      },
-      {
-        name: defaultStageNames.closed,
-        slug: 'closed',
-        order: 3,
-        category: 'closed',
-      },
-    ] satisfies Array<
-      Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
-    >
-  }
-
-  return [] satisfies Array<
-    Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
-  >
+  return getStageTemplateDefinitions(queue.workflowType).map((stage) => ({
+    name: stage.name,
+    slug: stage.slug,
+    order: stage.order,
+    category: stage.category,
+  })) satisfies Array<Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>>
 }
 
 function hasStageEquivalent(
@@ -225,8 +132,9 @@ function hasStageEquivalent(
     return true
   }
 
+  // Legacy documents-review used in-review instead of working.
   if (
-    queue.slug === 'documents-review' &&
+    queue.workflowType === 'document_review' &&
     stageSlug === 'working' &&
     existingStages.some((stage) => stage.slug === 'in-review')
   ) {
@@ -257,6 +165,7 @@ export async function ensureQueueStages(
         defaultStages.map((stage) => ({
           queueId: queue.id,
           ...stage,
+          isActive: true,
         })),
       )
       .returning()
@@ -280,6 +189,7 @@ export async function ensureQueueStages(
       missingStages.map((stage) => ({
         queueId: queue.id,
         ...stage,
+        isActive: true,
       })),
     )
   }
@@ -340,37 +250,14 @@ export function resolveStageForCase(params: {
   )
 }
 
-export { getStatusForStage }
+export { getStatusForStage, stageMatchesStatus }
 
+/** Prefer active stages; inactive stages stay available when currently referenced. */
 export function getVisibleStagesForQueue(
-  queueSlug: string,
   stages: QueueStage[],
+  currentStageId?: string | null,
 ) {
-  if (
-    queueSlug !== 'documents-review' &&
-    queueSlug !== 'sub-merchant-form' &&
-    queueSlug !== 'agreement' &&
-    queueSlug !== 'merchant-id' &&
-    queueSlug !== 'testing' &&
-    queueSlug !== 'wordpress-website' &&
-    queueSlug !== 'dialogpay-card'
-  ) {
-    return stages
-  }
-
-  const allowedStageSlugs =
-    queueSlug === 'documents-review' || queueSlug === 'agreement'
-      ? new Set(['new', 'working', 'awaiting_client', 'closed'])
-      : queueSlug === 'dialogpay-card'
-        ? new Set([
-            'new',
-            'working',
-            'merchant_pending',
-            'docs_upload',
-            'docs_pending',
-            'closed',
-          ])
-        : new Set(['new', 'working', 'closed'])
-
-  return stages.filter((stage) => allowedStageSlugs.has(stage.slug))
+  return stages.filter(
+    (stage) => stage.isActive || stage.id === currentStageId,
+  )
 }

@@ -13,6 +13,7 @@
 - **Depends on**: plans 001–004
 - **Category**: tech-debt, architecture
 - **Planned at**: commit `9d2ee9d`, 2026-07-12
+- **Completed**: DONE (behavior-preserving split of `cases.service.ts`; contracts in `src/contracts/`)
 
 ## Why this matters
 

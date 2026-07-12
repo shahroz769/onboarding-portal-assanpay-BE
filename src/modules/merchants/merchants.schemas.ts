@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { AppError } from '../../lib/errors'
+import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 
 export const merchantTypes = [
   'sole_proprietorship',
@@ -314,9 +315,9 @@ export type MerchantFormSubmission = MerchantFormValues & {
   documents: UploadedMerchantDocument[]
 }
 
-export function parseMerchantFormData(
+export async function parseMerchantFormData(
   formData: FormData,
-): MerchantFormSubmission {
+): Promise<MerchantFormSubmission> {
   const scalarValues: Record<string, string> = {}
   const files = new Map<MerchantDocumentType, UploadedMerchantDocument>()
 
@@ -376,6 +377,11 @@ export function parseMerchantFormData(
     }
 
     const mimeType = normalizeMimeType(file)
+    await assertFileContentSignature({
+      file,
+      expectedMimeType: mimeType,
+      label: key,
+    })
     files.set(documentType, {
       documentType,
       file,

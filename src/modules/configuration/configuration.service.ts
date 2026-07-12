@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -8,6 +8,8 @@ import {
   caseFlowCreationRequirements,
   caseFlowStartRules,
   configurationSettings,
+  flowConfigurationRevisions,
+  queueStages,
   queues,
   subMerchantDraftTemplates,
 } from '../../db/schema'
@@ -47,6 +49,23 @@ const DRAFT_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
 const DRAFT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
+
+type DbTransaction = Parameters<
+  Parameters<ReturnType<typeof getDb>['transaction']>[0]
+>[0]
+
+type QueueRef = {
+  id: string
+  name: string
+  lifecycle: 'draft' | 'active' | 'inactive'
+  isActive: boolean
+}
+
+type StageReadiness = {
+  queueId: string
+  hasInitial: boolean
+  hasTerminal: boolean
+}
 
 export const defaultLimitsAndMdrSettings: LimitsAndMdrSettings = {
   testing: {
@@ -434,18 +453,25 @@ export async function createSubMerchantDraft(input: {
 
 export async function getCaseFlowConfiguration() {
   const [
+    revisionRow,
     queueRows,
     startRules,
     closeTriggers,
     closeBlockers,
     creationRequirements,
   ] = await Promise.all([
+    getDb().query.flowConfigurationRevisions.findFirst({
+      where: eq(flowConfigurationRevisions.id, 1),
+      columns: { revision: true },
+    }),
     getDb()
       .select({
         id: queues.id,
         name: queues.name,
         slug: queues.slug,
         prefix: queues.prefix,
+        workflowType: queues.workflowType,
+        lifecycle: queues.lifecycle,
         isActive: queues.isActive,
       })
       .from(queues)
@@ -503,6 +529,7 @@ export async function getCaseFlowConfiguration() {
   ])
 
   return {
+    revision: revisionRow?.revision ?? 1,
     queues: queueRows,
     startRules,
     closeTriggers,
@@ -515,65 +542,247 @@ export async function updateCaseFlowConfiguration(
   input: UpdateCaseFlowConfigurationInput,
 ) {
   const value = updateCaseFlowConfigurationSchema.parse(input)
-  await assertReferencedQueuesExist(value)
   const now = new Date()
 
   await getDb().transaction(async (tx) => {
-    await tx.delete(caseFlowCreationRequirements)
-    await tx.delete(caseFlowCloseBlockers)
-    await tx.delete(caseFlowCloseTriggers)
-    await tx.delete(caseFlowStartRules)
+    const [bumped] = await tx
+      .update(flowConfigurationRevisions)
+      .set({
+        revision: sql`${flowConfigurationRevisions.revision} + 1`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(flowConfigurationRevisions.id, 1),
+          eq(flowConfigurationRevisions.revision, value.revision),
+        ),
+      )
+      .returning({ revision: flowConfigurationRevisions.revision })
 
-    if (value.startRules.length > 0) {
-      await tx.insert(caseFlowStartRules).values(
-        value.startRules.map((rule) => ({
-          targetQueueId: rule.targetQueueId,
-          order: rule.order,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })),
+    if (!bumped) {
+      const current = await tx.query.flowConfigurationRevisions.findFirst({
+        where: eq(flowConfigurationRevisions.id, 1),
+        columns: { revision: true },
+      })
+      throw new AppError(
+        409,
+        'Case flow configuration was updated by someone else. Reload and try again.',
+        { revision: current?.revision ?? value.revision },
       )
     }
 
-    if (value.closeTriggers.length > 0) {
-      await tx.insert(caseFlowCloseTriggers).values(
-        value.closeTriggers.map((rule) => ({
-          sourceQueueId: rule.sourceQueueId,
-          targetQueueId: rule.targetQueueId,
-          order: rule.order,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })),
-      )
-    }
+    const queueById = await assertReferencedQueuesExistTx(tx, value)
 
-    if (value.closeBlockers.length > 0) {
-      await tx.insert(caseFlowCloseBlockers).values(
-        value.closeBlockers.map((rule) => ({
-          blockedQueueId: rule.blockedQueueId,
-          prerequisiteQueueId: rule.prerequisiteQueueId,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })),
-      )
-    }
+    await syncStartRules(tx, value.startRules, now)
+    await syncCloseTriggers(tx, value.closeTriggers, now)
+    await syncCloseBlockers(tx, value.closeBlockers, now)
+    await syncCreationRequirements(tx, value.creationRequirements, now)
 
-    if (value.creationRequirements.length > 0) {
-      await tx.insert(caseFlowCreationRequirements).values(
-        value.creationRequirements.map((rule) => ({
-          targetQueueId: rule.targetQueueId,
-          prerequisiteQueueId: rule.prerequisiteQueueId,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })),
-      )
-    }
+    await assertActiveFlowGraphValid(tx, value, queueById)
   })
 
   return getCaseFlowConfiguration()
 }
 
-async function assertReferencedQueuesExist(
+async function syncStartRules(
+  tx: DbTransaction,
+  rules: UpdateCaseFlowConfigurationInput['startRules'],
+  now: Date,
+) {
+  const existing = await tx
+    .select({ id: caseFlowStartRules.id })
+    .from(caseFlowStartRules)
+  const existingIds = new Set(existing.map((row) => row.id))
+  const keepIds = new Set<string>()
+
+  for (const rule of rules) {
+    if (rule.id) {
+      if (!existingIds.has(rule.id)) {
+        throw new AppError(400, `Unknown start rule id: ${rule.id}`)
+      }
+      keepIds.add(rule.id)
+      await tx
+        .update(caseFlowStartRules)
+        .set({
+          targetQueueId: rule.targetQueueId,
+          order: rule.order,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })
+        .where(eq(caseFlowStartRules.id, rule.id))
+      continue
+    }
+
+    await tx.insert(caseFlowStartRules).values({
+      targetQueueId: rule.targetQueueId,
+      order: rule.order,
+      isActive: rule.isActive,
+      updatedAt: now,
+    })
+  }
+
+  const deactivateIds = existing
+    .map((row) => row.id)
+    .filter((id) => !keepIds.has(id))
+  if (deactivateIds.length > 0) {
+    await tx
+      .update(caseFlowStartRules)
+      .set({ isActive: false, updatedAt: now })
+      .where(inArray(caseFlowStartRules.id, deactivateIds))
+  }
+}
+
+async function syncCloseTriggers(
+  tx: DbTransaction,
+  rules: UpdateCaseFlowConfigurationInput['closeTriggers'],
+  now: Date,
+) {
+  const existing = await tx
+    .select({ id: caseFlowCloseTriggers.id })
+    .from(caseFlowCloseTriggers)
+  const existingIds = new Set(existing.map((row) => row.id))
+  const keepIds = new Set<string>()
+
+  for (const rule of rules) {
+    if (rule.id) {
+      if (!existingIds.has(rule.id)) {
+        throw new AppError(400, `Unknown close trigger id: ${rule.id}`)
+      }
+      keepIds.add(rule.id)
+      await tx
+        .update(caseFlowCloseTriggers)
+        .set({
+          sourceQueueId: rule.sourceQueueId,
+          targetQueueId: rule.targetQueueId,
+          order: rule.order,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })
+        .where(eq(caseFlowCloseTriggers.id, rule.id))
+      continue
+    }
+
+    await tx.insert(caseFlowCloseTriggers).values({
+      sourceQueueId: rule.sourceQueueId,
+      targetQueueId: rule.targetQueueId,
+      order: rule.order,
+      isActive: rule.isActive,
+      updatedAt: now,
+    })
+  }
+
+  const deactivateIds = existing
+    .map((row) => row.id)
+    .filter((id) => !keepIds.has(id))
+  if (deactivateIds.length > 0) {
+    await tx
+      .update(caseFlowCloseTriggers)
+      .set({ isActive: false, updatedAt: now })
+      .where(inArray(caseFlowCloseTriggers.id, deactivateIds))
+  }
+}
+
+async function syncCloseBlockers(
+  tx: DbTransaction,
+  rules: UpdateCaseFlowConfigurationInput['closeBlockers'],
+  now: Date,
+) {
+  const existing = await tx
+    .select({ id: caseFlowCloseBlockers.id })
+    .from(caseFlowCloseBlockers)
+  const existingIds = new Set(existing.map((row) => row.id))
+  const keepIds = new Set<string>()
+
+  for (const rule of rules) {
+    if (rule.id) {
+      if (!existingIds.has(rule.id)) {
+        throw new AppError(400, `Unknown close requirement id: ${rule.id}`)
+      }
+      keepIds.add(rule.id)
+      await tx
+        .update(caseFlowCloseBlockers)
+        .set({
+          blockedQueueId: rule.blockedQueueId,
+          prerequisiteQueueId: rule.prerequisiteQueueId,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })
+        .where(eq(caseFlowCloseBlockers.id, rule.id))
+      continue
+    }
+
+    await tx.insert(caseFlowCloseBlockers).values({
+      blockedQueueId: rule.blockedQueueId,
+      prerequisiteQueueId: rule.prerequisiteQueueId,
+      isActive: rule.isActive,
+      updatedAt: now,
+    })
+  }
+
+  const deactivateIds = existing
+    .map((row) => row.id)
+    .filter((id) => !keepIds.has(id))
+  if (deactivateIds.length > 0) {
+    await tx
+      .update(caseFlowCloseBlockers)
+      .set({ isActive: false, updatedAt: now })
+      .where(inArray(caseFlowCloseBlockers.id, deactivateIds))
+  }
+}
+
+async function syncCreationRequirements(
+  tx: DbTransaction,
+  rules: UpdateCaseFlowConfigurationInput['creationRequirements'],
+  now: Date,
+) {
+  const existing = await tx
+    .select({ id: caseFlowCreationRequirements.id })
+    .from(caseFlowCreationRequirements)
+  const existingIds = new Set(existing.map((row) => row.id))
+  const keepIds = new Set<string>()
+
+  for (const rule of rules) {
+    if (rule.id) {
+      if (!existingIds.has(rule.id)) {
+        throw new AppError(
+          400,
+          `Unknown creation requirement id: ${rule.id}`,
+        )
+      }
+      keepIds.add(rule.id)
+      await tx
+        .update(caseFlowCreationRequirements)
+        .set({
+          targetQueueId: rule.targetQueueId,
+          prerequisiteQueueId: rule.prerequisiteQueueId,
+          isActive: rule.isActive,
+          updatedAt: now,
+        })
+        .where(eq(caseFlowCreationRequirements.id, rule.id))
+      continue
+    }
+
+    await tx.insert(caseFlowCreationRequirements).values({
+      targetQueueId: rule.targetQueueId,
+      prerequisiteQueueId: rule.prerequisiteQueueId,
+      isActive: rule.isActive,
+      updatedAt: now,
+    })
+  }
+
+  const deactivateIds = existing
+    .map((row) => row.id)
+    .filter((id) => !keepIds.has(id))
+  if (deactivateIds.length > 0) {
+    await tx
+      .update(caseFlowCreationRequirements)
+      .set({ isActive: false, updatedAt: now })
+      .where(inArray(caseFlowCreationRequirements.id, deactivateIds))
+  }
+}
+
+async function assertReferencedQueuesExistTx(
+  tx: DbTransaction,
   input: UpdateCaseFlowConfigurationInput,
 ) {
   const queueIds = new Set<string>()
@@ -591,16 +800,280 @@ async function assertReferencedQueuesExist(
     queueIds.add(rule.prerequisiteQueueId)
   }
 
-  if (queueIds.size === 0) return
+  if (queueIds.size === 0) return new Map<string, QueueRef>()
 
-  const existingRows = await getDb()
-    .select({ id: queues.id })
+  const existingRows = await tx
+    .select({
+      id: queues.id,
+      name: queues.name,
+      lifecycle: queues.lifecycle,
+      isActive: queues.isActive,
+    })
     .from(queues)
     .where(inArray(queues.id, Array.from(queueIds)))
 
   if (existingRows.length !== queueIds.size) {
     throw new AppError(400, 'One or more selected queues do not exist.')
   }
+
+  return new Map(existingRows.map((row) => [row.id, row]))
+}
+
+async function assertActiveFlowGraphValid(
+  tx: DbTransaction,
+  input: UpdateCaseFlowConfigurationInput,
+  queueById: Map<string, QueueRef>,
+) {
+  const activeStartRules = input.startRules.filter((rule) => rule.isActive)
+  const activeCloseTriggers = input.closeTriggers.filter((rule) => rule.isActive)
+  const activeCloseBlockers = input.closeBlockers.filter((rule) => rule.isActive)
+  const activeCreationRequirements = input.creationRequirements.filter(
+    (rule) => rule.isActive,
+  )
+
+  const referencedQueueIds = new Set<string>()
+  for (const rule of activeStartRules) referencedQueueIds.add(rule.targetQueueId)
+  for (const rule of activeCloseTriggers) {
+    referencedQueueIds.add(rule.sourceQueueId)
+    referencedQueueIds.add(rule.targetQueueId)
+  }
+  for (const rule of activeCloseBlockers) {
+    referencedQueueIds.add(rule.blockedQueueId)
+    referencedQueueIds.add(rule.prerequisiteQueueId)
+  }
+  for (const rule of activeCreationRequirements) {
+    referencedQueueIds.add(rule.targetQueueId)
+    referencedQueueIds.add(rule.prerequisiteQueueId)
+  }
+
+  const inactiveQueues = Array.from(referencedQueueIds)
+    .map((id) => queueById.get(id))
+    .filter(
+      (queue): queue is QueueRef =>
+        queue != null && queue.lifecycle !== 'active',
+    )
+
+  if (inactiveQueues.length > 0) {
+    throw new AppError(
+      400,
+      `Active rules cannot reference inactive queues: ${formatQueueList(inactiveQueues)}.`,
+      {
+        queueIds: inactiveQueues.map((queue) => queue.id),
+        queueNames: inactiveQueues.map((queue) => queue.name),
+      },
+    )
+  }
+
+  if (referencedQueueIds.size > 0) {
+    const stageRows = await tx
+      .select({
+        queueId: queueStages.queueId,
+        category: queueStages.category,
+        order: queueStages.order,
+      })
+      .from(queueStages)
+      .where(inArray(queueStages.queueId, Array.from(referencedQueueIds)))
+      .orderBy(asc(queueStages.queueId), asc(queueStages.order))
+
+    const readinessByQueue = new Map<string, StageReadiness>()
+    for (const queueId of referencedQueueIds) {
+      readinessByQueue.set(queueId, {
+        queueId,
+        hasInitial: false,
+        hasTerminal: false,
+      })
+    }
+
+    const firstOrderSeen = new Set<string>()
+    for (const stage of stageRows) {
+      const readiness = readinessByQueue.get(stage.queueId)
+      if (!readiness) continue
+      if (!firstOrderSeen.has(stage.queueId)) {
+        firstOrderSeen.add(stage.queueId)
+        readiness.hasInitial = true
+      }
+      if (stage.category === 'new') readiness.hasInitial = true
+      if (stage.category === 'closed') readiness.hasTerminal = true
+    }
+
+    const missingInitial = Array.from(readinessByQueue.values())
+      .filter((row) => !row.hasInitial)
+      .map((row) => queueById.get(row.queueId))
+      .filter((queue): queue is QueueRef => Boolean(queue))
+    if (missingInitial.length > 0) {
+      throw new AppError(
+        400,
+        `Queues are missing a usable initial stage: ${formatQueueList(missingInitial)}.`,
+        {
+          queueIds: missingInitial.map((queue) => queue.id),
+          queueNames: missingInitial.map((queue) => queue.name),
+        },
+      )
+    }
+
+    const missingTerminal = Array.from(readinessByQueue.values())
+      .filter((row) => !row.hasTerminal)
+      .map((row) => queueById.get(row.queueId))
+      .filter((queue): queue is QueueRef => Boolean(queue))
+    if (missingTerminal.length > 0) {
+      throw new AppError(
+        400,
+        `Queues are missing a usable terminal stage: ${formatQueueList(missingTerminal)}.`,
+        {
+          queueIds: missingTerminal.map((queue) => queue.id),
+          queueNames: missingTerminal.map((queue) => queue.name),
+        },
+      )
+    }
+  }
+
+  const creationCycle = findDependencyCycle(
+    activeCreationRequirements.map((rule) => ({
+      from: rule.targetQueueId,
+      to: rule.prerequisiteQueueId,
+    })),
+  )
+  if (creationCycle) {
+    throwGraphCycleError(
+      'Creation requirements contain a cycle',
+      creationCycle,
+      queueById,
+    )
+  }
+
+  const closeBlockerCycle = findDependencyCycle(
+    activeCloseBlockers.map((rule) => ({
+      from: rule.blockedQueueId,
+      to: rule.prerequisiteQueueId,
+    })),
+  )
+  if (closeBlockerCycle) {
+    throwGraphCycleError(
+      'Close requirements contain a cycle',
+      closeBlockerCycle,
+      queueById,
+    )
+  }
+
+  const creationRequirementTargets = new Set(
+    activeCreationRequirements.map((rule) => rule.targetQueueId),
+  )
+  const impossibleStartTargets = activeStartRules
+    .filter((rule) => creationRequirementTargets.has(rule.targetQueueId))
+    .map((rule) => queueById.get(rule.targetQueueId))
+    .filter((queue): queue is QueueRef => Boolean(queue))
+
+  if (impossibleStartTargets.length > 0) {
+    throw new AppError(
+      400,
+      `First-case queues cannot also require another case to close first: ${formatQueueList(impossibleStartTargets)}.`,
+      {
+        queueIds: impossibleStartTargets.map((queue) => queue.id),
+        queueNames: impossibleStartTargets.map((queue) => queue.name),
+      },
+    )
+  }
+
+  const blockerPairs = new Set(
+    activeCloseBlockers.map(
+      (rule) => `${rule.blockedQueueId}:${rule.prerequisiteQueueId}`,
+    ),
+  )
+  const impossibleTriggers = activeCloseTriggers.filter((rule) =>
+    blockerPairs.has(`${rule.sourceQueueId}:${rule.targetQueueId}`),
+  )
+
+  if (impossibleTriggers.length > 0) {
+    const details = impossibleTriggers.map((rule) => {
+      const source = queueById.get(rule.sourceQueueId)
+      const target = queueById.get(rule.targetQueueId)
+      return {
+        sourceQueueId: rule.sourceQueueId,
+        sourceQueueName: source?.name ?? rule.sourceQueueId,
+        targetQueueId: rule.targetQueueId,
+        targetQueueName: target?.name ?? rule.targetQueueId,
+      }
+    })
+    throw new AppError(
+      400,
+      `Close triggers conflict with close requirements: ${details
+        .map(
+          (item) =>
+            `${item.sourceQueueName} cannot both wait for and open ${item.targetQueueName}`,
+        )
+        .join('; ')}.`,
+      {
+        conflicts: details,
+        queueIds: details.flatMap((item) => [
+          item.sourceQueueId,
+          item.targetQueueId,
+        ]),
+        queueNames: details.flatMap((item) => [
+          item.sourceQueueName,
+          item.targetQueueName,
+        ]),
+      },
+    )
+  }
+}
+
+function findDependencyCycle(
+  edges: Array<{ from: string; to: string }>,
+): string[] | null {
+  const adjacency = new Map<string, string[]>()
+  for (const edge of edges) {
+    const list = adjacency.get(edge.from) ?? []
+    list.push(edge.to)
+    adjacency.set(edge.from, list)
+  }
+
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  let cycle: string[] | null = null
+
+  function dfs(node: string, path: string[]): boolean {
+    if (visiting.has(node)) {
+      const start = path.indexOf(node)
+      cycle = [...path.slice(start), node]
+      return true
+    }
+    if (visited.has(node)) return false
+
+    visiting.add(node)
+    for (const next of adjacency.get(node) ?? []) {
+      if (dfs(next, [...path, node])) return true
+    }
+    visiting.delete(node)
+    visited.add(node)
+    return false
+  }
+
+  for (const node of adjacency.keys()) {
+    if (dfs(node, [])) return cycle
+  }
+  return null
+}
+
+function throwGraphCycleError(
+  prefix: string,
+  cycle: string[],
+  queueById: Map<string, QueueRef>,
+): never {
+  const names = cycle.map(
+    (queueId) => queueById.get(queueId)?.name ?? queueId,
+  )
+  throw new AppError(400, `${prefix}: ${names.join(' → ')}.`, {
+    cycle: cycle,
+    cyclePath: names,
+    queueIds: Array.from(new Set(cycle)),
+    queueNames: Array.from(new Set(names)),
+  })
+}
+
+function formatQueueList(queuesToFormat: QueueRef[]) {
+  return queuesToFormat
+    .map((queue) => `${queue.name} (${queue.id})`)
+    .join(', ')
 }
 
 async function uploadConfigurationDraft(input: {

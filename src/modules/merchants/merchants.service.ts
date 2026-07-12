@@ -25,6 +25,7 @@ import {
   merchants,
   queues,
   queueStages,
+  storageObjects,
   users,
 } from '../../db/schema'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
@@ -59,6 +60,13 @@ import {
   buildMerchantRootFolderName,
   getSubmissionFolderName,
 } from './merchant-drive-folders'
+import {
+  cleanupFailedAttemptObjects,
+  createStorageAttemptId,
+  listAttemptStorageObjects,
+  markStorageObjectsLifecycle,
+  recordStorageObject,
+} from '../../lib/storage/ownership'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType
@@ -243,21 +251,51 @@ export async function createMerchantSubmission(
   storage: FileStorageProvider = new GoogleDriveStorageProvider(),
 ) {
   const merchantId = crypto.randomUUID()
+  const attemptId = createStorageAttemptId()
   let folderId: string | null = null
-  let submissionFolderId: string | null = null
 
   try {
-    const folder = await storage.createMerchantFolder(
+    if (!storage.createMerchantRootFolder) {
+      throw new AppError(
+        500,
+        'Storage provider does not support claimed merchant root creation.',
+      )
+    }
+
+    const folder = await storage.createMerchantRootFolder(
       buildMerchantRootFolderName(merchantId, input.businessName),
       'private',
     )
     folderId = folder.folderId
-    const submissionFolder = await storage.ensureFolderPath(folderId, [
+    await recordStorageObject({
+      providerObjectId: folder.folderId,
+      objectKind: 'folder',
+      visibility: 'private',
+      attemptId,
+      parentProviderObjectId: folder.parentFolderId,
+      lifecycle: 'provisioning',
+      metadata: { role: 'merchant_root', pendingMerchantId: merchantId },
+    })
+
+    let parentFolderId = folder.folderId
+    const submissionPath = [
       ...PRIVATE_KYC_PENDING_PATH,
       getSubmissionFolderName(1),
-    ])
-    submissionFolderId = submissionFolder.folderId
-    const uploadFolderId = submissionFolderId
+    ]
+    for (const folderName of submissionPath) {
+      const created = await storage.createFolder(parentFolderId, folderName)
+      await recordStorageObject({
+        providerObjectId: created.folderId,
+        objectKind: 'folder',
+        visibility: 'private',
+        attemptId,
+        parentProviderObjectId: parentFolderId,
+        lifecycle: 'provisioning',
+        metadata: { folderName },
+      })
+      parentFolderId = created.folderId
+    }
+    const uploadFolderId = parentFolderId
 
     const uploadedDocuments = await Promise.all(
       input.documents.map(async (document) => {
@@ -268,6 +306,20 @@ export async function createMerchantSubmission(
           ),
           mimeType: document.mimeType,
           file: document.file,
+        })
+
+        await recordStorageObject({
+          providerObjectId: upload.fileId,
+          objectKind: 'file',
+          visibility: 'private',
+          attemptId,
+          parentProviderObjectId: upload.folderId,
+          lifecycle: 'provisioning',
+          metadata: {
+            documentType: document.documentType,
+            fileName: upload.fileName,
+            sizeBytes: upload.sizeBytes,
+          },
         })
 
         return {
@@ -346,25 +398,38 @@ export async function createMerchantSubmission(
       }
     })
 
+    const attemptObjects = await listAttemptStorageObjects(attemptId)
+    await attachMerchantToAttemptObjects(attemptId, merchantId)
+    await markStorageObjectsLifecycle(
+      attemptObjects.map((object) => object.providerObjectId),
+      'current',
+    )
+
     return {
       merchant: sanitizeMerchantRecord(result.merchant),
       documents: result.documents.map(sanitizeDocumentRecord),
     }
   } catch (error) {
-    if (submissionFolderId) {
-      await storage.deleteFile(submissionFolderId).catch((cleanupError) => {
+    await cleanupFailedAttemptObjects({ attemptId, storage }).catch(
+      (cleanupError) => {
         console.error('[merchant-submission.cleanup]', cleanupError)
-      })
-    }
-
-    if (folderId) {
-      await storage.deleteFile(folderId).catch((cleanupError) => {
-        console.error('[merchant-submission.cleanup]', cleanupError)
-      })
-    }
-
+      },
+    )
     throw error
   }
+}
+
+async function attachMerchantToAttemptObjects(
+  attemptId: string,
+  merchantId: string,
+) {
+  await getDb()
+    .update(storageObjects)
+    .set({
+      merchantId,
+      updatedAt: new Date(),
+    })
+    .where(eq(storageObjects.attemptId, attemptId))
 }
 
 function buildDocumentFileName(

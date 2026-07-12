@@ -64,4 +64,25 @@ Error responses:
 - `401` missing or invalid authentication
 - `403` authenticated user is not a super admin or admin
 - `404` merchant or queue not found
+- `409` queue is not active (`lifecycle !== active`)
 - `500` queue stage or case number generation failure
+
+## Case detail queue shape
+
+`GET /api/cases/:id` includes:
+
+```json
+{
+  "queue": {
+    "id": "uuid",
+    "name": "Documents Review",
+    "slug": "documents-review",
+    "workflowType": "document_review",
+    "lifecycle": "active",
+    "qcEnabled": false,
+    "slaHours": 24
+  }
+}
+```
+
+Specialized case actions dispatch on `workflowType`, not slug.

@@ -151,6 +151,7 @@ export const businessTypeSchema = z.enum([
 
 const caseFlowStartRuleInputSchema = z
   .object({
+    id: z.string().uuid().optional(),
     targetQueueId: z.string().uuid(),
     order: z.coerce.number().int().min(1).default(1),
     isActive: z.boolean().default(true),
@@ -159,6 +160,7 @@ const caseFlowStartRuleInputSchema = z
 
 const caseFlowCloseTriggerInputSchema = z
   .object({
+    id: z.string().uuid().optional(),
     sourceQueueId: z.string().uuid(),
     targetQueueId: z.string().uuid(),
     order: z.coerce.number().int().min(1).default(1),
@@ -172,6 +174,7 @@ const caseFlowCloseTriggerInputSchema = z
 
 const caseFlowCloseBlockerInputSchema = z
   .object({
+    id: z.string().uuid().optional(),
     blockedQueueId: z.string().uuid(),
     prerequisiteQueueId: z.string().uuid(),
     isActive: z.boolean().default(true),
@@ -184,6 +187,7 @@ const caseFlowCloseBlockerInputSchema = z
 
 const caseFlowCreationRequirementInputSchema = z
   .object({
+    id: z.string().uuid().optional(),
     targetQueueId: z.string().uuid(),
     prerequisiteQueueId: z.string().uuid(),
     isActive: z.boolean().default(true),
@@ -196,6 +200,7 @@ const caseFlowCreationRequirementInputSchema = z
 
 export const updateCaseFlowConfigurationSchema = z
   .object({
+    revision: z.coerce.number().int().min(1),
     startRules: z.array(caseFlowStartRuleInputSchema),
     closeTriggers: z.array(caseFlowCloseTriggerInputSchema),
     closeBlockers: z.array(caseFlowCloseBlockerInputSchema),
@@ -206,35 +211,41 @@ export const updateCaseFlowConfigurationSchema = z
   .strict()
   .superRefine((value, ctx) => {
     addDuplicateIssue(
-      value.startRules.map((rule) => rule.targetQueueId),
+      value.startRules
+        .filter((rule) => rule.isActive)
+        .map((rule) => rule.targetQueueId),
       ctx,
       'startRules',
       'Duplicate first-case queue.',
     )
     addDuplicateIssue(
-      value.closeTriggers.map(
-        (rule) => `${rule.sourceQueueId}:${rule.targetQueueId}`,
-      ),
+      value.closeTriggers
+        .filter((rule) => rule.isActive)
+        .map((rule) => `${rule.sourceQueueId}:${rule.targetQueueId}`),
       ctx,
       'closeTriggers',
       'Duplicate close trigger relation.',
     )
     addDuplicateIssue(
-      value.closeBlockers.map(
-        (rule) => `${rule.blockedQueueId}:${rule.prerequisiteQueueId}`,
-      ),
+      value.closeBlockers
+        .filter((rule) => rule.isActive)
+        .map((rule) => `${rule.blockedQueueId}:${rule.prerequisiteQueueId}`),
       ctx,
       'closeBlockers',
       'Duplicate close requirement relation.',
     )
     addDuplicateIssue(
-      value.creationRequirements.map(
-        (rule) => `${rule.targetQueueId}:${rule.prerequisiteQueueId}`,
-      ),
+      value.creationRequirements
+        .filter((rule) => rule.isActive)
+        .map((rule) => `${rule.targetQueueId}:${rule.prerequisiteQueueId}`),
       ctx,
       'creationRequirements',
       'Duplicate creation requirement relation.',
     )
+    addDuplicateIdIssue(value.startRules, ctx, 'startRules')
+    addDuplicateIdIssue(value.closeTriggers, ctx, 'closeTriggers')
+    addDuplicateIdIssue(value.closeBlockers, ctx, 'closeBlockers')
+    addDuplicateIdIssue(value.creationRequirements, ctx, 'creationRequirements')
   })
 
 function addDuplicateIssue(
@@ -250,6 +261,26 @@ function addDuplicateIssue(
       return
     }
     seen.add(key)
+  }
+}
+
+function addDuplicateIdIssue(
+  rules: Array<{ id?: string }>,
+  ctx: z.RefinementCtx,
+  path: string,
+) {
+  const seen = new Set<string>()
+  for (const rule of rules) {
+    if (!rule.id) continue
+    if (seen.has(rule.id)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Duplicate rule id in payload.',
+        path: [path],
+      })
+      return
+    }
+    seen.add(rule.id)
   }
 }
 

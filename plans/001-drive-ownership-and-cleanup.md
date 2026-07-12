@@ -15,6 +15,7 @@
 - **Depends on**: none
 - **Category**: bug, security, migration
 - **Planned at**: commit `9d2ee9d`, 2026-07-12
+- **Status**: DONE
 
 ## Why this matters
 

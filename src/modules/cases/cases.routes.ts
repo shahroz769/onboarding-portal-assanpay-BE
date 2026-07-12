@@ -48,44 +48,62 @@ import type {
   EmailRecipientType,
 } from './cases.schemas'
 import {
-  advanceStage,
-  assignCase,
-  bulkAssignCases,
-  closeUnsuccessful,
   createCase,
-  createCaseComment,
   getCaseDetail,
-  listCaseComments,
-  listCaseHistory,
   listCaseOwners,
   listCases,
-  markLiveLimitsApplied,
-  markTestingLimitsApplied,
-  saveMidCreationDetails,
-  saveDocumentReviewSubMerchant,
-  saveFieldReviews,
-  saveWordpressWebsiteCase,
-  selectSubMerchantForm,
+} from './case-query.service'
+import {
+  assignCase,
+  bulkAssignCases,
   takeOwnership,
   updateCasePriority,
+} from './case-assignment.service'
+import {
+  advanceStage,
+  closeUnsuccessful,
   updateCaseStatus,
+} from './case-stage.service'
+import {
+  createCaseComment,
+  listCaseComments,
+  listCaseHistory,
+} from './case-comments.service'
+import {
+  saveDocumentReviewSubMerchant,
+  saveFieldReviews,
   sendForResubmission,
-  sendAgreementForClientUpload,
-  sendMidCreationCredentialsEmail,
-  uploadAgreementFinalAgreement,
-  uploadPhysicalAgreementCopy,
-  uploadSubMerchantEmailProof,
-  uploadSubMerchantFinalForm,
-  getResubmissionEmailPreview,
+} from './case-documents-review.service'
+import {
+  confirmAgreementEmailManual,
+  confirmLiveActivationEmailManual,
+  confirmMidCreationEmailManual,
   confirmResubmissionEmailManual,
   getAgreementEmailPreview,
-  confirmAgreementEmailManual,
-  getMidCreationEmailPreview,
-  confirmMidCreationEmailManual,
-  sendLiveActivationEmail,
   getLiveActivationEmailPreview,
-  confirmLiveActivationEmailManual,
-} from './cases.service'
+  getMidCreationEmailPreview,
+  getResubmissionEmailPreview,
+} from './case-communications.service'
+import { markTestingLimitsApplied } from './testing-case.service'
+import {
+  markLiveLimitsApplied,
+  sendLiveActivationEmail,
+} from './live-case.service'
+import {
+  saveMidCreationDetails,
+  sendMidCreationCredentialsEmail,
+} from './mid-case.service'
+import { saveWordpressWebsiteCase } from './wordpress-case.service'
+import {
+  selectSubMerchantForm,
+  uploadSubMerchantEmailProof,
+  uploadSubMerchantFinalForm,
+} from './sub-merchant-form-case.service'
+import {
+  sendAgreementForClientUpload,
+  uploadAgreementFinalAgreement,
+} from './agreement-case.service'
+import { uploadPhysicalAgreementCopy } from './physical-agreement-case.service'
 
 export const caseRoutes = new Hono<AppEnv>()
 

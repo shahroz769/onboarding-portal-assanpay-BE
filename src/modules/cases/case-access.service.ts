@@ -61,11 +61,15 @@ export async function assertCanViewCase(
   }
 }
 
-export async function assertCanWorkCase(caseId: string, userId: string) {
-  const access = await getAgentQueueAccess(userId)
+export async function assertCanWorkCase(
+  caseId: string,
+  userId: string,
+  database: DbExecutor = getDb(),
+) {
+  const access = await getAgentQueueAccess(userId, database)
   if (!access) return
 
-  const caseRow = await getDb().query.cases.findFirst({
+  const caseRow = await database.query.cases.findFirst({
     where: eq(cases.id, caseId),
     columns: { queueId: true },
   })
@@ -109,8 +113,12 @@ export async function assertOwnerCanWorkCases(
   }
 }
 
-export async function assertCaseOwner(caseId: string, userId: string) {
-  const caseRow = await getDb().query.cases.findFirst({
+export async function assertCaseOwner(
+  caseId: string,
+  userId: string,
+  database: DbExecutor = getDb(),
+) {
+  const caseRow = await database.query.cases.findFirst({
     where: eq(cases.id, caseId),
     columns: { ownerId: true },
   })

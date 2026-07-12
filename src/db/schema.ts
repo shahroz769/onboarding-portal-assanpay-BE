@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -14,6 +15,7 @@ import {
   serial,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
   varchar,
@@ -164,6 +166,25 @@ export const caseStatusEnum = pgEnum('case_status', [
   'awaiting_client',
 ])
 
+export const queueWorkflowTypeEnum = pgEnum('queue_workflow_type', [
+  'generic',
+  'document_review',
+  'agreement',
+  'mid',
+  'testing',
+  'wordpress',
+  'card',
+  'physical_agreement',
+  'live',
+  'sub_merchant_form',
+])
+
+export const queueLifecycleEnum = pgEnum('queue_lifecycle', [
+  'draft',
+  'active',
+  'inactive',
+])
+
 export const queues = pgTable(
   'queues',
   {
@@ -171,14 +192,23 @@ export const queues = pgTable(
     name: varchar('name', { length: 120 }).notNull().unique(),
     slug: varchar('slug', { length: 120 }).notNull().unique(),
     prefix: varchar('prefix', { length: 4 }).notNull().unique(),
+    workflowType: queueWorkflowTypeEnum('workflow_type')
+      .default('generic')
+      .notNull(),
+    lifecycle: queueLifecycleEnum('lifecycle').default('inactive').notNull(),
+    revision: integer('revision').default(1).notNull(),
     qcEnabled: boolean('qc_enabled').default(false).notNull(),
     slaHours: integer('sla_hours').default(24).notNull(),
+    /** Kept in sync with lifecycle: active ↔ true, draft/inactive ↔ false. */
     isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
-  (table) => [check('queues_sla_hours_positive', sql`${table.slaHours} > 0`)],
+  (table) => [
+    check('queues_sla_hours_positive', sql`${table.slaHours} > 0`),
+    check('queues_revision_positive', sql`${table.revision} >= 1`),
+  ],
 )
 
 export const configurationSettings = pgTable('configuration_settings', {
@@ -188,6 +218,24 @@ export const configurationSettings = pgTable('configuration_settings', {
     .defaultNow()
     .notNull(),
 })
+
+export const flowConfigurationRevisions = pgTable(
+  'flow_configuration_revisions',
+  {
+    id: integer('id').primaryKey().default(1),
+    revision: integer('revision').default(1).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check('flow_configuration_revisions_singleton', sql`${table.id} = 1`),
+    check(
+      'flow_configuration_revisions_revision_positive',
+      sql`${table.revision} >= 1`,
+    ),
+  ],
+)
 
 export const agreementDraftTemplates = pgTable(
   'agreement_draft_templates',
@@ -268,12 +316,18 @@ export const queueStages = pgTable(
     slug: varchar('slug', { length: 120 }).notNull(),
     order: integer('order').notNull(),
     category: stageCategoryEnum('category').notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    capabilities: jsonb('capabilities').$type<Record<string, unknown> | null>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => ({
     queueStagesQueueIdIdx: index('queue_stages_queue_id_idx').on(table.queueId),
+    queueStagesIdQueueUniq: unique('queue_stages_id_queue_id_uniq').on(
+      table.id,
+      table.queueId,
+    ),
     queueStagesQueueSlugUniq: uniqueIndex('queue_stages_queue_slug_uniq').on(
       table.queueId,
       table.slug,
@@ -572,9 +626,7 @@ export const cases = pgTable(
     ownerId: uuid('owner_id').references(() => users.id, {
       onDelete: 'set null',
     }),
-    currentStageId: uuid('current_stage_id').references(() => queueStages.id, {
-      onDelete: 'set null',
-    }),
+    currentStageId: uuid('current_stage_id'),
     status: caseStatusEnum('status').default('new').notNull(),
     priority: priorityEnum('priority').default('normal').notNull(),
     closeOutcome: caseCloseOutcomeEnum('close_outcome'),
@@ -644,6 +696,11 @@ export const cases = pgTable(
       .where(
         sql`${table.status} = 'closed' AND ${table.closeOutcome} = 'successful'`,
       ),
+    casesCurrentStageQueueFk: foreignKey({
+      columns: [table.currentStageId, table.queueId],
+      foreignColumns: [queueStages.id, queueStages.queueId],
+      name: 'cases_current_stage_id_queue_id_fk',
+    }).onDelete('set null'),
   }),
 )
 
@@ -799,7 +856,9 @@ export const caseFlowStartRules = pgTable(
   (table) => ({
     caseFlowStartRulesTargetQueueUnique: uniqueIndex(
       'case_flow_start_rules_target_queue_unique',
-    ).on(table.targetQueueId),
+    )
+      .on(table.targetQueueId)
+      .where(sql`${table.isActive} = true`),
     caseFlowStartRulesOrderIdx: index('case_flow_start_rules_order_idx').on(
       table.order,
     ),
@@ -832,7 +891,9 @@ export const caseFlowCloseTriggers = pgTable(
   (table) => ({
     caseFlowCloseTriggersSourceTargetUnique: uniqueIndex(
       'case_flow_close_triggers_source_target_unique',
-    ).on(table.sourceQueueId, table.targetQueueId),
+    )
+      .on(table.sourceQueueId, table.targetQueueId)
+      .where(sql`${table.isActive} = true`),
     caseFlowCloseTriggersSourceOrderIdx: index(
       'case_flow_close_triggers_source_order_idx',
     ).on(table.sourceQueueId, table.order),
@@ -867,7 +928,9 @@ export const caseFlowCloseBlockers = pgTable(
   (table) => ({
     caseFlowCloseBlockersBlockedPrerequisiteUnique: uniqueIndex(
       'case_flow_close_blockers_blocked_prerequisite_unique',
-    ).on(table.blockedQueueId, table.prerequisiteQueueId),
+    )
+      .on(table.blockedQueueId, table.prerequisiteQueueId)
+      .where(sql`${table.isActive} = true`),
     caseFlowCloseBlockersPrerequisiteIdx: index(
       'case_flow_close_blockers_prerequisite_idx',
     ).on(table.prerequisiteQueueId),
@@ -895,7 +958,9 @@ export const caseFlowCreationRequirements = pgTable(
   (table) => ({
     caseFlowCreationRequirementsTargetPrerequisiteUnique: uniqueIndex(
       'case_flow_creation_requirements_target_prerequisite_unique',
-    ).on(table.targetQueueId, table.prerequisiteQueueId),
+    )
+      .on(table.targetQueueId, table.prerequisiteQueueId)
+      .where(sql`${table.isActive} = true`),
     caseFlowCreationRequirementsPrerequisiteIdx: index(
       'case_flow_creation_requirements_prerequisite_idx',
     ).on(table.prerequisiteQueueId),
@@ -1221,6 +1286,76 @@ export const agreementEmailStatusEnum = pgEnum('agreement_email_status', [
   'failed',
 ])
 
+export const storageObjectKindEnum = pgEnum('storage_object_kind', [
+  'file',
+  'folder',
+])
+
+export const storageObjectVisibilityEnum = pgEnum('storage_object_visibility', [
+  'private',
+  'public',
+])
+
+export const storageObjectLifecycleEnum = pgEnum('storage_object_lifecycle', [
+  'provisioning',
+  'current',
+  'superseded',
+  'failed',
+])
+
+export const storageObjects = pgTable(
+  'storage_objects',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    provider: varchar('provider', { length: 40 }).default('google_drive').notNull(),
+    providerObjectId: varchar('provider_object_id', { length: 255 }).notNull(),
+    objectKind: storageObjectKindEnum('object_kind').notNull(),
+    merchantId: uuid('merchant_id').references(() => merchants.id, {
+      onDelete: 'cascade',
+    }),
+    caseId: uuid('case_id').references(() => cases.id, {
+      onDelete: 'set null',
+    }),
+    visibility: storageObjectVisibilityEnum('visibility').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    lifecycle: storageObjectLifecycleEnum('lifecycle')
+      .default('provisioning')
+      .notNull(),
+    parentProviderObjectId: varchar('parent_provider_object_id', {
+      length: 255,
+    }),
+    metadata: jsonb('metadata'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    storageObjectsProviderObjectUniq: uniqueIndex(
+      'storage_objects_provider_object_uniq',
+    ).on(table.provider, table.providerObjectId),
+    storageObjectsAttemptIdx: index('storage_objects_attempt_idx').on(
+      table.attemptId,
+    ),
+    storageObjectsMerchantAttemptIdx: index(
+      'storage_objects_merchant_attempt_idx',
+    ).on(table.merchantId, table.attemptId),
+    storageObjectsCaseAttemptIdx: index('storage_objects_case_attempt_idx').on(
+      table.caseId,
+      table.attemptId,
+    ),
+    storageObjectsMerchantRootClaimUniq: uniqueIndex(
+      'storage_objects_merchant_root_claim_uniq',
+    )
+      .on(table.merchantId, table.visibility)
+      .where(
+        sql`(${table.metadata}->>'role') = 'merchant_root' AND ${table.lifecycle} IN ('provisioning', 'current')`,
+      ),
+  }),
+)
+
 export const agreementCaseDetails = pgTable(
   'agreement_case_details',
   {
@@ -1286,6 +1421,10 @@ export type Queue = typeof queues.$inferSelect
 export type NewQueue = typeof queues.$inferInsert
 export type ConfigurationSetting = typeof configurationSettings.$inferSelect
 export type NewConfigurationSetting = typeof configurationSettings.$inferInsert
+export type FlowConfigurationRevision =
+  typeof flowConfigurationRevisions.$inferSelect
+export type NewFlowConfigurationRevision =
+  typeof flowConfigurationRevisions.$inferInsert
 export type AgreementDraftTemplate = typeof agreementDraftTemplates.$inferSelect
 export type NewAgreementDraftTemplate =
   typeof agreementDraftTemplates.$inferInsert
@@ -1335,3 +1474,5 @@ export type NewSubMerchantFormDetails =
   typeof subMerchantFormDetails.$inferInsert
 export type AgreementCaseDetails = typeof agreementCaseDetails.$inferSelect
 export type NewAgreementCaseDetails = typeof agreementCaseDetails.$inferInsert
+export type StorageObject = typeof storageObjects.$inferSelect
+export type NewStorageObject = typeof storageObjects.$inferInsert

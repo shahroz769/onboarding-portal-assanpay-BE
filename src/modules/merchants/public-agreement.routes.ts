@@ -12,11 +12,20 @@ import {
   queueStages,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+import {
+  cleanupFailedAttemptObjects,
+  createStorageAttemptId,
+  listAttemptStorageObjects,
+  markStorageObjectsLifecycle,
+  recordStorageObject,
+  supersedeStorageObjects,
+} from '../../lib/storage/ownership'
 import type { AppEnv } from '../../types/auth'
 import { validateToken } from '../cases/case-resubmission-tokens.service'
 import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
-import { getAgreementUploadContext } from '../cases/cases.service'
+import { getAgreementUploadContext } from '../cases/agreement-case.service'
 import { notifyOnResubmission } from '../notifications/notifications.service'
 import {
   PRIVATE_MERCHANT_RETURNS_PATH,
@@ -56,7 +65,7 @@ agreementUploadRoutes.post('/:token', async (c) => {
   if (!(file instanceof File)) {
     throw new AppError(400, 'Signed agreement file is required.')
   }
-  validateAgreementUpload(file)
+  await validateAgreementUpload(file)
 
   const [caseRow] = await db
     .select({
@@ -87,7 +96,6 @@ agreementUploadRoutes.post('/:token', async (c) => {
     throw new AppError(500, 'No working stage configured for this queue.')
   }
 
-  const storage = new GoogleDriveStorageProvider()
   const previousCaseFile = await db.query.caseFiles.findFirst({
     where: and(
       eq(caseFiles.caseId, caseRow.id),
@@ -95,69 +103,12 @@ agreementUploadRoutes.post('/:token', async (c) => {
     ),
     columns: { googleDriveFileId: true },
   })
-  const folder = await ensureMerchantFolderPath({
-    merchantId: caseRow.merchantId,
-    merchantName: caseRow.merchantName,
-    visibility: 'private',
-    path: [
-      ...PRIVATE_MERCHANT_RETURNS_PATH,
-      caseRow.caseNumber,
-      'Signed By Merchant',
-    ],
-    storage,
-  })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
-  })
 
+  const attemptId = createStorageAttemptId()
   const now = new Date()
-  try {
-    await db.transaction(async (tx) => {
-    const [caseFile] = await tx
-      .insert(caseFiles)
-      .values({
-        caseId: caseRow.id,
-        fileKind: AGREEMENT_CLIENT_FILE_KIND,
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: null,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [caseFiles.caseId, caseFiles.fileKind],
-        set: {
-          originalName: file.name,
-          mimeType: uploaded.mimeType,
-          sizeBytes: uploaded.sizeBytes,
-          googleDriveFileId: uploaded.fileId,
-          googleDriveWebViewLink: uploaded.webViewLink,
-          googleDriveDownloadLink: uploaded.downloadLink,
-          googleDriveFolderId: uploaded.folderId,
-          uploadedBy: null,
-          updatedAt: now,
-        },
-      })
-      .returning()
+  const storage = new GoogleDriveStorageProvider()
 
-    if (!caseFile) {
-      throw new AppError(500, 'Failed to save signed agreement.')
-    }
-
-    await tx
-      .update(agreementCaseDetails)
-      .set({
-        clientAgreementFileId: caseFile.id,
-        updatedAt: now,
-      })
-      .where(eq(agreementCaseDetails.caseId, caseRow.id))
-
+  await db.transaction(async (tx) => {
     const [consumedToken] = await tx
       .update(caseResubmissionTokens)
       .set({ consumedAt: now })
@@ -172,61 +123,145 @@ agreementUploadRoutes.post('/:token', async (c) => {
     if (!consumedToken) {
       throw new AppError(410, 'This agreement link has already been used.')
     }
+  })
 
-    await tx
-      .update(cases)
-      .set({
-        status: 'working',
-        currentStageId: workingStage.id,
-        updatedAt: now,
-      })
-      .where(eq(cases.id, caseRow.id))
+  try {
+    const folder = await ensureMerchantFolderPath({
+      merchantId: caseRow.merchantId,
+      merchantName: caseRow.merchantName,
+      visibility: 'private',
+      path: [
+        ...PRIVATE_MERCHANT_RETURNS_PATH,
+        caseRow.caseNumber,
+        'Signed By Merchant',
+      ],
+      storage,
+    })
+    const uploaded = await storage.uploadFile(folder.folderId, {
+      fileName: file.name,
+      mimeType: file.type,
+      file,
+    })
 
-    await tx.insert(caseHistory).values({
+    await recordStorageObject({
+      providerObjectId: uploaded.fileId,
+      objectKind: 'file',
+      visibility: 'private',
+      attemptId,
+      merchantId: caseRow.merchantId,
       caseId: caseRow.id,
-      actorId: null,
-      action: 'agreement_client_submitted',
-      details: {
-        tokenId: validated.tokenId,
-        fileName: file.name,
-        fileUrl: uploaded.webViewLink,
+      parentProviderObjectId: uploaded.folderId,
+      lifecycle: 'provisioning',
+      metadata: {
+        fileKind: AGREEMENT_CLIENT_FILE_KIND,
+        fileName: uploaded.fileName,
+        sizeBytes: uploaded.sizeBytes,
       },
     })
+
+    await db.transaction(async (tx) => {
+      const [caseFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId: caseRow.id,
+          fileKind: AGREEMENT_CLIENT_FILE_KIND,
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: null,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: file.name,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: null,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!caseFile) {
+        throw new AppError(500, 'Failed to save signed agreement.')
+      }
+
+      await tx
+        .update(agreementCaseDetails)
+        .set({
+          clientAgreementFileId: caseFile.id,
+          updatedAt: now,
+        })
+        .where(eq(agreementCaseDetails.caseId, caseRow.id))
+
+      await tx
+        .update(cases)
+        .set({
+          status: 'working',
+          currentStageId: workingStage.id,
+          updatedAt: now,
+        })
+        .where(eq(cases.id, caseRow.id))
+
+      await tx.insert(caseHistory).values({
+        caseId: caseRow.id,
+        actorId: null,
+        action: 'agreement_client_submitted',
+        details: {
+          tokenId: validated.tokenId,
+          attemptId,
+          fileName: file.name,
+          fileUrl: uploaded.webViewLink,
+        },
+      })
     })
+
+    const attemptObjects = await listAttemptStorageObjects(attemptId)
+    await markStorageObjectsLifecycle(
+      attemptObjects.map((object) => object.providerObjectId),
+      'current',
+    )
+
+    if (
+      previousCaseFile?.googleDriveFileId &&
+      previousCaseFile.googleDriveFileId !== uploaded.fileId
+    ) {
+      await supersedeStorageObjects([previousCaseFile.googleDriveFileId])
+    }
+
+    if (caseRow.ownerId) {
+      await notifyOnResubmission({
+        caseId: caseRow.id,
+        caseNumber: caseRow.caseNumber,
+        ownerId: caseRow.ownerId,
+        clientName: caseRow.merchantOwnerName,
+        fieldCount: 1,
+      }).catch(() => {
+        // Notification delivery must not break the upload.
+      })
+    }
+
+    return c.json({ success: true, caseNumber: caseRow.caseNumber })
   } catch (error) {
-    await storage.deleteFile(uploaded.fileId).catch((cleanupError) => {
-      console.error('[agreement-upload.cleanup-new-file]', cleanupError)
-    })
+    await cleanupFailedAttemptObjects({ attemptId, storage }).catch(
+      (cleanupError) => {
+        console.error('[agreement-upload.cleanup]', cleanupError)
+      },
+    )
     throw error
   }
-
-  if (
-    previousCaseFile?.googleDriveFileId &&
-    previousCaseFile.googleDriveFileId !== uploaded.fileId
-  ) {
-    await storage
-      .deleteFile(previousCaseFile.googleDriveFileId)
-      .catch((cleanupError) => {
-        console.error('[agreement-upload.cleanup-previous-file]', cleanupError)
-      })
-  }
-
-  if (caseRow.ownerId) {
-    await notifyOnResubmission({
-      caseId: caseRow.id,
-      caseNumber: caseRow.caseNumber,
-      ownerId: caseRow.ownerId,
-      clientName: caseRow.merchantOwnerName,
-      fieldCount: 1,
-    }).catch(() => {
-      // Notification delivery must not break the upload.
-    })
-  }
-
-  return c.json({ success: true, caseNumber: caseRow.caseNumber })
 })
 
-function validateAgreementUpload(file: File) {
+async function validateAgreementUpload(file: File) {
   if (file.size > MAX_AGREEMENT_BYTES) {
     throw new AppError(400, 'Agreement must be 1 MB or smaller.')
   }
@@ -238,4 +273,10 @@ function validateAgreementUpload(file: File) {
   ) {
     throw new AppError(400, 'Agreement must be a PDF, DOC, or DOCX file.')
   }
+
+  await assertFileContentSignature({
+    file,
+    expectedMimeType: file.type || 'application/octet-stream',
+    label: 'Signed agreement',
+  })
 }

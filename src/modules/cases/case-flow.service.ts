@@ -81,6 +81,8 @@ async function createConfiguredCase(
       id: true,
       name: true,
       slug: true,
+      workflowType: true,
+      lifecycle: true,
       qcEnabled: true,
       isActive: true,
     },
@@ -92,7 +94,7 @@ async function createConfiguredCase(
   if (!queue) {
     throw new AppError(404, 'Target queue not found.')
   }
-  if (!queue.isActive) {
+  if (queue.lifecycle !== 'active') {
     throw new AppError(
       409,
       `${queue.name} is inactive. Automatic case creation is disabled.`,
@@ -109,6 +111,7 @@ async function createConfiguredCase(
     name: queue.name,
     slug: queue.slug,
     qcEnabled: queue.qcEnabled,
+    workflowType: queue.workflowType,
   })
   const initialStage = stages[0]
   if (!initialStage) {
@@ -231,19 +234,34 @@ export async function assertCloseBlockersSatisfied(
   const prerequisiteQueueIds = blockers.map(
     (blocker) => blocker.prerequisiteQueueId,
   )
-  const satisfiedRows = await tx
-    .select({ queueId: cases.queueId })
+
+  // Lock all candidate prerequisite cases in stable ID order to prevent
+  // concurrent close races from observing a stale satisfaction snapshot.
+  const candidateRows = await tx
+    .select({
+      id: cases.id,
+      queueId: cases.queueId,
+      status: cases.status,
+      closeOutcome: cases.closeOutcome,
+    })
     .from(cases)
     .where(
       and(
         eq(cases.merchantId, input.merchantId),
         inArray(cases.queueId, prerequisiteQueueIds),
-        eq(cases.status, 'closed'),
-        eq(cases.closeOutcome, 'successful'),
       ),
     )
+    .orderBy(asc(cases.id))
+    .for('update')
 
-  const satisfiedQueueIds = new Set(satisfiedRows.map((row) => row.queueId))
+  const satisfiedQueueIds = new Set(
+    candidateRows
+      .filter(
+        (row) =>
+          row.status === 'closed' && row.closeOutcome === 'successful',
+      )
+      .map((row) => row.queueId),
+  )
   const missing = blockers.filter(
     (blocker) => !satisfiedQueueIds.has(blocker.prerequisiteQueueId),
   )
@@ -282,19 +300,32 @@ export async function assertCreationRequirementsSatisfied(
   const prerequisiteQueueIds = requirements.map(
     (requirement) => requirement.prerequisiteQueueId,
   )
-  const satisfiedRows = await tx
-    .select({ queueId: cases.queueId })
+
+  const candidateRows = await tx
+    .select({
+      id: cases.id,
+      queueId: cases.queueId,
+      status: cases.status,
+      closeOutcome: cases.closeOutcome,
+    })
     .from(cases)
     .where(
       and(
         eq(cases.merchantId, input.merchantId),
         inArray(cases.queueId, prerequisiteQueueIds),
-        eq(cases.status, 'closed'),
-        eq(cases.closeOutcome, 'successful'),
       ),
     )
+    .orderBy(asc(cases.id))
+    .for('update')
 
-  const satisfiedQueueIds = new Set(satisfiedRows.map((row) => row.queueId))
+  const satisfiedQueueIds = new Set(
+    candidateRows
+      .filter(
+        (row) =>
+          row.status === 'closed' && row.closeOutcome === 'successful',
+      )
+      .map((row) => row.queueId),
+  )
   const missing = requirements.filter(
     (requirement) => !satisfiedQueueIds.has(requirement.prerequisiteQueueId),
   )

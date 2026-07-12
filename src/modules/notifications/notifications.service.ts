@@ -213,7 +213,7 @@ export async function createBulkNotifications(rows: CreateNotificationInput[]) {
   return inserted
 }
 
-// ─── Trigger Helpers (called from cases.service) ────────────────────────────
+// ─── Trigger Helpers (called from case services) ─────────────────────────────
 
 type AssignmentNotifyInput = {
   caseId: string

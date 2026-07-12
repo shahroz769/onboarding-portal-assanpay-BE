@@ -7,11 +7,11 @@ deliberately do not add tests because the operator deferred test creation.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |---|---|---|---|---|---|
-| 001 | Make Google Drive ownership and cleanup safe | P1 | L | — | TODO |
-| 002 | Make case state transitions atomic and consistent | P1 | M | — | TODO |
-| 003 | Make flow configuration revisioned and valid | P1 | M | 002 | TODO |
-| 004 | Make queues and stages data-driven | P1 | L | 002, 003 | TODO |
-| 005 | Decompose the case service and centralize contracts | P2 | L | 001–004 | TODO |
+| 001 | Make Google Drive ownership and cleanup safe | P1 | L | — | DONE |
+| 002 | Make case state transitions atomic and consistent | P1 | M | — | DONE |
+| 003 | Make flow configuration revisioned and valid | P1 | M | 002 | DONE |
+| 004 | Make queues and stages data-driven | P1 | L | 002, 003 | DONE |
+| 005 | Decompose the case service and centralize contracts | P2 | L | 001–004 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED.
 

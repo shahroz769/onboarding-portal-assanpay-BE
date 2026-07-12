@@ -12,7 +12,16 @@ import {
   queueStages,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
+import {
+  cleanupFailedAttemptObjects,
+  createStorageAttemptId,
+  listAttemptStorageObjects,
+  markStorageObjectsLifecycle,
+  recordStorageObject,
+  supersedeStorageObjects,
+} from '../../lib/storage/ownership'
 import type { AppEnv } from '../../types/auth'
 import { validateToken } from '../cases/case-resubmission-tokens.service'
 import {
@@ -21,7 +30,7 @@ import {
   isDocumentFieldName,
   MERCHANT_FIELD_LABELS,
 } from '../cases/field-labels'
-import { getResubmissionContext } from '../cases/cases.service'
+import { getResubmissionContext } from '../cases/case-documents-review.service'
 import {
   MAX_FILE_SIZE_BYTES,
   getAllowedDocumentTypes,
@@ -279,7 +288,12 @@ resubmissionRoutes.post('/:token', async (c) => {
           `${DOCUMENT_TYPE_LABELS[existing.documentType]} exceeds the 10 MB limit.`,
         )
       }
-      normalizeMimeType(file)
+      const mimeType = normalizeMimeType(file)
+      await assertFileContentSignature({
+        file,
+        expectedMimeType: mimeType,
+        label: DOCUMENT_TYPE_LABELS[existing.documentType],
+      })
       continue
     }
 
@@ -358,36 +372,38 @@ resubmissionRoutes.post('/:token', async (c) => {
 
   const submissionIndex = Number(previousResubmissions[0]?.count ?? 0) + 2
   const submissionAttemptFolder = `Attempt ${crypto.randomUUID()}`
-  let nextSubmissionFolderId: string | null = null
+  const attemptId = createStorageAttemptId()
+  const now = new Date()
 
-  if (replaceActions.length > 0) {
-    const firstDocument = existingDocsById.get(
-      getDocumentIdFromFieldName(replaceActions[0][0])!,
-    )
+  const workingStage = await db.query.queueStages.findFirst({
+    where: and(
+      eq(queueStages.queueId, caseRow.queueId),
+      eq(queueStages.slug, 'working'),
+    ),
+  })
 
-    if (!firstDocument) {
-      throw new AppError(400, 'Unable to resolve the current document folder.')
-    }
-
-    const createdFolder = caseRow.googleDrivePrivateFolderId
-      ? await storage.ensureFolderPath(caseRow.googleDrivePrivateFolderId, [
-          ...PRIVATE_KYC_PENDING_PATH,
-          getSubmissionFolderName(submissionIndex),
-          submissionAttemptFolder,
-        ])
-      : await ensureMerchantFolderPath({
-          merchantId: caseRow.merchantId,
-          merchantName: caseRow.merchantName,
-          visibility: 'private',
-          path: [
-            ...PRIVATE_KYC_PENDING_PATH,
-            getSubmissionFolderName(submissionIndex),
-            submissionAttemptFolder,
-          ],
-          storage,
-        })
-    nextSubmissionFolderId = createdFolder.folderId
+  if (!workingStage) {
+    throw new AppError(500, 'No working stage configured for this queue.')
   }
+
+  // Consume the single-use token before any Drive work so concurrent requests
+  // cannot both upload into shared find-or-create folders.
+  await db.transaction(async (tx) => {
+    const [consumedToken] = await tx
+      .update(caseResubmissionTokens)
+      .set({ consumedAt: now })
+      .where(
+        and(
+          eq(caseResubmissionTokens.id, validated.tokenId),
+          isNull(caseResubmissionTokens.consumedAt),
+        ),
+      )
+      .returning({ id: caseResubmissionTokens.id })
+
+    if (!consumedToken) {
+      throw new AppError(410, 'This resubmission link has already been used.')
+    }
+  })
 
   const uploadedByField = new Map<
     string,
@@ -402,7 +418,43 @@ resubmissionRoutes.post('/:token', async (c) => {
   >()
 
   try {
-    if (nextSubmissionFolderId) {
+    if (replaceActions.length > 0) {
+      const parentPath = [
+        ...PRIVATE_KYC_PENDING_PATH,
+        getSubmissionFolderName(submissionIndex),
+      ]
+      const parentFolder = caseRow.googleDrivePrivateFolderId
+        ? await storage.ensureFolderPath(
+            caseRow.googleDrivePrivateFolderId,
+            parentPath,
+          )
+        : await ensureMerchantFolderPath({
+            merchantId: caseRow.merchantId,
+            merchantName: caseRow.merchantName,
+            visibility: 'private',
+            path: parentPath,
+            storage,
+          })
+
+      const attemptFolder = await storage.createFolder(
+        parentFolder.folderId,
+        submissionAttemptFolder,
+      )
+      await recordStorageObject({
+        providerObjectId: attemptFolder.folderId,
+        objectKind: 'folder',
+        visibility: 'private',
+        attemptId,
+        merchantId: caseRow.merchantId,
+        caseId: caseRow.id,
+        parentProviderObjectId: parentFolder.folderId,
+        lifecycle: 'provisioning',
+        metadata: {
+          role: 'resubmission_attempt_folder',
+          submissionIndex,
+        },
+      })
+
       for (const [fieldName] of replaceActions) {
         const docId = getDocumentIdFromFieldName(fieldName)!
         const existing = existingDocsById.get(docId)!
@@ -412,10 +464,27 @@ resubmissionRoutes.post('/:token', async (c) => {
           throw new AppError(400, `Document "${fieldName}" must be uploaded.`)
         }
 
-        const uploaded = await storage.uploadFile(nextSubmissionFolderId, {
+        const uploaded = await storage.uploadFile(attemptFolder.folderId, {
           fileName: buildDocumentFileName(existing.documentType, file.name),
           mimeType: normalizeMimeType(file),
           file,
+        })
+
+        await recordStorageObject({
+          providerObjectId: uploaded.fileId,
+          objectKind: 'file',
+          visibility: 'private',
+          attemptId,
+          merchantId: caseRow.merchantId,
+          caseId: caseRow.id,
+          parentProviderObjectId: uploaded.folderId,
+          lifecycle: 'provisioning',
+          metadata: {
+            documentType: existing.documentType,
+            fileName: uploaded.fileName,
+            sizeBytes: uploaded.sizeBytes,
+            merchantDocumentId: docId,
+          },
         })
 
         uploadedByField.set(fieldName, {
@@ -429,34 +498,24 @@ resubmissionRoutes.post('/:token', async (c) => {
       }
     }
 
-    const workingStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseRow.queueId),
-        eq(queueStages.slug, 'working'),
-      ),
-    })
-
-    if (!workingStage) {
-      throw new AppError(500, 'No working stage configured for this queue.')
-    }
-
-    const now = new Date()
     const fieldsUpdated = Array.from(allowedFieldNames)
-  const resubmittedFieldIds = fieldsUpdated
-    .map((fieldName) => reviewByField.get(fieldName)?.id)
-    .filter((id): id is string => Boolean(id))
-  const fieldsUpdatedDetails = fieldsUpdated.map((fieldName) => {
-    const review = reviewByField.get(fieldName)
-    if (!isDocumentFieldName(fieldName)) {
-      return {
-        fieldName,
-        label: MERCHANT_FIELD_LABELS[fieldName] ?? fieldName,
-        type: 'text' as const,
-        rejectionReason: review?.remarks ?? null,
-        previousValue: String(caseRow[fieldName as keyof typeof caseRow] ?? ''),
-        submittedValue: submittedTextFields.get(fieldName) ?? null,
+    const resubmittedFieldIds = fieldsUpdated
+      .map((fieldName) => reviewByField.get(fieldName)?.id)
+      .filter((id): id is string => Boolean(id))
+    const fieldsUpdatedDetails = fieldsUpdated.map((fieldName) => {
+      const review = reviewByField.get(fieldName)
+      if (!isDocumentFieldName(fieldName)) {
+        return {
+          fieldName,
+          label: MERCHANT_FIELD_LABELS[fieldName] ?? fieldName,
+          type: 'text' as const,
+          rejectionReason: review?.remarks ?? null,
+          previousValue: String(
+            caseRow[fieldName as keyof typeof caseRow] ?? '',
+          ),
+          submittedValue: submittedTextFields.get(fieldName) ?? null,
+        }
       }
-    }
 
       const docId = getDocumentIdFromFieldName(fieldName)!
       const existing = existingDocsById.get(docId)!
@@ -560,21 +619,6 @@ resubmissionRoutes.post('/:token', async (c) => {
           .where(inArray(caseFieldReviews.id, removedFieldIds))
       }
 
-      const [consumedToken] = await tx
-        .update(caseResubmissionTokens)
-        .set({ consumedAt: now })
-        .where(
-          and(
-            eq(caseResubmissionTokens.id, validated.tokenId),
-            isNull(caseResubmissionTokens.consumedAt),
-          ),
-        )
-        .returning({ id: caseResubmissionTokens.id })
-
-      if (!consumedToken) {
-        throw new AppError(410, 'This resubmission link has already been used.')
-      }
-
       await tx
         .update(cases)
         .set({
@@ -590,6 +634,7 @@ resubmissionRoutes.post('/:token', async (c) => {
         action: 'client_resubmitted',
         details: {
           tokenId: validated.tokenId,
+          attemptId,
           submissionIndex,
           fieldsUpdated,
           fieldsUpdatedLabels: fieldsUpdatedDetails.map((item) => item.label),
@@ -610,6 +655,25 @@ resubmissionRoutes.post('/:token', async (c) => {
       })
     })
 
+    const attemptObjects = await listAttemptStorageObjects(attemptId)
+    await markStorageObjectsLifecycle(
+      attemptObjects.map((object) => object.providerObjectId),
+      'current',
+    )
+
+    const supersededFileIds = [
+      ...Array.from(uploadedByField.values()).map(
+        (info) => info.previousFileId,
+      ),
+      ...removeActions.flatMap(([fieldName]) => {
+        const docId = getDocumentIdFromFieldName(fieldName)
+        if (!docId) return []
+        const existing = existingDocsById.get(docId)
+        return existing?.googleDriveFileId ? [existing.googleDriveFileId] : []
+      }),
+    ]
+    await supersedeStorageObjects(supersededFileIds)
+
     if (caseRow.ownerId) {
       try {
         await notifyOnResubmission({
@@ -626,12 +690,11 @@ resubmissionRoutes.post('/:token', async (c) => {
 
     return c.json({ success: true, caseNumber: caseRow.caseNumber })
   } catch (error) {
-    if (nextSubmissionFolderId) {
-      await storage.deleteFile(nextSubmissionFolderId).catch(() => {
-        // Best effort cleanup only.
-      })
-    }
-
+    await cleanupFailedAttemptObjects({ attemptId, storage }).catch(
+      (cleanupError) => {
+        console.error('[public-resubmission.cleanup]', cleanupError)
+      },
+    )
     throw error
   }
 })

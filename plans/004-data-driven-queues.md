@@ -13,6 +13,7 @@
 - **Depends on**: plans 002 and 003
 - **Category**: architecture, migration, direction
 - **Planned at**: commit `9d2ee9d`, 2026-07-12
+- **Status**: DONE
 
 ## Why this matters
 

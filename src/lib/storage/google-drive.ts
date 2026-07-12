@@ -6,7 +6,7 @@ import { AppError } from '../errors'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 const GOOGLE_DRIVE_UPLOAD_URL =
-  'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,parents'
+  'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink,webContentLink,parents'
 const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 
@@ -29,6 +29,7 @@ type GoogleDriveFileResponse = {
   webViewLink: string
   webContentLink?: string
   parents?: string[]
+  size?: string
 }
 
 export type StorageUploadInput = {
@@ -52,6 +53,10 @@ export interface FileStorageProvider {
     folderName: string,
     visibility?: GoogleDriveVisibility,
   ) => Promise<{ folderId: string }>
+  createMerchantRootFolder?: (
+    folderName: string,
+    visibility?: GoogleDriveVisibility,
+  ) => Promise<{ folderId: string; parentFolderId: string }>
   createFolder: (
     parentFolderId: string,
     folderName: string,
@@ -90,6 +95,23 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
         : 'GOOGLE_DRIVE_PARENT_FOLDER_ID',
     )
     return this.findOrCreateFolder(parentFolderId, folderName)
+  }
+
+  /**
+   * Always creates a new merchant root under the configured parent.
+   * Used by ownership claim winners so losers never share a find-or-create ID.
+   */
+  async createMerchantRootFolder(
+    folderName: string,
+    visibility: GoogleDriveVisibility = 'private',
+  ) {
+    const parentFolderId = getRequiredEnv(
+      visibility === 'public'
+        ? 'GOOGLE_DRIVE_PARENT_FOLDER_ID_PUBLIC'
+        : 'GOOGLE_DRIVE_PARENT_FOLDER_ID',
+    )
+    const folder = await this.createFolder(parentFolderId, folderName)
+    return { folderId: folder.folderId, parentFolderId }
   }
 
   async createFolder(parentFolderId: string, folderName: string) {
@@ -192,7 +214,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
       fileId: data.id,
       fileName: data.name,
       mimeType: data.mimeType,
-      sizeBytes: input.file.size,
+      sizeBytes: parseDriveSizeBytes(data.size) ?? input.file.size,
       webViewLink: data.webViewLink,
       downloadLink: data.webContentLink ?? null,
       folderId,
@@ -238,7 +260,7 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     const params = new URLSearchParams({
       supportsAllDrives: 'true',
       addParents: destinationFolderId,
-      fields: 'id,name,mimeType,webViewLink,webContentLink,parents',
+      fields: 'id,name,mimeType,size,webViewLink,webContentLink,parents',
     })
     if (removeParents) {
       params.set('removeParents', removeParents)
@@ -265,13 +287,13 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     }
 
     const data = (await response.json()) as GoogleDriveFileResponse
-    return toStorageUploadResult(data, destinationFolderId)
+    return toStorageUploadResult(data, destinationFolderId, metadata.size)
   }
 
   async getFileMetadata(fileId: string) {
     const accessToken = await getGoogleAccessToken()
     const response = await fetchGoogleApi(
-      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=id,name,parents,mimeType,webViewLink,webContentLink`,
+      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=id,name,parents,mimeType,size,webViewLink,webContentLink`,
       {
         method: 'GET',
         headers: {
@@ -336,16 +358,23 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
 function toStorageUploadResult(
   data: GoogleDriveFileResponse,
   folderId: string,
+  fallbackSize?: string,
 ): StorageUploadResult {
   return {
     fileId: data.id,
     fileName: data.name,
     mimeType: data.mimeType,
-    sizeBytes: 0,
+    sizeBytes: parseDriveSizeBytes(data.size) ?? parseDriveSizeBytes(fallbackSize) ?? 0,
     webViewLink: data.webViewLink,
     downloadLink: data.webContentLink ?? null,
     folderId,
   }
+}
+
+function parseDriveSizeBytes(size: string | undefined) {
+  if (size === undefined || size === '') return null
+  const parsed = Number(size)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
 function escapeDriveQueryValue(value: string) {

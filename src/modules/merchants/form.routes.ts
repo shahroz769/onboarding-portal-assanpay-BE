@@ -17,7 +17,7 @@ merchantFormRoutes.post('/merchant-form', async (c) => {
   const formData = await c.req.formData().catch(() => {
     throw new AppError(400, 'Invalid multipart form payload.')
   })
-  const input = parseMerchantFormData(formData)
+  const input = await parseMerchantFormData(formData)
   const result = await createMerchantSubmission(input)
 
   return c.json(
