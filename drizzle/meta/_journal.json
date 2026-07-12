@@ -330,6 +330,13 @@
       "when": 1784332800000,
       "tag": "0047_queue_workflow_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1784419200000,
+      "tag": "0048_trust_documents",
+      "breakpoints": true
     }
   ]
 }

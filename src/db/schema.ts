@@ -117,6 +117,12 @@ export const merchantDocumentTypeEnum = pgEnum('merchant_document_type', [
   'secp_section_42_license',
   'risk_assessment_documents',
   'by_laws_rules_regulations',
+  'trust_deed',
+  'trust_registration_certificate',
+  'trustees_authorized_signatories_cnic',
+  'proof_of_address',
+  'tax_exemption_certificate',
+  'other_supporting_documents',
 ])
 
 export const users = pgTable(

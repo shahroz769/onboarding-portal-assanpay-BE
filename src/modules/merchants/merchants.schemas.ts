@@ -85,11 +85,18 @@ export const merchantSpecificDocumentMap = {
     ],
   },
   trust_society_association: {
-    required: ['company_ntn'],
-    optional: [
+    required: [
+      'company_ntn',
       'board_resolution',
       'annual_audited_accounts',
-      'other_entity_certification',
+      'trust_deed',
+      'trust_registration_certificate',
+      'trustees_authorized_signatories_cnic',
+      'proof_of_address',
+    ],
+    optional: [
+      'tax_exemption_certificate',
+      'other_supporting_documents',
     ],
   },
 } as const satisfies Record<
@@ -108,6 +115,12 @@ export const allDocumentTypes = [
       ...definition.optional,
     ]),
   ),
+  'trust_deed',
+  'trust_registration_certificate',
+  'trustees_authorized_signatories_cnic',
+  'proof_of_address',
+  'tax_exemption_certificate',
+  'other_supporting_documents',
 ] as const
 
 export type MerchantType = (typeof merchantTypes)[number]
