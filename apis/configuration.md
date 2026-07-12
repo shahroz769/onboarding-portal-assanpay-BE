@@ -12,8 +12,8 @@ Route prefix:
 /api/configuration
 ```
 
-All configuration routes require authentication. Case-flow routes require the
-`super_admin` role.
+All configuration routes require authentication. Configuration management
+routes allow the `super_admin` and `admin` roles.
 
 ## GET `/api/configuration/case-flow`
 

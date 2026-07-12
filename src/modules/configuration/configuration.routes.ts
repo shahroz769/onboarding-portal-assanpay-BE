@@ -49,7 +49,7 @@ configurationRoutes.get('/sub-merchants', async (c) => {
   )
 })
 
-configurationRoutes.use('*', requireRoles('super_admin'))
+configurationRoutes.use('*', requireRoles('super_admin', 'admin'))
 
 configurationRoutes.get('/', async (c) => {
   return c.json(await getConfigurationOverview())
