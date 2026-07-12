@@ -23,4 +23,4 @@ jobs:
             cd /home/ubuntu/onboarding-portal-assanpay-BE
             git pull origin main
             bun install
-            pm2 restart onboarding-backend --update-env
+            pm2 restart onboarding-backend
