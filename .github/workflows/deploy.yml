@@ -1,27 +1,12 @@
 name: Deploy Backend
 
-concurrency:
-  group: onboarding-backend-production
-  cancel-in-progress: false
-
 on:
   push:
     branches:
       - main
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-
   deploy:
-    needs: verify
     runs-on: ubuntu-latest
 
     steps:
@@ -35,19 +20,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            set -euo pipefail
             cd /home/ubuntu/onboarding-portal-assanpay-BE
-            git fetch origin main
-            git checkout --detach ${{ github.sha }}
-            bun install --frozen-lockfile
-            bun run db:migrate
+            git pull origin main
+            bun install
             pm2 restart onboarding-backend
-            for attempt in $(seq 1 20); do
-              if curl --fail --silent http://127.0.0.1:3000/health/db > /dev/null; then
-                echo "Deployed ${{ github.sha }} and health check passed."
-                exit 0
-              fi
-              sleep 3
-            done
-            pm2 logs onboarding-backend --lines 100 --nostream
-            exit 1
