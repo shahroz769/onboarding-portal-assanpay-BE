@@ -12,6 +12,7 @@ const corsOriginSchema = z
       .filter(Boolean),
   )
   .pipe(z.array(z.string().url()).min(1))
+  .transform((origins) => origins.map((origin) => new URL(origin).origin))
 const domainSchema = z
   .string()
   .regex(
