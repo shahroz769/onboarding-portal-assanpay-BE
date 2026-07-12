@@ -14,6 +14,9 @@ Copy `.env.example` to `.env` and replace placeholders:
 
 - `DATABASE_URL`: pooled runtime connection, normally PgBouncer on port 6432.
 - `DIRECT_DATABASE_URL`: direct port 5432 connection for migrations and Drizzle tooling.
+- `DATABASE_POOL_MAX`: maximum Postgres.js connections per backend process (default `10`).
+- `DATABASE_CONNECT_TIMEOUT_SECONDS`: connection establishment timeout (default `10`).
+- `DATABASE_IDLE_TIMEOUT_SECONDS`: close unused client connections after this interval (default `20`).
 - JWT secrets: distinct random values of at least 32 characters.
 - CORS, cookie, and `PUBLIC_APP_URL`: configure for the separately hosted frontend/backend.
 - `TRUST_PROXY_HEADERS`: enable only behind a proxy that overwrites forwarding headers.
@@ -21,16 +24,26 @@ Copy `.env.example` to `.env` and replace placeholders:
 
 Never expose backend credentials to the frontend.
 
+For Neon development, prefer the pooled `-pooler` URL for `DATABASE_URL` and
+the non-pooler URL for `DIRECT_DATABASE_URL`. For PlanetScale production, use
+the PgBouncer URL on port 6432 for runtime traffic and the direct port 5432 URL
+only for migrations. Prepared statements remain disabled for transaction-mode
+PgBouncer compatibility.
+
 ## Commands
 
 ```sh
 bun run dev
 bun run typecheck
 bun run db:migrate
+bun run db:audit
 bun run db:generate
 ```
 
 The API defaults to `http://localhost:3000`; database readiness is at `/health/db`.
+Run `db:audit` only against a migrated development or staging database. It is
+read-only and checks duplicate indexes, foreign-key index coverage, constraint
+validation, and the query-critical indexes introduced by the optimization migration.
 
 ## Architecture
 

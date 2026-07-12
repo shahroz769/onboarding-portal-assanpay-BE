@@ -6,7 +6,7 @@ const directDatabaseUrl = Bun.env.DIRECT_DATABASE_URL
 
 if (!directDatabaseUrl) {
   throw new Error(
-    'DIRECT_DATABASE_URL is required for migrations. Use the direct PlanetScale connection (port 5432), not PgBouncer.',
+    'DIRECT_DATABASE_URL is required for migrations. Use a direct, non-pooler connection.',
   )
 }
 

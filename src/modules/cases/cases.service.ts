@@ -1367,163 +1367,213 @@ export async function bulkAssignCases(
 ) {
   const db = getDb()
   const uniqueCaseIds = Array.from(new Set(caseIds))
-  const nextOwner = ownerId
-    ? await db.query.users.findFirst({
-        where: eq(users.id, ownerId),
-        columns: { id: true, name: true, status: true },
-      })
-    : null
+  const { updatedCases, existingCases } = await db.transaction(async (tx) => {
+    const nextOwner = ownerId
+      ? await tx.query.users.findFirst({
+          where: eq(users.id, ownerId),
+          columns: { id: true, name: true, status: true },
+        })
+      : null
 
-  if (ownerId && !nextOwner) {
-    throw new AppError(404, 'User not found.')
-  }
-  if (nextOwner && nextOwner.status !== 'active') {
-    throw new AppError(403, 'Inactive employees cannot own cases.')
-  }
-
-  const existingCases = await db
-    .select({
-      id: cases.id,
-      ownerId: cases.ownerId,
-      ownerName: users.name,
-      queueId: cases.queueId,
-      status: cases.status,
-      closeOutcome: cases.closeOutcome,
-      closedAt: cases.closedAt,
-      currentStageId: cases.currentStageId,
-      currentStageName: queueStages.name,
-      currentStageCategory: queueStages.category,
-    })
-    .from(cases)
-    .leftJoin(users, eq(cases.ownerId, users.id))
-    .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
-    .where(inArray(cases.id, uniqueCaseIds))
-
-  if (existingCases.length !== uniqueCaseIds.length) {
-    throw new AppError(404, 'One or more cases were not found.')
-  }
-
-  const closedCase = existingCases.find(
-    (caseRecord) =>
-      caseRecord.status === 'closed' ||
-      caseRecord.status === 'error' ||
-      caseRecord.currentStageCategory === 'closed' ||
-      Boolean(caseRecord.closeOutcome) ||
-      Boolean(caseRecord.closedAt),
-  )
-  if (closedCase) {
-    throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
-  }
-
-  await assertOwnerCanWorkCases(ownerId, uniqueCaseIds)
-
-  const stageRows = await db
-    .select({
-      id: queueStages.id,
-      queueId: queueStages.queueId,
-      name: queueStages.name,
-      slug: queueStages.slug,
-      category: queueStages.category,
-    })
-    .from(queueStages)
-    .where(
-      inArray(
-        queueStages.queueId,
-        existingCases.map((item) => item.queueId),
-      ),
-    )
-
-  const stageByQueue = new Map<
-    string,
-    {
-      newStageId: string
-      workingStageId: string
-      newStageName: string
-      workingStageName: string
+    if (ownerId && !nextOwner) {
+      throw new AppError(404, 'User not found.')
     }
-  >()
-  for (const caseRecord of existingCases) {
-    const queueStageRows = stageRows.filter(
-      (stage) => stage.queueId === caseRecord.queueId,
+    if (nextOwner && nextOwner.status !== 'active') {
+      throw new AppError(403, 'Inactive employees cannot own cases.')
+    }
+
+    const existingCases = await tx
+      .select({
+        id: cases.id,
+        ownerId: cases.ownerId,
+        ownerName: users.name,
+        queueId: cases.queueId,
+        status: cases.status,
+        closeOutcome: cases.closeOutcome,
+        closedAt: cases.closedAt,
+        currentStageId: cases.currentStageId,
+        currentStageName: queueStages.name,
+        currentStageCategory: queueStages.category,
+      })
+      .from(cases)
+      .leftJoin(users, eq(cases.ownerId, users.id))
+      .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
+      .where(inArray(cases.id, uniqueCaseIds))
+      .orderBy(asc(cases.id))
+      .for('update', { of: cases })
+
+    if (existingCases.length !== uniqueCaseIds.length) {
+      throw new AppError(404, 'One or more cases were not found.')
+    }
+
+    const closedCase = existingCases.find(
+      (caseRecord) =>
+        caseRecord.status === 'closed' ||
+        caseRecord.status === 'error' ||
+        caseRecord.currentStageCategory === 'closed' ||
+        Boolean(caseRecord.closeOutcome) ||
+        Boolean(caseRecord.closedAt),
     )
-    const newStage = queueStageRows.find((stage) => stage.category === 'new')
-    const workingStage = queueStageRows.find(
-      (stage) => stage.slug === 'working',
-    )
-    if (!newStage || !workingStage) {
+    if (closedCase) {
       throw new AppError(
-        500,
-        'Required New and Working stages are not configured.',
+        400,
+        'Closed cases cannot be assigned or transferred.',
       )
     }
-    stageByQueue.set(caseRecord.queueId, {
-      newStageId: newStage.id,
-      workingStageId: workingStage.id,
-      newStageName: newStage.name,
-      workingStageName: workingStage.name,
-    })
-  }
 
-  const updatedCases = await db.transaction(async (tx) => {
+    await assertOwnerCanWorkCases(ownerId, uniqueCaseIds, tx)
+
+    const queueIds = Array.from(
+      new Set(existingCases.map((item) => item.queueId)),
+    )
+    const stageRows = await tx
+      .select({
+        id: queueStages.id,
+        queueId: queueStages.queueId,
+        name: queueStages.name,
+        slug: queueStages.slug,
+        category: queueStages.category,
+      })
+      .from(queueStages)
+      .where(inArray(queueStages.queueId, queueIds))
+
+    const stagesByQueueId = new Map<
+      string,
+      Array<(typeof stageRows)[number]>
+    >()
+    for (const stage of stageRows) {
+      const queueStageRows = stagesByQueueId.get(stage.queueId) ?? []
+      queueStageRows.push(stage)
+      stagesByQueueId.set(stage.queueId, queueStageRows)
+    }
+
+    const stageByQueue = new Map<
+      string,
+      {
+        newStageId: string
+        workingStageId: string
+        newStageName: string
+        workingStageName: string
+      }
+    >()
+    for (const queueId of queueIds) {
+      const queueStageRows = stagesByQueueId.get(queueId) ?? []
+      const newStage = queueStageRows.find(
+        (stage) => stage.category === 'new',
+      )
+      const workingStage = queueStageRows.find(
+        (stage) => stage.slug === 'working',
+      )
+      if (!newStage || !workingStage) {
+        throw new AppError(
+          500,
+          'Required New and Working stages are not configured.',
+        )
+      }
+      stageByQueue.set(queueId, {
+        newStageId: newStage.id,
+        workingStageId: workingStage.id,
+        newStageName: newStage.name,
+        workingStageName: workingStage.name,
+      })
+    }
+
     const changedCases = existingCases.filter(
       (caseRecord) => caseRecord.ownerId !== ownerId,
     )
-
-    for (const caseRecord of changedCases) {
-      const stages = stageByQueue.get(caseRecord.queueId)
-      if (!stages) throw new AppError(500, 'Queue stages are not configured.')
-
-      const shouldStartWorking =
-        ownerId !== null && caseRecord.currentStageCategory === 'new'
-      const updateData =
-        ownerId === null
-          ? {
-              ownerId: null,
-              currentStageId: stages.newStageId,
-              status: 'new' as const,
-              closeOutcome: null,
-              closeReason: null,
-              closedAt: null,
-              slaBreached: null,
-              updatedAt: new Date(),
-            }
-          : {
-              ownerId,
-              ...(shouldStartWorking
-                ? {
-                    currentStageId: stages.workingStageId,
-                    status: 'working' as const,
-                  }
-                : {}),
-              updatedAt: new Date(),
-            }
-
-      await tx.update(cases).set(updateData).where(eq(cases.id, caseRecord.id))
-
-      await tx.insert(caseHistory).values({
-        caseId: caseRecord.id,
-        actorId,
-        action:
-          ownerId === null
-            ? 'owner_unassigned'
-            : caseRecord.ownerId
-              ? 'owner_transferred'
-              : 'owner_assigned',
-        details: {
-          fromOwner: caseRecord.ownerName ?? 'AP System',
-          toOwner: nextOwner?.name ?? 'AP System',
-          fromStage: caseRecord.currentStageName,
-          toStage:
-            ownerId === null
-              ? stages.newStageName
-              : shouldStartWorking
-                ? stages.workingStageName
-                : caseRecord.currentStageName,
-        },
-      })
+    if (changedCases.length === 0) {
+      return { updatedCases: changedCases, existingCases }
     }
 
-    return changedCases
+    const now = new Date()
+    if (ownerId === null) {
+      for (const queueId of queueIds) {
+        const queueCaseIds = changedCases
+          .filter((caseRecord) => caseRecord.queueId === queueId)
+          .map((caseRecord) => caseRecord.id)
+        if (queueCaseIds.length === 0) continue
+        const stages = stageByQueue.get(queueId)
+        if (!stages) {
+          throw new AppError(500, 'Queue stages are not configured.')
+        }
+        await tx
+          .update(cases)
+          .set({
+            ownerId: null,
+            currentStageId: stages.newStageId,
+            status: 'new',
+            closeOutcome: null,
+            closeReason: null,
+            closedAt: null,
+            slaBreached: null,
+            updatedAt: now,
+          })
+          .where(inArray(cases.id, queueCaseIds))
+      }
+    } else {
+      const changedCaseIds = changedCases.map((caseRecord) => caseRecord.id)
+      await tx
+        .update(cases)
+        .set({ ownerId, updatedAt: now })
+        .where(inArray(cases.id, changedCaseIds))
+
+      for (const queueId of queueIds) {
+        const workingCaseIds = changedCases
+          .filter(
+            (caseRecord) =>
+              caseRecord.queueId === queueId &&
+              caseRecord.currentStageCategory === 'new',
+          )
+          .map((caseRecord) => caseRecord.id)
+        if (workingCaseIds.length === 0) continue
+        const stages = stageByQueue.get(queueId)
+        if (!stages) {
+          throw new AppError(500, 'Queue stages are not configured.')
+        }
+        await tx
+          .update(cases)
+          .set({
+            currentStageId: stages.workingStageId,
+            status: 'working',
+            updatedAt: now,
+          })
+          .where(inArray(cases.id, workingCaseIds))
+      }
+    }
+
+    await tx.insert(caseHistory).values(
+      changedCases.map((caseRecord) => {
+        const stages = stageByQueue.get(caseRecord.queueId)
+        if (!stages) {
+          throw new AppError(500, 'Queue stages are not configured.')
+        }
+        const shouldStartWorking =
+          ownerId !== null && caseRecord.currentStageCategory === 'new'
+        return {
+          caseId: caseRecord.id,
+          actorId,
+          action:
+            ownerId === null
+              ? 'owner_unassigned'
+              : caseRecord.ownerId
+                ? 'owner_transferred'
+                : 'owner_assigned',
+          details: {
+            fromOwner: caseRecord.ownerName ?? 'AP System',
+            toOwner: nextOwner?.name ?? 'AP System',
+            fromStage: caseRecord.currentStageName,
+            toStage:
+              ownerId === null
+                ? stages.newStageName
+                : shouldStartWorking
+                  ? stages.workingStageName
+                  : caseRecord.currentStageName,
+          },
+        }
+      }),
+    )
+
+    return { updatedCases: changedCases, existingCases }
   })
 
   if (updatedCases.length > 0) {

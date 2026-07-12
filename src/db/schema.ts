@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm'
 import {
+  type AnyPgColumn,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -130,7 +132,10 @@ export const users = pgTable(
       .default('all')
       .notNull(),
     sessionVersion: integer('session_version').default(0).notNull(),
-    createdByUserId: uuid('created_by_user_id'),
+    createdByUserId: uuid('created_by_user_id').references(
+      (): AnyPgColumn => users.id,
+      { onDelete: 'set null' },
+    ),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -141,8 +146,11 @@ export const users = pgTable(
       .notNull(),
   },
   (table) => ({
-    usersEmailIdx: index('users_email_idx').on(table.email),
-    usersUsernameIdx: index('users_username_idx').on(table.username),
+    usersCreatedByIdx: index('users_created_by_idx').on(table.createdByUserId),
+    usersSessionVersionNonnegative: check(
+      'users_session_version_nonnegative',
+      sql`${table.sessionVersion} >= 0`,
+    ),
   }),
 )
 
@@ -156,18 +164,22 @@ export const caseStatusEnum = pgEnum('case_status', [
   'awaiting_client',
 ])
 
-export const queues = pgTable('queues', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: varchar('name', { length: 120 }).notNull().unique(),
-  slug: varchar('slug', { length: 120 }).notNull().unique(),
-  prefix: varchar('prefix', { length: 4 }).notNull().unique(),
-  qcEnabled: boolean('qc_enabled').default(false).notNull(),
-  slaHours: integer('sla_hours').default(24).notNull(),
-  isActive: boolean('is_active').default(true).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-})
+export const queues = pgTable(
+  'queues',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 120 }).notNull().unique(),
+    slug: varchar('slug', { length: 120 }).notNull().unique(),
+    prefix: varchar('prefix', { length: 4 }).notNull().unique(),
+    qcEnabled: boolean('qc_enabled').default(false).notNull(),
+    slaHours: integer('sla_hours').default(24).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [check('queues_sla_hours_positive', sql`${table.slaHours} > 0`)],
+)
 
 export const configurationSettings = pgTable('configuration_settings', {
   key: varchar('key', { length: 120 }).primaryKey(),
@@ -177,24 +189,33 @@ export const configurationSettings = pgTable('configuration_settings', {
     .notNull(),
 })
 
-export const agreementDraftTemplates = pgTable('agreement_draft_templates', {
-  businessType: varchar('business_type', { length: 120 }).primaryKey(),
-  label: varchar('label', { length: 160 }).notNull(),
-  originalName: varchar('original_name', { length: 255 }).notNull(),
-  mimeType: varchar('mime_type', { length: 128 }).notNull(),
-  sizeBytes: integer('size_bytes').notNull(),
-  googleDriveFileId: varchar('google_drive_file_id', {
-    length: 255,
-  }).notNull(),
-  googleDriveWebViewLink: text('google_drive_web_view_link').notNull(),
-  googleDriveDownloadLink: text('google_drive_download_link'),
-  googleDriveFolderId: varchar('google_drive_folder_id', {
-    length: 255,
-  }).notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-})
+export const agreementDraftTemplates = pgTable(
+  'agreement_draft_templates',
+  {
+    businessType: varchar('business_type', { length: 120 }).primaryKey(),
+    label: varchar('label', { length: 160 }).notNull(),
+    originalName: varchar('original_name', { length: 255 }).notNull(),
+    mimeType: varchar('mime_type', { length: 128 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    googleDriveFileId: varchar('google_drive_file_id', {
+      length: 255,
+    }).notNull(),
+    googleDriveWebViewLink: text('google_drive_web_view_link').notNull(),
+    googleDriveDownloadLink: text('google_drive_download_link'),
+    googleDriveFolderId: varchar('google_drive_folder_id', {
+      length: 255,
+    }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      'agreement_draft_templates_size_nonnegative',
+      sql`${table.sizeBytes} >= 0`,
+    ),
+  ],
+)
 
 export const subMerchantDraftTemplates = pgTable(
   'sub_merchant_draft_templates',
@@ -220,6 +241,12 @@ export const subMerchantDraftTemplates = pgTable(
       .defaultNow()
       .notNull(),
   },
+  (table) => [
+    check(
+      'sub_merchant_draft_templates_size_nonnegative',
+      sql`${table.sizeBytes} >= 0`,
+    ),
+  ],
 )
 
 export const stageCategoryEnum = pgEnum('stage_category', [
@@ -255,6 +282,10 @@ export const queueStages = pgTable(
       table.queueId,
       table.order,
     ),
+    queueStagesOrderPositive: check(
+      'queue_stages_order_positive',
+      sql`${table.order} > 0`,
+    ),
   }),
 )
 
@@ -277,9 +308,6 @@ export const userQueueAccess = pgTable(
       columns: [table.userId, table.queueId, table.accessType],
       name: 'user_queue_access_pk',
     }),
-    userQueueAccessUserIdx: index('user_queue_access_user_idx').on(
-      table.userId,
-    ),
     userQueueAccessQueueIdx: index('user_queue_access_queue_idx').on(
       table.queueId,
     ),
@@ -308,9 +336,9 @@ export const userPasswordTokens = pgTable(
     userPasswordTokensUserIdx: index('user_password_tokens_user_idx').on(
       table.userId,
     ),
-    userPasswordTokensTokenHashIdx: index(
-      'user_password_tokens_token_hash_idx',
-    ).on(table.tokenHash),
+    userPasswordTokensCreatedByIdx: index(
+      'user_password_tokens_created_by_idx',
+    ).on(table.createdBy),
   }),
 )
 
@@ -325,7 +353,10 @@ export const refreshTokens = pgTable(
     status: refreshTokenStatusEnum('status').default('active').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    replacedByTokenId: uuid('replaced_by_token_id'),
+    replacedByTokenId: uuid('replaced_by_token_id').references(
+      (): AnyPgColumn => refreshTokens.id,
+      { onDelete: 'set null' },
+    ),
     userAgent: text('user_agent'),
     ipAddress: varchar('ip_address', { length: 64 }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -338,6 +369,9 @@ export const refreshTokens = pgTable(
     ),
     refreshTokensExpiresAtIdx: index('refresh_tokens_expires_at_idx').on(
       table.expiresAt,
+    ),
+    refreshTokensReplacedByIdx: index('refresh_tokens_replaced_by_idx').on(
+      table.replacedByTokenId,
     ),
   }),
 )
@@ -422,7 +456,6 @@ export const merchants = pgTable(
       table.businessName,
     ),
     merchantsStatusIdx: index('merchants_status_idx').on(table.status),
-    merchantsNumberIdx: index('merchants_number_idx').on(table.merchantNumber),
     merchantsPriorityIdx: index('merchants_priority_idx').on(table.priority),
     merchantsActiveNumberIdx: index('merchants_active_number_idx')
       .on(table.merchantNumber, table.id)
@@ -438,7 +471,7 @@ export const merchants = pgTable(
     merchantsActivePriorityCreatedIdx: index(
       'merchants_active_priority_created_idx',
     )
-      .on(table.priority, table.createdAt, table.id)
+      .on(table.priority, table.id)
       .where(sql`${table.deletedAt} IS NULL`),
     merchantsActiveStatusIdIdx: index('merchants_active_status_id_idx')
       .on(table.status, table.id)
@@ -452,6 +485,14 @@ export const merchants = pgTable(
     merchantsSubmitterEmailTrgmIdx: index(
       'merchants_submitter_email_trgm_idx',
     ).using('gin', sql`${table.submitterEmail} gin_trgm_ops`),
+    merchantsTransactionsNonnegative: check(
+      'merchants_transactions_nonnegative',
+      sql`${table.estimatedMonthlyTransactions} >= 0`,
+    ),
+    merchantsVolumeNonnegative: check(
+      'merchants_volume_nonnegative',
+      sql`${table.estimatedMonthlyVolume} >= 0`,
+    ),
   }),
 )
 
@@ -489,15 +530,28 @@ export const merchantDocuments = pgTable(
     merchantDocumentsTypeIdx: index('merchant_documents_type_idx').on(
       table.documentType,
     ),
+    merchantDocumentsSizeNonnegative: check(
+      'merchant_documents_size_nonnegative',
+      sql`${table.sizeBytes} >= 0`,
+    ),
   }),
 )
 
-export const queueCaseSequences = pgTable('queue_case_sequences', {
-  queueId: uuid('queue_id')
-    .primaryKey()
-    .references(() => queues.id, { onDelete: 'cascade' }),
-  lastNumber: integer('last_number').default(0).notNull(),
-})
+export const queueCaseSequences = pgTable(
+  'queue_case_sequences',
+  {
+    queueId: uuid('queue_id')
+      .primaryKey()
+      .references(() => queues.id, { onDelete: 'cascade' }),
+    lastNumber: integer('last_number').default(0).notNull(),
+  },
+  (table) => [
+    check(
+      'queue_case_sequences_last_number_nonnegative',
+      sql`${table.lastNumber} >= 0`,
+    ),
+  ],
+)
 
 export const caseCloseOutcomeEnum = pgEnum('case_close_outcome', [
   'successful',
@@ -536,9 +590,11 @@ export const cases = pgTable(
   },
   (table) => ({
     casesQueueIdIdx: index('cases_queue_id_idx').on(table.queueId),
-    casesMerchantIdIdx: index('cases_merchant_id_idx').on(table.merchantId),
+    casesMerchantQueueIdx: index('cases_merchant_queue_idx').on(
+      table.merchantId,
+      table.queueId,
+    ),
     casesStatusIdx: index('cases_status_idx').on(table.status),
-    casesCaseNumberIdx: index('cases_case_number_idx').on(table.caseNumber),
     casesOwnerIdIdx: index('cases_owner_id_idx').on(table.ownerId),
     casesCurrentStageIdIdx: index('cases_current_stage_id_idx').on(
       table.currentStageId,
@@ -580,6 +636,14 @@ export const cases = pgTable(
       'gin',
       sql`${table.caseNumber} gin_trgm_ops`,
     ),
+    casesOpenMerchantIdx: index('cases_open_merchant_idx')
+      .on(table.merchantId, table.queueId)
+      .where(sql`${table.status} NOT IN ('closed', 'error')`),
+    casesSuccessfulFlowIdx: index('cases_successful_flow_idx')
+      .on(table.merchantId, table.queueId)
+      .where(
+        sql`${table.status} = 'closed' AND ${table.closeOutcome} = 'successful'`,
+      ),
   }),
 )
 
@@ -600,7 +664,6 @@ export const caseFieldReviews = pgTable(
     status: fieldReviewStatusEnum('status').default('pending').notNull(),
     remarks: text('remarks'),
     reviewedBy: uuid('reviewed_by')
-      .notNull()
       .references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -611,9 +674,6 @@ export const caseFieldReviews = pgTable(
     resubmittedAt: timestamp('resubmitted_at', { withTimezone: true }),
   },
   (table) => ({
-    caseFieldReviewsCaseIdIdx: index('case_field_reviews_case_id_idx').on(
-      table.caseId,
-    ),
     caseFieldReviewsReviewedByIdx: index(
       'case_field_reviews_reviewed_by_idx',
     ).on(table.reviewedBy),
@@ -661,10 +721,11 @@ export const caseComments = pgTable(
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
     authorId: uuid('author_id')
-      .notNull()
       .references(() => users.id, { onDelete: 'set null' }),
     content: text('content').notNull(),
-    parentId: uuid('parent_id'),
+    parentId: uuid('parent_id').references((): AnyPgColumn => caseComments.id, {
+      onDelete: 'set null',
+    }),
     mentions: text('mentions').array(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -674,7 +735,11 @@ export const caseComments = pgTable(
       .notNull(),
   },
   (table) => ({
-    caseCommentsCaseIdIdx: index('case_comments_case_id_idx').on(table.caseId),
+    caseCommentsCaseCreatedIdx: index('case_comments_case_created_idx').on(
+      table.caseId,
+      table.createdAt,
+      table.id,
+    ),
     caseCommentsAuthorIdIdx: index('case_comments_author_id_idx').on(
       table.authorId,
     ),
@@ -701,9 +766,16 @@ export const caseHistory = pgTable(
       .notNull(),
   },
   (table) => ({
-    caseHistoryCaseIdIdx: index('case_history_case_id_idx').on(table.caseId),
-    caseHistoryCreatedAtIdx: index('case_history_created_at_idx').on(
+    caseHistoryCaseActionCreatedIdx: index(
+      'case_history_case_action_created_idx',
+    ).on(table.caseId, table.action, table.createdAt),
+    caseHistoryCaseCreatedIdx: index('case_history_case_created_idx').on(
+      table.caseId,
       table.createdAt,
+      table.id,
+    ),
+    caseHistoryActorIdx: index('case_history_actor_idx').on(
+      table.actorId,
     ),
   }),
 )
@@ -730,6 +802,10 @@ export const caseFlowStartRules = pgTable(
     ).on(table.targetQueueId),
     caseFlowStartRulesOrderIdx: index('case_flow_start_rules_order_idx').on(
       table.order,
+    ),
+    caseFlowStartRulesOrderPositive: check(
+      'case_flow_start_rules_order_positive',
+      sql`${table.order} > 0`,
     ),
   }),
 )
@@ -760,6 +836,13 @@ export const caseFlowCloseTriggers = pgTable(
     caseFlowCloseTriggersSourceOrderIdx: index(
       'case_flow_close_triggers_source_order_idx',
     ).on(table.sourceQueueId, table.order),
+    caseFlowCloseTriggersTargetIdx: index(
+      'case_flow_close_triggers_target_idx',
+    ).on(table.targetQueueId),
+    caseFlowCloseTriggersOrderPositive: check(
+      'case_flow_close_triggers_order_positive',
+      sql`${table.order} > 0`,
+    ),
   }),
 )
 
@@ -785,9 +868,9 @@ export const caseFlowCloseBlockers = pgTable(
     caseFlowCloseBlockersBlockedPrerequisiteUnique: uniqueIndex(
       'case_flow_close_blockers_blocked_prerequisite_unique',
     ).on(table.blockedQueueId, table.prerequisiteQueueId),
-    caseFlowCloseBlockersBlockedIdx: index(
-      'case_flow_close_blockers_blocked_idx',
-    ).on(table.blockedQueueId),
+    caseFlowCloseBlockersPrerequisiteIdx: index(
+      'case_flow_close_blockers_prerequisite_idx',
+    ).on(table.prerequisiteQueueId),
   }),
 )
 
@@ -813,9 +896,9 @@ export const caseFlowCreationRequirements = pgTable(
     caseFlowCreationRequirementsTargetPrerequisiteUnique: uniqueIndex(
       'case_flow_creation_requirements_target_prerequisite_unique',
     ).on(table.targetQueueId, table.prerequisiteQueueId),
-    caseFlowCreationRequirementsTargetIdx: index(
-      'case_flow_creation_requirements_target_idx',
-    ).on(table.targetQueueId),
+    caseFlowCreationRequirementsPrerequisiteIdx: index(
+      'case_flow_creation_requirements_prerequisite_idx',
+    ).on(table.prerequisiteQueueId),
   }),
 )
 
@@ -849,6 +932,12 @@ export const caseLinks = pgTable(
       table.childCaseId,
     ),
     caseLinksMerchantIdx: index('case_links_merchant_idx').on(table.merchantId),
+    caseLinksSourceQueueIdx: index('case_links_source_queue_idx').on(
+      table.sourceQueueId,
+    ),
+    caseLinksTargetQueueIdx: index('case_links_target_queue_idx').on(
+      table.targetQueueId,
+    ),
   }),
 )
 
@@ -889,6 +978,9 @@ export const caseResubmissionTokens = pgTable(
     caseResubmissionTokensCaseIdIdx: index(
       'case_resubmission_tokens_case_id_idx',
     ).on(table.caseId),
+    caseResubmissionTokensCreatedByIdx: index(
+      'case_resubmission_tokens_created_by_idx',
+    ).on(table.createdBy),
   }),
 )
 
@@ -918,6 +1010,9 @@ export const emailLog = pgTable(
   },
   (table) => ({
     emailLogCaseIdIdx: index('email_log_case_id_idx').on(table.caseId),
+    emailLogMerchantIdIdx: index('email_log_merchant_id_idx').on(
+      table.merchantId,
+    ),
     emailLogStatusIdx: index('email_log_status_idx').on(table.status),
     emailLogCreatedAtIdx: index('email_log_created_at_idx').on(table.createdAt),
   }),
@@ -951,6 +1046,12 @@ export const midGoLiveTokens = pgTable(
     midGoLiveTokensAvailableAtIdx: index(
       'mid_go_live_tokens_available_at_idx',
     ).on(table.availableAt),
+    midGoLiveTokensLiveCaseIdx: index('mid_go_live_tokens_live_case_idx').on(
+      table.liveCaseId,
+    ),
+    midGoLiveTokensCreatedByIdx: index('mid_go_live_tokens_created_by_idx').on(
+      table.createdBy,
+    ),
   }),
 )
 
@@ -958,7 +1059,7 @@ export const portalMidLimitApplications = pgTable(
   'portal_mid_limit_applications',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    portalMid: integer('portal_mid').notNull().unique(),
+    portalMid: integer('portal_mid').notNull(),
     merchantId: uuid('merchant_id').references(() => merchants.id, {
       onDelete: 'cascade',
     }),
@@ -976,6 +1077,13 @@ export const portalMidLimitApplications = pgTable(
     portalMidLimitApplicationsMerchantIdx: index(
       'portal_mid_limit_applications_merchant_idx',
     ).on(table.merchantId),
+    portalMidLimitApplicationsAppliedByIdx: index(
+      'portal_mid_limit_applications_applied_by_idx',
+    ).on(table.appliedBy),
+    portalMidLimitApplicationsMidPositive: check(
+      'portal_mid_limit_applications_mid_positive',
+      sql`${table.portalMid} > 0`,
+    ),
   }),
 )
 
@@ -1004,12 +1112,6 @@ export const notifications = pgTable(
       .notNull(),
   },
   (table) => ({
-    notificationsUserIdIdx: index('notifications_user_id_idx').on(table.userId),
-    notificationsUserUnreadIdx: index('notifications_user_unread_idx').on(
-      table.userId,
-      table.isRead,
-      table.createdAt,
-    ),
     notificationsCreatedAtIdx: index('notifications_created_at_idx').on(
       table.createdAt,
     ),
@@ -1019,6 +1121,11 @@ export const notifications = pgTable(
     notificationsUserUnreadCreatedIdIdx: index(
       'notifications_user_unread_created_id_idx',
     ).on(table.userId, table.isRead, table.createdAt, table.id),
+    notificationsActorIdx: index('notifications_actor_idx').on(table.actorId),
+    notificationsCaseIdx: index('notifications_case_idx').on(table.caseId),
+    notificationsCommentIdx: index('notifications_comment_idx').on(
+      table.commentId,
+    ),
   }),
 )
 
@@ -1052,13 +1159,16 @@ export const caseFiles = pgTable(
       .notNull(),
   },
   (table) => ({
-    caseFilesCaseIdIdx: index('case_files_case_id_idx').on(table.caseId),
     caseFilesUploaderIdx: index('case_files_uploaded_by_idx').on(
       table.uploadedBy,
     ),
     caseFilesCaseKindUniq: uniqueIndex('case_files_case_kind_uniq').on(
       table.caseId,
       table.fileKind,
+    ),
+    caseFilesSizeNonnegative: check(
+      'case_files_size_nonnegative',
+      sql`${table.sizeBytes} >= 0`,
     ),
   }),
 )

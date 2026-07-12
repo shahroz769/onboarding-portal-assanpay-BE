@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -149,6 +149,12 @@ type AppliedPortalMidLimitRow = {
   merchantId: string | null
   appliedByName: string | null
   appliedAt: Date | string | null
+}
+
+type DashboardTrendRow = {
+  metric: 'submission' | 'opened' | 'closed'
+  day: string
+  count: number
 }
 
 function normalizePortalMids(portalMids: number[]) {
@@ -381,48 +387,28 @@ export async function getDashboard(query: DashboardQuery) {
   const liveMerchant = and(isNull(merchants.deletedAt))
 
   const [
-    caseStatusRows,
-    caseRangeRow,
-    caseSlaRow,
-    merchantStatusRows,
-    merchantRangeRow,
-    submissionWindowRow,
+    caseSummaryRows,
+    merchantSummaryRows,
     queueRows,
-    submissionTrendRows,
-    openedTrendRows,
-    closedTrendRows,
+    dashboardTrendRows,
     slaBreachedCases,
     awaitingClientCases,
     oldestOpenCases,
     highPriorityOpenCases,
     recentMerchants,
     recentClosedCases,
-    portalMids,
   ] = await Promise.all([
-    // Case counts by status (snapshot)
+    // Case snapshot, range, and SLA metrics in one grouped scan.
     db
       .select({
         status: cases.status,
         count: int(sql`count(*)`),
-      })
-      .from(cases)
-      .groupBy(cases.status),
-
-    // Case range metrics
-    db
-      .select({
         newInRange: int(
           sql`count(*) filter (where ${cases.createdAt} >= ${fromIso} and ${cases.createdAt} <= ${toIso})`,
         ),
         closedInRange: int(
           sql`count(*) filter (where ${cases.closedAt} >= ${fromIso} and ${cases.closedAt} <= ${toIso})`,
         ),
-      })
-      .from(cases),
-
-    // SLA breach summary + live open-over-sla
-    db
-      .select({
         breached: int(sql`count(*) filter (where ${cases.slaBreached} = true)`),
         evaluated: int(
           sql`count(*) filter (where ${cases.slaBreached} is not null)`,
@@ -432,34 +418,20 @@ export async function getDashboard(query: DashboardQuery) {
         ),
       })
       .from(cases)
-      .innerJoin(queues, eq(cases.queueId, queues.id)),
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .groupBy(cases.status),
 
-    // Merchant counts by status
+    // Merchant snapshot, range, and submission windows in one grouped scan.
     db
       .select({
         status: merchants.status,
         count: int(sql`count(*)`),
-      })
-      .from(merchants)
-      .where(liveMerchant)
-      .groupBy(merchants.status),
-
-    // Merchant range metrics
-    db
-      .select({
         submittedInRange: int(
           sql`count(*) filter (where ${merchants.submittedAt} >= ${fromIso} and ${merchants.submittedAt} <= ${toIso})`,
         ),
         liveInRange: int(
           sql`count(*) filter (where ${merchants.liveAt} >= ${fromIso} and ${merchants.liveAt} <= ${toIso})`,
         ),
-      })
-      .from(merchants)
-      .where(liveMerchant),
-
-    // Submission windows (today / week / month) — independent of selected range
-    db
-      .select({
         today: int(
           sql`count(*) filter (where ${merchants.submittedAt} >= ${startTodayIso})`,
         ),
@@ -471,7 +443,8 @@ export async function getDashboard(query: DashboardQuery) {
         ),
       })
       .from(merchants)
-      .where(liveMerchant),
+      .where(liveMerchant)
+      .groupBy(merchants.status),
 
     // Per-queue workload
     db
@@ -516,57 +489,36 @@ export async function getDashboard(query: DashboardQuery) {
       )
       .orderBy(queues.name),
 
-    // Submission trend (daily)
-    db
-      .select({
-        day: sql<string>`to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-        count: int(sql`count(*)`),
-      })
-      .from(merchants)
-      .where(
-        and(
-          liveMerchant,
-          gte(merchants.submittedAt, from),
-          lt(merchants.submittedAt, addDays(startOfDay(to), 1)),
-        ),
-      )
-      .groupBy(
-        sql`to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-      ),
-
-    // New cases trend (daily)
-    db
-      .select({
-        day: sql<string>`to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-        count: int(sql`count(*)`),
-      })
-      .from(cases)
-      .where(
-        and(
-          gte(cases.createdAt, from),
-          lt(cases.createdAt, addDays(startOfDay(to), 1)),
-        ),
-      )
-      .groupBy(
-        sql`to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-      ),
-
-    // Cases closed trend (daily)
-    db
-      .select({
-        day: sql<string>`to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-        count: int(sql`count(*)`),
-      })
-      .from(cases)
-      .where(
-        and(
-          gte(cases.closedAt, from),
-          lt(cases.closedAt, addDays(startOfDay(to), 1)),
-        ),
-      )
-      .groupBy(
-        sql`to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD')`,
-      ),
+    // All daily trends in one round trip.
+    db.execute(sql<DashboardTrendRow>`
+      select
+        'submission'::text as "metric",
+        to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
+        count(*)::int as "count"
+      from ${merchants}
+      where ${merchants.deletedAt} is null
+        and ${merchants.submittedAt} >= ${from.toISOString()}
+        and ${merchants.submittedAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      group by "day"
+      union all
+      select
+        'opened'::text as "metric",
+        to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
+        count(*)::int as "count"
+      from ${cases}
+      where ${cases.createdAt} >= ${from.toISOString()}
+        and ${cases.createdAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      group by "day"
+      union all
+      select
+        'closed'::text as "metric",
+        to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
+        count(*)::int as "count"
+      from ${cases}
+      where ${cases.closedAt} >= ${from.toISOString()}
+        and ${cases.closedAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      group by "day"
+    `),
 
     // Risk list — SLA breached cases (most recent)
     db
@@ -688,13 +640,13 @@ export async function getDashboard(query: DashboardQuery) {
       .orderBy(desc(cases.closedAt))
       .limit(RISK_LIST_LIMIT),
 
-    getPendingPortalMidLimits(),
   ])
+  const portalMids = await getPendingPortalMidLimits()
 
   // ─── Shape Case Status Counts ─────────────────────────────────────────────
 
   const caseStatusMap = new Map(
-    caseStatusRows.map((row) => [row.status, row.count]),
+    caseSummaryRows.map((row) => [row.status, row.count]),
   )
   const caseStatusDistribution = CASE_STATUSES.map((status) => ({
     status,
@@ -708,12 +660,21 @@ export async function getDashboard(query: DashboardQuery) {
     .filter((item) => OPEN_CASE_STATUSES.includes(item.status))
     .reduce((sum, item) => sum + item.count, 0)
 
-  const slaSummary = caseSlaRow[0] ?? {
-    breached: 0,
-    evaluated: 0,
-    openOverSla: 0,
-  }
-  const caseRange = caseRangeRow[0] ?? { newInRange: 0, closedInRange: 0 }
+  const slaSummary = caseSummaryRows.reduce(
+    (summary, row) => ({
+      breached: summary.breached + row.breached,
+      evaluated: summary.evaluated + row.evaluated,
+      openOverSla: summary.openOverSla + row.openOverSla,
+    }),
+    { breached: 0, evaluated: 0, openOverSla: 0 },
+  )
+  const caseRange = caseSummaryRows.reduce(
+    (summary, row) => ({
+      newInRange: summary.newInRange + row.newInRange,
+      closedInRange: summary.closedInRange + row.closedInRange,
+    }),
+    { newInRange: 0, closedInRange: 0 },
+  )
   const breachRate =
     slaSummary.evaluated > 0
       ? Math.round((slaSummary.breached / slaSummary.evaluated) * 1000) / 10
@@ -722,7 +683,7 @@ export async function getDashboard(query: DashboardQuery) {
   // ─── Shape Merchant Counts ────────────────────────────────────────────────
 
   const merchantStatusMap = new Map(
-    merchantStatusRows.map((row) => [row.status, row.count]),
+    merchantSummaryRows.map((row) => [row.status, row.count]),
   )
   const merchantFunnel = MERCHANT_STATUSES.map((status) => ({
     status,
@@ -732,24 +693,41 @@ export async function getDashboard(query: DashboardQuery) {
     (sum, item) => sum + item.count,
     0,
   )
-  const merchantRange = merchantRangeRow[0] ?? {
-    submittedInRange: 0,
-    liveInRange: 0,
-  }
-  const submissionWindows = submissionWindowRow[0] ?? {
-    today: 0,
-    thisWeek: 0,
-    thisMonth: 0,
-  }
+  const merchantRange = merchantSummaryRows.reduce(
+    (summary, row) => ({
+      submittedInRange: summary.submittedInRange + row.submittedInRange,
+      liveInRange: summary.liveInRange + row.liveInRange,
+    }),
+    { submittedInRange: 0, liveInRange: 0 },
+  )
+  const submissionWindows = merchantSummaryRows.reduce(
+    (summary, row) => ({
+      today: summary.today + row.today,
+      thisWeek: summary.thisWeek + row.thisWeek,
+      thisMonth: summary.thisMonth + row.thisMonth,
+    }),
+    { today: 0, thisWeek: 0, thisMonth: 0 },
+  )
 
   // ─── Shape Trends ─────────────────────────────────────────────────────────
 
   const series = buildDateSeries(from, to)
+  const trendRows = Array.from(dashboardTrendRows) as DashboardTrendRow[]
   const submissionMap = new Map(
-    submissionTrendRows.map((row) => [row.day, row.count]),
+    trendRows
+      .filter((row) => row.metric === 'submission')
+      .map((row) => [row.day, row.count]),
   )
-  const newMap = new Map(openedTrendRows.map((row) => [row.day, row.count]))
-  const closedMap = new Map(closedTrendRows.map((row) => [row.day, row.count]))
+  const newMap = new Map(
+    trendRows
+      .filter((row) => row.metric === 'opened')
+      .map((row) => [row.day, row.count]),
+  )
+  const closedMap = new Map(
+    trendRows
+      .filter((row) => row.metric === 'closed')
+      .map((row) => [row.day, row.count]),
+  )
 
   const submissionsTrend = series.map((day) => ({
     date: day,

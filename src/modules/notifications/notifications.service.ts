@@ -74,28 +74,31 @@ export async function listForUser(
     }
   }
 
-  const rows = await db
-    .select({
-      id: notifications.id,
-      type: notifications.type,
-      title: notifications.title,
-      body: notifications.body,
-      caseId: notifications.caseId,
-      caseNumber: cases.caseNumber,
-      commentId: notifications.commentId,
-      actorId: notifications.actorId,
-      actorName: users.name,
-      metadata: notifications.metadata,
-      isRead: notifications.isRead,
-      readAt: notifications.readAt,
-      createdAt: notifications.createdAt,
-    })
-    .from(notifications)
-    .leftJoin(users, eq(notifications.actorId, users.id))
-    .leftJoin(cases, eq(notifications.caseId, cases.id))
-    .where(and(...conds))
-    .orderBy(desc(notifications.createdAt), desc(notifications.id))
-    .limit(query.limit + 1)
+  const [rows, unreadCount] = await Promise.all([
+    db
+      .select({
+        id: notifications.id,
+        type: notifications.type,
+        title: notifications.title,
+        body: notifications.body,
+        caseId: notifications.caseId,
+        caseNumber: cases.caseNumber,
+        commentId: notifications.commentId,
+        actorId: notifications.actorId,
+        actorName: users.name,
+        metadata: notifications.metadata,
+        isRead: notifications.isRead,
+        readAt: notifications.readAt,
+        createdAt: notifications.createdAt,
+      })
+      .from(notifications)
+      .leftJoin(users, eq(notifications.actorId, users.id))
+      .leftJoin(cases, eq(notifications.caseId, cases.id))
+      .where(and(...conds))
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(query.limit + 1),
+    getUnreadCount(userId),
+  ])
 
   const hasMore = rows.length > query.limit
   const items = hasMore ? rows.slice(0, query.limit) : rows
@@ -103,8 +106,6 @@ export async function listForUser(
     hasMore && items.length > 0
       ? encodeNotificationCursor(items[items.length - 1])
       : null
-
-  const unreadCount = await getUnreadCount(userId)
 
   return { items, nextCursor, unreadCount }
 }

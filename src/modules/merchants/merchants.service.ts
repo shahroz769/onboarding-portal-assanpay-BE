@@ -9,6 +9,7 @@ import {
   isNull,
   lt,
   ne,
+  notInArray,
   or,
   sql,
   aliasedTable,
@@ -598,61 +599,42 @@ async function closeOpenCasesAsUnsuccessful(
     now: Date
   },
 ) {
-  const openCases = await tx
-    .select({
-      id: cases.id,
-      queueId: cases.queueId,
-      createdAt: cases.createdAt,
-      queueSlaHours: queues.slaHours,
+  const closedCases = await tx
+    .update(cases)
+    .set({
+      currentStageId: sql`(
+        select ${queueStages.id}
+        from ${queueStages}
+        where ${queueStages.queueId} = ${cases.queueId}
+          and ${queueStages.category} = 'closed'
+        order by ${queueStages.order}
+        limit 1
+      )`,
+      status: 'closed',
+      closeOutcome: 'unsuccessful',
+      slaBreached: sql`${input.now} > ${cases.createdAt} + (
+        select ${queues.slaHours} * interval '1 hour'
+        from ${queues}
+        where ${queues.id} = ${cases.queueId}
+      )`,
+      closeReason: input.reason,
+      closedAt: input.now,
+      updatedAt: input.now,
     })
-    .from(cases)
-    .innerJoin(queues, eq(cases.queueId, queues.id))
     .where(
       and(
         inArray(cases.merchantId, input.merchantIds),
-        ne(cases.status, 'closed'),
+        notInArray(cases.status, ['closed', 'error']),
       ),
     )
+    .returning({ id: cases.id })
 
-  if (openCases.length === 0) {
+  if (closedCases.length === 0) {
     return 0
   }
 
-  const queueIds = [...new Set(openCases.map((caseRow) => caseRow.queueId))]
-  const closedStages = await tx
-    .select({ id: queueStages.id, queueId: queueStages.queueId })
-    .from(queueStages)
-    .where(
-      and(
-        inArray(queueStages.queueId, queueIds),
-        eq(queueStages.category, 'closed'),
-      ),
-    )
-  const closedStageByQueueId = new Map(
-    closedStages.map((stage) => [stage.queueId, stage.id]),
-  )
-
-  for (const caseRow of openCases) {
-    await tx
-      .update(cases)
-      .set({
-        currentStageId: closedStageByQueueId.get(caseRow.queueId) ?? null,
-        status: 'closed',
-        closeOutcome: 'unsuccessful',
-        slaBreached: isCaseSlaBreached({
-          createdAt: caseRow.createdAt,
-          evaluatedAt: input.now,
-          slaHours: caseRow.queueSlaHours,
-        }),
-        closeReason: input.reason,
-        closedAt: input.now,
-        updatedAt: input.now,
-      })
-      .where(eq(cases.id, caseRow.id))
-  }
-
   await tx.insert(caseHistory).values(
-    openCases.map((caseRow) => ({
+    closedCases.map((caseRow) => ({
       caseId: caseRow.id,
       actorId: input.actorId,
       action: 'closed_unsuccessful',
@@ -660,7 +642,7 @@ async function closeOpenCasesAsUnsuccessful(
     })),
   )
 
-  return openCases.length
+  return closedCases.length
 }
 
 export async function terminateMerchant(
@@ -796,28 +778,7 @@ function resolveLimitsMdrOverride(raw: unknown): MerchantLimitsMdr | null {
   return parsed.success ? parsed.data : null
 }
 
-async function getLatestMidCreationPaymentMethods(merchantId: string) {
-  const [entry] = await getDb()
-    .select({ details: caseHistory.details })
-    .from(caseHistory)
-    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
-    .where(
-      and(
-        eq(cases.merchantId, merchantId),
-        eq(caseHistory.action, 'mid_creation_saved'),
-      ),
-    )
-    .orderBy(desc(caseHistory.createdAt))
-    .limit(1)
-
-  const details = entry?.details as { paymentMethods?: unknown } | null
-  const parsed = paymentMethodSettingsSchema.safeParse(details?.paymentMethods)
-  return parsed.success
-    ? parsed.data
-    : parseLegacyMethodSettings(details?.paymentMethods, 'collection')
-}
-
-async function getLatestMidCreationPayoutMethods(merchantId: string) {
+async function getLatestMidCreationMethods(merchantId: string) {
   const [entry] = await getDb()
     .select({ details: caseHistory.details })
     .from(caseHistory)
@@ -835,10 +796,21 @@ async function getLatestMidCreationPayoutMethods(merchantId: string) {
     paymentMethods?: unknown
     payoutMethods?: unknown
   } | null
-  const parsed = paymentMethodSettingsSchema.safeParse(details?.payoutMethods)
-  return parsed.success
-    ? parsed.data
-    : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement')
+  const paymentMethods = paymentMethodSettingsSchema.safeParse(
+    details?.paymentMethods,
+  )
+  const payoutMethods = paymentMethodSettingsSchema.safeParse(
+    details?.payoutMethods,
+  )
+
+  return {
+    paymentMethods: paymentMethods.success
+      ? paymentMethods.data
+      : parseLegacyMethodSettings(details?.paymentMethods, 'collection'),
+    payoutMethods: payoutMethods.success
+      ? payoutMethods.data
+      : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement'),
+  }
 }
 
 function parseLegacyMethodSettings(
@@ -1020,14 +992,12 @@ export async function getMerchantDetail(merchantId: string) {
     globalLimitsAndMdr,
     globalPaymentMethods,
     globalPayoutMethods,
-    savedPaymentMethods,
-    savedPayoutMethods,
+    savedMethods,
   ] = await Promise.all([
     getLimitsAndMdrSettings(),
     getPaymentMethodSettings(),
     getPayoutMethodSettings(),
-    getLatestMidCreationPaymentMethods(merchantId),
-    getLatestMidCreationPayoutMethods(merchantId),
+    getLatestMidCreationMethods(merchantId),
   ])
   const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
 
@@ -1054,8 +1024,8 @@ export async function getMerchantDetail(merchantId: string) {
       global: globalLimitsAndMdr,
       isOverridden: override !== null,
     },
-    paymentMethods: savedPaymentMethods ?? globalPaymentMethods,
-    payoutMethods: savedPayoutMethods ?? globalPayoutMethods,
+    paymentMethods: savedMethods.paymentMethods ?? globalPaymentMethods,
+    payoutMethods: savedMethods.payoutMethods ?? globalPayoutMethods,
   }
 }
 

@@ -5,15 +5,24 @@ import { cases, queues, userQueueAccess, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import type { SessionUser } from '../../types/auth'
 
-export async function getAgentQueueAccess(userId: string) {
-  const user = await getDb().query.users.findFirst({
+type DbTransaction = Parameters<
+  Parameters<ReturnType<typeof getDb>['transaction']>[0]
+>[0]
+
+type DbExecutor = ReturnType<typeof getDb> | DbTransaction
+
+export async function getAgentQueueAccess(
+  userId: string,
+  database: DbExecutor = getDb(),
+) {
+  const user = await database.query.users.findFirst({
     where: eq(users.id, userId),
     columns: { roleType: true, queueViewScope: true },
   })
 
   if (!user || user.roleType !== 'agent') return null
 
-  const rows = await getDb()
+  const rows = await database
     .select({
       queueId: userQueueAccess.queueId,
       accessType: userQueueAccess.accessType,
@@ -70,13 +79,14 @@ export async function assertCanWorkCase(caseId: string, userId: string) {
 export async function assertOwnerCanWorkCases(
   ownerId: string | null,
   caseIds: string[],
+  database: DbExecutor = getDb(),
 ) {
   if (!ownerId) return
 
-  const access = await getAgentQueueAccess(ownerId)
+  const access = await getAgentQueueAccess(ownerId, database)
   if (!access) return
 
-  const rows = await getDb()
+  const rows = await database
     .select({ queueId: cases.queueId, queueName: queues.name })
     .from(cases)
     .innerJoin(queues, eq(cases.queueId, queues.id))

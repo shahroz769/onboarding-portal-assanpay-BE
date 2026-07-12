@@ -288,6 +288,20 @@
       "when": 1783814400000,
       "tag": "0041_hash_public_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1783900800000,
+      "tag": "0042_postgres_optimization",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1783987200000,
+      "tag": "0043_drop_stale_case_indexes",
+      "breakpoints": true
     }
   ]
 }

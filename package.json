@@ -5,6 +5,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
+    "db:audit": "bun run src/db/audit.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
