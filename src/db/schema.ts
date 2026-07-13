@@ -657,6 +657,10 @@ export const cases = pgTable(
     casesCurrentStageIdIdx: index('cases_current_stage_id_idx').on(
       table.currentStageId,
     ),
+    casesCurrentStageQueueIdx: index('cases_current_stage_queue_idx').on(
+      table.currentStageId,
+      table.queueId,
+    ),
     casesListCreatedIdx: index('cases_list_created_idx').on(
       table.createdAt,
       table.id,
