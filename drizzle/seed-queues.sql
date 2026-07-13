@@ -11,7 +11,6 @@ VALUES
   (gen_random_uuid(), 'Testing', 'testing', 'TS', now()),
   (gen_random_uuid(), 'Physical Agreement', 'physical-agreement', 'PA', now()),
   (gen_random_uuid(), 'WordPress Website', 'wordpress-website', 'WP', now()),
-  (gen_random_uuid(), 'DialogPay Card', 'dialogpay-card', 'DP', now()),
   (gen_random_uuid(), 'Live', 'live', 'LV', now()),
   (gen_random_uuid(), 'Support Ticket', 'support-ticket', 'ST', now())
 ON CONFLICT (slug) DO NOTHING;
@@ -19,5 +18,5 @@ ON CONFLICT (slug) DO NOTHING;
 -- Insert sequence rows for each queue
 INSERT INTO queue_case_sequences (queue_id, last_number)
 SELECT id, 0 FROM queues
-WHERE slug IN ('documents-review', 'sub-merchant-form', 'agreement', 'merchant-id', 'testing', 'physical-agreement', 'wordpress-website', 'dialogpay-card', 'live', 'support-ticket')
+WHERE slug IN ('documents-review', 'sub-merchant-form', 'agreement', 'merchant-id', 'testing', 'physical-agreement', 'wordpress-website', 'live', 'support-ticket')
 ON CONFLICT (queue_id) DO NOTHING;
