@@ -212,11 +212,13 @@ const sanitizedStringSchema = z
   .transform(sanitizeText)
 
 const trimmedStringSchema = z.string().trim().min(1, 'This field is required.')
+const bareDomainPattern =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#].*)?$/i
 const businessWebsiteSchema = z
   .string()
   .trim()
   .transform((value) =>
-    value.toLowerCase().startsWith('www.') ? `https://${value}` : value,
+    bareDomainPattern.test(value) ? `https://${value}` : value,
   )
   .pipe(z.string().url('Business website must be a valid URL.'))
 export const localMobileNumberSchema = z
