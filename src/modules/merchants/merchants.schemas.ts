@@ -212,6 +212,13 @@ const sanitizedStringSchema = z
   .transform(sanitizeText)
 
 const trimmedStringSchema = z.string().trim().min(1, 'This field is required.')
+const businessWebsiteSchema = z
+  .string()
+  .trim()
+  .transform((value) =>
+    value.toLowerCase().startsWith('www.') ? `https://${value}` : value,
+  )
+  .pipe(z.string().url('Business website must be a valid URL.'))
 export const localMobileNumberSchema = z
   .string()
   .trim()
@@ -240,10 +247,7 @@ export const scalarMerchantSchema = z
       .email('Business email must be a valid email.')
       .transform(toLower),
     businessAddress: sanitizedStringSchema,
-    businessWebsite: z
-      .string()
-      .trim()
-      .url('Business website must be a valid URL.'),
+    businessWebsite: businessWebsiteSchema,
     websiteCms: z.enum(websiteCmsValues),
     businessDescription: sanitizedStringSchema,
     businessRegistrationDate: z
