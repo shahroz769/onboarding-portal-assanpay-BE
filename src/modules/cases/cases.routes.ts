@@ -346,8 +346,14 @@ caseRoutes.post('/:id/wordpress-website', async (c) => {
   const screenshots = formData
     .getAll('screenshots')
     .filter((value): value is File => value instanceof File)
-  const subMerchantLogoScreenshots = formData
+  const subMerchantLogoScreenshotFiles = formData
     .getAll('subMerchantLogoScreenshots')
+    .filter((value): value is File => value instanceof File)
+  const subMerchantLogoScreenshotIds = formData
+    .getAll('subMerchantLogoScreenshotSubMerchantIds')
+    .filter((value): value is string => typeof value === 'string')
+  const assanpayCheckoutScreenshots = formData
+    .getAll('assanpayCheckoutScreenshots')
     .filter((value): value is File => value instanceof File)
 
   const parsedInput = saveWordpressWebsiteSchema.safeParse({
@@ -363,12 +369,30 @@ caseRoutes.post('/:id/wordpress-website', async (c) => {
 
   const input: SaveWordpressWebsiteInput = parsedInput.data
 
+  if (
+    subMerchantLogoScreenshotFiles.length !==
+    subMerchantLogoScreenshotIds.length
+  ) {
+    throw new AppError(
+      400,
+      'Each sub-merchant logo screenshot must identify its sub-merchant.',
+    )
+  }
+
+  const subMerchantLogoScreenshots = subMerchantLogoScreenshotFiles.map(
+    (file, index) => ({
+      file,
+      subMerchantId: subMerchantLogoScreenshotIds[index] ?? '',
+    }),
+  )
+
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await saveWordpressWebsiteCase(id, auth.userId, {
     ...input,
     screenshots,
     subMerchantLogoScreenshots,
+    assanpayCheckoutScreenshots,
   })
   return c.json(result)
 })

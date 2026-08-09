@@ -629,6 +629,10 @@ export const cases = pgTable(
     merchantId: uuid('merchant_id')
       .notNull()
       .references(() => merchants.id, { onDelete: 'cascade' }),
+    subMerchantId: uuid('sub_merchant_id').references(
+      () => subMerchantDraftTemplates.id,
+      { onDelete: 'restrict' },
+    ),
     ownerId: uuid('owner_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -654,6 +658,9 @@ export const cases = pgTable(
     ),
     casesStatusIdx: index('cases_status_idx').on(table.status),
     casesOwnerIdIdx: index('cases_owner_id_idx').on(table.ownerId),
+    casesSubMerchantIdIdx: index('cases_sub_merchant_id_idx').on(
+      table.subMerchantId,
+    ),
     casesCurrentStageIdIdx: index('cases_current_stage_id_idx').on(
       table.currentStageId,
     ),
@@ -754,7 +761,7 @@ export const documentReviewDetails = pgTable(
   'document_review_details',
   {
     caseId: uuid('case_id')
-      .primaryKey()
+      .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
     subMerchantId: uuid('sub_merchant_id')
       .notNull()
@@ -771,6 +778,10 @@ export const documentReviewDetails = pgTable(
       .notNull(),
   },
   (table) => ({
+    documentReviewDetailsPk: primaryKey({
+      columns: [table.caseId, table.subMerchantId],
+      name: 'document_review_details_pkey',
+    }),
     documentReviewDetailsSubMerchantIdx: index(
       'document_review_details_sub_merchant_idx',
     ).on(table.subMerchantId),
@@ -1135,6 +1146,7 @@ export const portalMidLimitApplications = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     portalMid: integer('portal_mid').notNull(),
+    category: varchar('category', { length: 32 }),
     merchantId: uuid('merchant_id').references(() => merchants.id, {
       onDelete: 'cascade',
     }),
@@ -1158,6 +1170,10 @@ export const portalMidLimitApplications = pgTable(
     portalMidLimitApplicationsMidPositive: check(
       'portal_mid_limit_applications_mid_positive',
       sql`${table.portalMid} > 0`,
+    ),
+    portalMidLimitApplicationsCategoryValid: check(
+      'portal_mid_limit_applications_category_valid',
+      sql`${table.category} is null or ${table.category} in ('custom_wordpress', 'shopify', 'internal')`,
     ),
   }),
 )

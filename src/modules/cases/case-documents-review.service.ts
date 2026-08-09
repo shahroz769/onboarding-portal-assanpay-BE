@@ -511,45 +511,47 @@ export async function saveDocumentReviewSubMerchant(
   }
 
   if (caseRow.ownerId !== userId) {
-    throw new AppError(403, 'Only the case owner can select the sub-merchant.')
+    throw new AppError(403, 'Only the case owner can select sub-merchants.')
   }
 
   if (caseRow.status !== 'working' || !caseRow.currentStageId) {
     throw new AppError(
       400,
-      'Sub-merchant can only be selected while the case is working.',
+      'Sub-merchants can only be selected while the case is working.',
     )
   }
 
-  const subMerchant = await db.query.subMerchantDraftTemplates.findFirst({
-    where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
-    columns: { id: true, name: true },
-  })
+  const selectedIds = [...new Set(input.subMerchantIds)]
+  const subMerchants = await db
+    .select({
+      id: subMerchantDraftTemplates.id,
+      name: subMerchantDraftTemplates.name,
+    })
+    .from(subMerchantDraftTemplates)
+    .where(inArray(subMerchantDraftTemplates.id, selectedIds))
 
-  if (!subMerchant) {
-    throw new AppError(400, 'Invalid sub-merchant selection.')
+  if (subMerchants.length !== selectedIds.length) {
+    throw new AppError(400, 'One or more sub-merchant selections are invalid.')
   }
 
   const now = new Date()
-  const [details] = await db.transaction(async (tx) => {
-    const [upserted] = await tx
+  const details = await db.transaction(async (tx) => {
+    await tx
+      .delete(documentReviewDetails)
+      .where(eq(documentReviewDetails.caseId, caseId))
+
+    const inserted = await tx
       .insert(documentReviewDetails)
-      .values({
-        caseId,
-        subMerchantId: subMerchant.id,
-        subMerchantName: subMerchant.name,
-        selectedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: documentReviewDetails.caseId,
-        set: {
+      .values(
+        subMerchants.map((subMerchant) => ({
+          caseId,
           subMerchantId: subMerchant.id,
           subMerchantName: subMerchant.name,
           selectedBy: userId,
+          createdAt: now,
           updatedAt: now,
-        },
-      })
+        })),
+      )
       .returning()
 
     await tx.insert(caseHistory).values({
@@ -557,24 +559,26 @@ export async function saveDocumentReviewSubMerchant(
       actorId: userId,
       action: 'document_review_sub_merchant_selected',
       details: {
-        subMerchantId: subMerchant.id,
-        subMerchantName: subMerchant.name,
+        subMerchantIds: subMerchants.map((item) => item.id),
+        subMerchantNames: subMerchants.map((item) => item.name),
         caseNumber: caseRow.caseNumber,
       },
       createdAt: now,
     })
 
-    return [upserted]
+    return inserted
   })
 
-  if (!details) {
+  if (details.length !== subMerchants.length) {
     throw new AppError(500, 'Failed to save sub-merchant selection.')
   }
 
   return {
-    subMerchantId: details.subMerchantId,
-    subMerchantName: details.subMerchantName,
-    selectedAt: details.updatedAt.toISOString(),
+    subMerchants: details.map((item) => ({
+      id: item.subMerchantId,
+      name: item.subMerchantName,
+    })),
+    selectedAt: now.toISOString(),
   }
 }
 

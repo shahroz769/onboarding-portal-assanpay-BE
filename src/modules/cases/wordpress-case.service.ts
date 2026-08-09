@@ -162,6 +162,7 @@ import {
   RESUBMISSION_WHATSAPP_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_EXTENSIONS,
   SUB_MERCHANT_FINAL_FORM_MIME_TYPES,
+  WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_EXTENSIONS,
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_MIME_TYPES,
@@ -263,7 +264,11 @@ export async function saveWordpressWebsiteCase(
   userId: string,
   input: SaveWordpressWebsiteInput & {
     screenshots: File[]
-    subMerchantLogoScreenshots: File[]
+    subMerchantLogoScreenshots: Array<{
+      subMerchantId: string
+      file: File
+    }>
+    assanpayCheckoutScreenshots: File[]
   },
 ) {
   const db = getDb()
@@ -280,6 +285,10 @@ export async function saveWordpressWebsiteCase(
     )
   }
 
+  if (input.assanpayCheckoutScreenshots.length === 0) {
+    throw new AppError(400, 'An AssanPay checkout page screenshot is required.')
+  }
+
   if (input.screenshots.length > 30) {
     throw new AppError(400, 'Upload no more than 30 page screenshots.')
   }
@@ -291,10 +300,43 @@ export async function saveWordpressWebsiteCase(
     )
   }
 
+  if (input.assanpayCheckoutScreenshots.length > 1) {
+    throw new AppError(
+      400,
+      'Upload only one AssanPay checkout page screenshot.',
+    )
+  }
+
   for (const screenshot of input.screenshots) {
     await validateWordpressScreenshotFile(screenshot)
   }
+  const documentReview = await getLatestDocumentReviewDetailsForMerchant(
+    caseRow.merchantId,
+  )
+  const selectedSubMerchants = documentReview?.subMerchants ?? []
+  const selectedSubMerchantIds = new Set(
+    selectedSubMerchants.map((item) => item.id),
+  )
+  const submittedSubMerchantIds = input.subMerchantLogoScreenshots.map(
+    (item) => item.subMerchantId,
+  )
+
+  if (
+    selectedSubMerchants.length === 0 ||
+    submittedSubMerchantIds.length !== selectedSubMerchantIds.size ||
+    new Set(submittedSubMerchantIds).size !== submittedSubMerchantIds.length ||
+    submittedSubMerchantIds.some((id) => !selectedSubMerchantIds.has(id))
+  ) {
+    throw new AppError(
+      400,
+      'Upload exactly one website logo screenshot for each selected sub-merchant.',
+    )
+  }
+
   for (const screenshot of input.subMerchantLogoScreenshots) {
+    await validateWordpressScreenshotFile(screenshot.file)
+  }
+  for (const screenshot of input.assanpayCheckoutScreenshots) {
     await validateWordpressScreenshotFile(screenshot)
   }
 
@@ -321,6 +363,19 @@ export async function saveWordpressWebsiteCase(
       ),
     )
 
+  const existingCheckoutFiles = await db
+    .select()
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(
+          caseFiles.fileKind,
+          `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}%`,
+        ),
+      ),
+    )
+
   const storage = getCaseFileStorage()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId: caseRow.merchantId,
@@ -343,10 +398,21 @@ export async function saveWordpressWebsiteCase(
     ),
   )
   const uploadedLogoScreenshots = await Promise.all(
-    input.subMerchantLogoScreenshots.map((file, index) =>
+    input.subMerchantLogoScreenshots.map(({ file, subMerchantId }) =>
       storage
         .uploadFile(folder.folderId, {
-          fileName: `sub-merchant-logo-${String(index + 1).padStart(2, '0')}-${file.name}`,
+          fileName: `sub-merchant-logo-${subMerchantId}-${file.name}`,
+          mimeType: file.type,
+          file,
+        })
+        .then((uploaded) => ({ file, uploaded, subMerchantId })),
+    ),
+  )
+  const uploadedCheckoutScreenshots = await Promise.all(
+    input.assanpayCheckoutScreenshots.map((file, index) =>
+      storage
+        .uploadFile(folder.folderId, {
+          fileName: `assanpay-checkout-${String(index + 1).padStart(2, '0')}-${file.name}`,
           mimeType: file.type,
           file,
         })
@@ -358,6 +424,7 @@ export async function saveWordpressWebsiteCase(
   const saved = await db.transaction(async (tx) => {
     const savedFiles: Array<typeof caseFiles.$inferSelect> = []
     const savedLogoFiles: Array<typeof caseFiles.$inferSelect> = []
+    const savedCheckoutFiles: Array<typeof caseFiles.$inferSelect> = []
 
     for (const { file, uploaded, index } of uploadedScreenshots) {
       const [savedFile] = await tx
@@ -398,12 +465,12 @@ export async function saveWordpressWebsiteCase(
       savedFiles.push(savedFile)
     }
 
-    for (const { file, uploaded, index } of uploadedLogoScreenshots) {
+    for (const { file, uploaded, subMerchantId } of uploadedLogoScreenshots) {
       const [savedFile] = await tx
         .insert(caseFiles)
         .values({
           caseId,
-          fileKind: `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+          fileKind: `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}${subMerchantId}`,
           originalName: file.name,
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
@@ -437,6 +504,45 @@ export async function saveWordpressWebsiteCase(
       savedLogoFiles.push(savedFile)
     }
 
+    for (const { file, uploaded, index } of uploadedCheckoutScreenshots) {
+      const [savedFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: file.name,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!savedFile) {
+        throw new AppError(500, 'Failed to save checkout page screenshot.')
+      }
+
+      savedCheckoutFiles.push(savedFile)
+    }
+
     const keptKinds = new Set(savedFiles.map((file) => file.fileKind))
     const staleFiles = existingFiles.filter(
       (file) => !keptKinds.has(file.fileKind),
@@ -461,6 +567,20 @@ export async function saveWordpressWebsiteCase(
         ),
       )
     }
+    const keptCheckoutKinds = new Set(
+      savedCheckoutFiles.map((file) => file.fileKind),
+    )
+    const staleCheckoutFiles = existingCheckoutFiles.filter(
+      (file) => !keptCheckoutKinds.has(file.fileKind),
+    )
+    if (staleCheckoutFiles.length > 0) {
+      await tx.delete(caseFiles).where(
+        inArray(
+          caseFiles.id,
+          staleCheckoutFiles.map((file) => file.id),
+        ),
+      )
+    }
 
     await tx.insert(caseHistory).values({
       caseId,
@@ -471,6 +591,7 @@ export async function saveWordpressWebsiteCase(
         clonedWebsiteLink: input.clonedWebsiteLink,
         screenshots: savedFiles.length,
         subMerchantLogoScreenshots: savedLogoFiles.length,
+        assanpayCheckoutScreenshots: savedCheckoutFiles.length,
       },
       createdAt: now,
     })
@@ -480,15 +601,22 @@ export async function saveWordpressWebsiteCase(
       savedAt: now.toISOString(),
       screenshots: savedFiles,
       subMerchantLogoScreenshots: savedLogoFiles,
+      assanpayCheckoutScreenshots: savedCheckoutFiles,
     }
   })
 
   const replacedFileIds = new Set(
-    [...uploadedScreenshots, ...uploadedLogoScreenshots].map(
-      ({ uploaded }) => uploaded.fileId,
-    ),
+    [
+      ...uploadedScreenshots,
+      ...uploadedLogoScreenshots,
+      ...uploadedCheckoutScreenshots,
+    ].map(({ uploaded }) => uploaded.fileId),
   )
-  const supersededIds = [...existingFiles, ...existingLogoFiles]
+  const supersededIds = [
+    ...existingFiles,
+    ...existingLogoFiles,
+    ...existingCheckoutFiles,
+  ]
     .map((oldFile) => oldFile.googleDriveFileId)
     .filter((fileId) => !replacedFileIds.has(fileId))
   await supersedeStorageObjects(supersededIds)

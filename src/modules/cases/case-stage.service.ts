@@ -170,14 +170,12 @@ import {
   type ManualCommunicationChannel,
 } from './case-constants'
 import {
-  assertInternalPortalMidLimitsApplied,
   assertTestingLimitsAppliedForCredentials,
   buildPortalPassword,
   ensureInheritedSubMerchantFormDetails,
   getCaseDetailMerchant,
   getClientPayoutRateLabel,
   getDocumentReviewDetails,
-  getDocumentReviewResubmissionSentEntry,
   getInternalPortalMidLimitsAppliedEntryForMerchant,
   getLatestDocumentReviewDetailsForMerchant,
   getLatestWordpressWebsiteDetailsForMerchant,
@@ -348,16 +346,27 @@ export async function advanceStage(caseId: string, userId: string) {
     }
 
     const documentReviewDetail = await getDocumentReviewDetails(caseId)
-    if (!documentReviewDetail?.subMerchantName) {
-      throw new AppError(400, 'Select a sub-merchant before closing this case.')
-    }
-
-    const resubmissionSentEntry =
-      await getDocumentReviewResubmissionSentEntry(caseId)
-    if (!resubmissionSentEntry) {
+    if (!documentReviewDetail?.subMerchants.length) {
       throw new AppError(
         400,
-        'Send the resubmission request by auto email, manual Gmail, or WhatsApp before closing this case.',
+        'Select at least one sub-merchant before closing this case.',
+      )
+    }
+
+    const [activeRejection] = await db
+      .select({ id: caseFieldReviews.id })
+      .from(caseFieldReviews)
+      .where(
+        and(
+          eq(caseFieldReviews.caseId, caseId),
+          eq(caseFieldReviews.status, 'rejected'),
+        ),
+      )
+      .limit(1)
+    if (activeRejection) {
+      throw new AppError(
+        400,
+        'Resolve all rejected fields and documents before closing this case.',
       )
     }
 
@@ -461,7 +470,18 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!credentials) {
       throw new AppError(
         400,
-        'Save the merchant portal credentials before closing this case.',
+        'Save the email, MID, and Branch Code for both merchant IDs before closing this case.',
+      )
+    }
+
+    if (
+      !credentials.branchCode.trim() ||
+      !credentials.internalEmail.trim() ||
+      !credentials.internalBranchCode.trim()
+    ) {
+      throw new AppError(
+        400,
+        'Save the email, MID, and Branch Code for both merchant IDs before closing this case.',
       )
     }
 
@@ -579,14 +599,30 @@ export async function advanceStage(caseId: string, userId: string) {
       throw new AppError(400, 'Upload screenshots before closing this case.')
     }
 
-    if (details.subMerchantLogoScreenshots.length === 0) {
+    const documentReview = await getLatestDocumentReviewDetailsForMerchant(
+      caseData.merchantId,
+    )
+    if (
+      !documentReview?.subMerchants.length ||
+      documentReview.subMerchants.some(
+        (subMerchant) =>
+          !details.subMerchantLogoScreenshots.some(
+            (screenshot) => screenshot.subMerchantId === subMerchant.id,
+          ),
+      )
+    ) {
       throw new AppError(
         400,
-        'Upload the sub-merchant website logo screenshot before closing this case.',
+        'Upload one website logo screenshot for each selected sub-merchant before closing this case.',
       )
     }
 
-    await assertInternalPortalMidLimitsApplied(caseData.merchantId)
+    if (details.assanpayCheckoutScreenshots.length === 0) {
+      throw new AppError(
+        400,
+        'Upload the AssanPay checkout page screenshot before closing this case.',
+      )
+    }
 
     targetStage = await db.query.queueStages.findFirst({
       where: and(

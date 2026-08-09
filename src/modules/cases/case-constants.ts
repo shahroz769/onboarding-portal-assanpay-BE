@@ -13,6 +13,8 @@ export const AGREEMENT_FILE_EXTENSIONS = SUB_MERCHANT_FINAL_FORM_EXTENSIONS
 export const WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX = 'wordpress_screenshot_'
 export const WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX =
   'wordpress_sub_merchant_logo_screenshot_'
+export const WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX =
+  'wordpress_assanpay_checkout_screenshot_'
 export const RESUBMISSION_EMAIL_PROOF_KIND = 'resubmission_email_proof'
 export const AGREEMENT_EMAIL_PROOF_KIND = 'agreement_email_proof'
 export const MID_CREATION_EMAIL_PROOF_KIND = 'mid_creation_email_proof'

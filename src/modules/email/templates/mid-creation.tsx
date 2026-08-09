@@ -135,7 +135,7 @@ export function MidCreationEmail({
 MidCreationEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   portalEmail: 'merchant@example.com',
-  portalPassword: 'merchant@123',
+  portalPassword: 'merchant@ASSAN123',
   merchantPortalUrl: 'https://merchant.assanpay.com/login',
   goLiveUrl: 'https://app.example.com/onboarding-form/go-live/abc123',
   availableAt: 'May 8, 2026, 12:00 PM',

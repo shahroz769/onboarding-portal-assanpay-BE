@@ -28,10 +28,14 @@ import {
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
 import type { QueueWorkflowType } from '../queues/queue-workflow'
-import type { MerchantPortalRole } from './cases.schemas'
+import {
+  buildInternalMerchantEmail,
+  type MerchantPortalRole,
+} from './cases.schemas'
 import {
   DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
   MID_CREATION_CREDENTIALS_SENT_ACTIONS,
+  WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
 } from './case-constants'
@@ -161,6 +165,7 @@ export async function getWordpressWebsiteDetails(caseId: string) {
   const subMerchantLogoScreenshotRows = await db
     .select({
       id: caseFiles.id,
+      fileKind: caseFiles.fileKind,
       originalName: caseFiles.originalName,
       mimeType: caseFiles.mimeType,
       sizeBytes: caseFiles.sizeBytes,
@@ -175,6 +180,42 @@ export async function getWordpressWebsiteDetails(caseId: string) {
         ilike(
           caseFiles.fileKind,
           `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}%`,
+        ),
+      ),
+    )
+    .orderBy(asc(caseFiles.fileKind))
+
+  const subMerchantLogoScreenshots = subMerchantLogoScreenshotRows.map(
+    ({ fileKind, ...file }) => {
+      const subMerchantId = fileKind.slice(
+        WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX.length,
+      )
+      return {
+        ...file,
+        subMerchantId: /^[0-9a-f-]{36}$/i.test(subMerchantId)
+          ? subMerchantId
+          : null,
+      }
+    },
+  )
+
+  const assanpayCheckoutScreenshotRows = await db
+    .select({
+      id: caseFiles.id,
+      originalName: caseFiles.originalName,
+      mimeType: caseFiles.mimeType,
+      sizeBytes: caseFiles.sizeBytes,
+      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      createdAt: caseFiles.createdAt,
+    })
+    .from(caseFiles)
+    .where(
+      and(
+        eq(caseFiles.caseId, caseId),
+        ilike(
+          caseFiles.fileKind,
+          `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}%`,
         ),
       ),
     )
@@ -197,7 +238,8 @@ export async function getWordpressWebsiteDetails(caseId: string) {
         }
       : null,
     screenshots: screenshotRows,
-    subMerchantLogoScreenshots: subMerchantLogoScreenshotRows,
+    subMerchantLogoScreenshots,
+    assanpayCheckoutScreenshots: assanpayCheckoutScreenshotRows,
   }
 }
 
@@ -225,7 +267,7 @@ export async function getLatestWordpressWebsiteDetailsForMerchant(merchantId: st
 }
 
 export async function getDocumentReviewDetails(caseId: string) {
-  const [details] = await getDb()
+  const details = await getDb()
     .select({
       subMerchantId: documentReviewDetails.subMerchantId,
       subMerchantName: documentReviewDetails.subMerchantName,
@@ -236,18 +278,21 @@ export async function getDocumentReviewDetails(caseId: string) {
     .from(documentReviewDetails)
     .leftJoin(users, eq(documentReviewDetails.selectedBy, users.id))
     .where(eq(documentReviewDetails.caseId, caseId))
-    .limit(1)
+    .orderBy(asc(documentReviewDetails.subMerchantName))
 
-  if (!details) return null
+  const first = details[0]
+  if (!first) return null
 
   return {
-    subMerchantId: details.subMerchantId,
-    subMerchantName: details.subMerchantName,
-    selectedAt: details.selectedAt.toISOString(),
-    selectedBy: details.selectedById
+    subMerchants: details.map((item) => ({
+      id: item.subMerchantId,
+      name: item.subMerchantName,
+    })),
+    selectedAt: first.selectedAt.toISOString(),
+    selectedBy: first.selectedById
       ? {
-          id: details.selectedById,
-          name: details.selectedByName ?? 'Unknown',
+          id: first.selectedById,
+          name: first.selectedByName ?? 'Unknown',
         }
       : null,
   }
@@ -256,16 +301,11 @@ export async function getDocumentReviewDetails(caseId: string) {
 export async function getLatestDocumentReviewDetailsForMerchant(merchantId: string) {
   const [details] = await getDb()
     .select({
-      subMerchantId: documentReviewDetails.subMerchantId,
-      subMerchantName: documentReviewDetails.subMerchantName,
-      selectedAt: documentReviewDetails.updatedAt,
-      selectedById: documentReviewDetails.selectedBy,
-      selectedByName: users.name,
+      caseId: documentReviewDetails.caseId,
     })
     .from(documentReviewDetails)
     .innerJoin(cases, eq(documentReviewDetails.caseId, cases.id))
     .innerJoin(queues, eq(cases.queueId, queues.id))
-    .leftJoin(users, eq(documentReviewDetails.selectedBy, users.id))
     .where(
       and(
         eq(cases.merchantId, merchantId),
@@ -276,18 +316,7 @@ export async function getLatestDocumentReviewDetailsForMerchant(merchantId: stri
     .limit(1)
 
   if (!details) return null
-
-  return {
-    subMerchantId: details.subMerchantId,
-    subMerchantName: details.subMerchantName,
-    selectedAt: details.selectedAt.toISOString(),
-    selectedBy: details.selectedById
-      ? {
-          id: details.selectedById,
-          name: details.selectedByName ?? 'Unknown',
-        }
-      : null,
-  }
+  return getDocumentReviewDetails(details.caseId)
 }
 
 export async function getSubMerchantFormDetails(caseId: string) {
@@ -356,13 +385,19 @@ export async function ensureInheritedSubMerchantFormDetails(input: {
   const existing = await getSubMerchantFormDetails(input.caseId)
   if (existing) return existing
 
-  const documentReviewDetail = await getLatestDocumentReviewDetailsForMerchant(
-    input.merchantId,
-  )
-  if (!documentReviewDetail) return null
+  const caseRow = await db.query.cases.findFirst({
+    where: eq(cases.id, input.caseId),
+    columns: { subMerchantId: true },
+  })
+  const documentReviewDetail = caseRow?.subMerchantId
+    ? null
+    : await getLatestDocumentReviewDetailsForMerchant(input.merchantId)
+  const inheritedSubMerchantId =
+    caseRow?.subMerchantId ?? documentReviewDetail?.subMerchants[0]?.id
+  if (!inheritedSubMerchantId) return null
 
   const subMerchant = await db.query.subMerchantDraftTemplates.findFirst({
-    where: eq(subMerchantDraftTemplates.id, documentReviewDetail.subMerchantId),
+    where: eq(subMerchantDraftTemplates.id, inheritedSubMerchantId),
     columns: {
       id: true,
       name: true,
@@ -415,6 +450,9 @@ export type MidCreationCredentials = {
   portalMid: number
   internalPortalMid: number
   email: string
+  branchCode: string
+  internalEmail: string
+  internalBranchCode: string
   merchantRole: MerchantPortalRole
   paymentMethods: PaymentMethodSettings
   payoutMethods: PaymentMethodSettings
@@ -428,7 +466,7 @@ export const ROLE_PAYOUT_METHOD_LABELS: Record<MerchantPortalRole, string> = {
 
 export function buildPortalPassword(email: string) {
   const [localPart = email] = email.trim().split('@')
-  return `${localPart.trim()}@123`
+  return `${localPart.trim().toLowerCase()}@ASSAN123`
 }
 
 export async function getMidCreationCredentials(
@@ -453,6 +491,9 @@ export async function getMidCreationCredentials(
     portalMid?: unknown
     internalPortalMid?: unknown
     email?: unknown
+    branchCode?: unknown
+    internalEmail?: unknown
+    internalBranchCode?: unknown
     merchantRole?: unknown
     paymentMethods?: unknown
     payoutMethods?: unknown
@@ -478,6 +519,13 @@ export async function getMidCreationCredentials(
         ? details.internalPortalMid
         : details.portalMid,
     email: details.email,
+    branchCode:
+      typeof details.branchCode === 'string' ? details.branchCode : '',
+    internalEmail: buildInternalMerchantEmail(details.email),
+    internalBranchCode:
+      typeof details.internalBranchCode === 'string'
+        ? details.internalBranchCode
+        : '',
     merchantRole: isMerchantPortalRole(details.merchantRole)
       ? details.merchantRole
       : DEFAULT_MERCHANT_PORTAL_ROLE,

@@ -251,6 +251,32 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       )
     }
 
+    const selectedSubMerchant = isQueueWorkflowType(
+      queue,
+      'sub_merchant_form',
+    )
+      ? input.subMerchantId
+        ? await tx.query.subMerchantDraftTemplates.findFirst({
+            where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
+            columns: {
+              id: true,
+              name: true,
+              googleDriveWebViewLink: true,
+            },
+          })
+        : null
+      : null
+
+    if (
+      isQueueWorkflowType(queue, 'sub_merchant_form') &&
+      !selectedSubMerchant
+    ) {
+      throw new AppError(
+        400,
+        'Select a valid sub-merchant before creating an EP Sub-Merchant Form case.',
+      )
+    }
+
     await assertCreationRequirementsSatisfied(tx, {
       merchantId: merchant.id,
       targetQueueId: queue.id,
@@ -277,6 +303,7 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
         caseNumber,
         queueId: input.queueId,
         merchantId: input.merchantId,
+        subMerchantId: selectedSubMerchant?.id ?? null,
         ownerId: null,
         currentStageId: initialStage.id,
         status: 'new',
@@ -289,6 +316,15 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       throw new AppError(500, 'Failed to create case.')
     }
 
+    if (selectedSubMerchant) {
+      await tx.insert(subMerchantFormDetails).values({
+        caseId: created.id,
+        subMerchantKey: selectedSubMerchant.id,
+        subMerchantName: selectedSubMerchant.name,
+        draftUrl: selectedSubMerchant.googleDriveWebViewLink,
+      })
+    }
+
     if (actorId) {
       await tx.insert(caseHistory).values({
         caseId: created.id,
@@ -297,6 +333,8 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
         details: {
           queueName: queue.name,
           merchantName: merchant.businessName,
+          subMerchantId: selectedSubMerchant?.id ?? null,
+          subMerchantName: selectedSubMerchant?.name ?? null,
         },
       })
     }
@@ -447,6 +485,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       slaBreached: cases.slaBreached,
       merchantId: cases.merchantId,
       merchantName: merchants.businessName,
+      subMerchantName: subMerchantDraftTemplates.name,
       ownerId: cases.ownerId,
       ownerName: users.name,
       status: cases.status,
@@ -460,6 +499,10 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
     .from(cases)
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
     .innerJoin(queues, eq(cases.queueId, queues.id))
+    .leftJoin(
+      subMerchantDraftTemplates,
+      eq(cases.subMerchantId, subMerchantDraftTemplates.id),
+    )
     .leftJoin(users, eq(cases.ownerId, users.id))
     .where(where)
     .orderBy(orderFn(sortSpec.expression), orderFn(cases.id))
@@ -899,7 +942,13 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             name: testingLimitsAppliedEntry.actorName ?? 'Unknown',
           }
         : null,
-      credentialsReady: Boolean(midCreationCredentials),
+      credentialsReady: isQueueWorkflowType(queue, 'mid')
+        ? Boolean(
+            midCreationCredentials?.branchCode.trim() &&
+              midCreationCredentials.internalEmail.trim() &&
+              midCreationCredentials.internalBranchCode.trim(),
+          )
+        : Boolean(midCreationCredentials),
       portalMid:
         isQueueWorkflowType(queue, 'mid')
           ? (midCreationCredentials?.portalMid ?? null)
@@ -908,6 +957,23 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         isQueueWorkflowType(queue, 'mid') ||
         isQueueWorkflowType(queue, 'wordpress')
           ? (midCreationCredentials?.internalPortalMid ?? null)
+          : null,
+      email:
+        isQueueWorkflowType(queue, 'mid')
+          ? (midCreationCredentials?.email ?? null)
+          : null,
+      branchCode:
+        isQueueWorkflowType(queue, 'mid')
+          ? (midCreationCredentials?.branchCode ?? null)
+          : null,
+      internalEmail:
+        isQueueWorkflowType(queue, 'mid') ||
+        isQueueWorkflowType(queue, 'wordpress')
+          ? (midCreationCredentials?.internalEmail ?? null)
+          : null,
+      internalBranchCode:
+        isQueueWorkflowType(queue, 'mid')
+          ? (midCreationCredentials?.internalBranchCode ?? null)
           : null,
       internalLimitsAppliedAt:
         internalPortalMidLimitsAppliedEntry?.createdAt?.toISOString() ?? null,

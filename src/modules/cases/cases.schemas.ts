@@ -57,6 +57,7 @@ export const createCaseSchema = z
   .object({
     merchantId: z.string().uuid(),
     queueId: z.string().uuid(),
+    subMerchantId: z.string().uuid().optional(),
   })
   .strict()
 
@@ -181,7 +182,7 @@ export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>
 
 export const saveDocumentReviewSubMerchantSchema = z
   .object({
-    subMerchantId: z.string().uuid(),
+    subMerchantIds: z.array(z.string().uuid()).min(1).max(30),
   })
   .strict()
 
@@ -271,11 +272,21 @@ export const merchantPortalRoleValues = [
 
 export type MerchantPortalRole = (typeof merchantPortalRoleValues)[number]
 
+export function buildInternalMerchantEmail(email: string) {
+  const normalizedEmail = email.trim()
+  const atIndex = normalizedEmail.lastIndexOf('@')
+  if (atIndex <= 0) return normalizedEmail
+  return `${normalizedEmail.slice(0, atIndex)}internal${normalizedEmail.slice(atIndex)}`
+}
+
 export const saveMidCreationDetailsSchema = z
   .object({
     portalMid: z.coerce.number().int().positive(),
     internalPortalMid: z.coerce.number().int().positive(),
     email: z.string().trim().email().max(255),
+    branchCode: z.string().trim().min(1).max(100),
+    internalEmail: z.string().trim().email().max(255),
+    internalBranchCode: z.string().trim().min(1).max(100),
     merchantRole: z.enum(merchantPortalRoleValues),
     paymentMethods: paymentMethodSettingsSchema.min(
       1,
@@ -283,6 +294,10 @@ export const saveMidCreationDetailsSchema = z
     ),
   })
   .strict()
+  .transform((input) => ({
+    ...input,
+    internalEmail: buildInternalMerchantEmail(input.email),
+  }))
 
 export type SaveMidCreationDetailsInput = z.infer<
   typeof saveMidCreationDetailsSchema

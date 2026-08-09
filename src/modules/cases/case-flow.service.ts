@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import type { getDb } from '../../db/client'
 import {
@@ -9,9 +9,12 @@ import {
   caseHistory,
   caseLinks,
   cases,
+  documentReviewDetails,
   merchants,
   queueCaseSequences,
   queues,
+  subMerchantDraftTemplates,
+  subMerchantFormDetails,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
@@ -27,6 +30,14 @@ type CreatedFlowCase = {
   caseNumber: string
   queueId: string
   queueName: string
+  subMerchantId: string | null
+  subMerchantName: string | null
+}
+
+type FlowSubMerchant = {
+  id: string
+  name: string
+  draftUrl: string
 }
 
 async function generateFlowCaseNumber(
@@ -68,6 +79,7 @@ async function createConfiguredCase(
     parentCaseId: string | null
     sourceQueueId: string | null
     triggerType: TriggerType
+    subMerchant: FlowSubMerchant | null
   },
 ): Promise<CreatedFlowCase> {
   const merchant = await tx.query.merchants.findFirst({
@@ -126,6 +138,7 @@ async function createConfiguredCase(
       caseNumber,
       queueId: queue.id,
       merchantId: merchant.id,
+      subMerchantId: input.subMerchant?.id ?? null,
       ownerId: null,
       currentStageId: initialStage.id,
       status: 'new',
@@ -136,6 +149,15 @@ async function createConfiguredCase(
 
   if (!created) {
     throw new AppError(500, 'Failed to create configured case.')
+  }
+
+  if (input.subMerchant) {
+    await tx.insert(subMerchantFormDetails).values({
+      caseId: created.id,
+      subMerchantKey: input.subMerchant.id,
+      subMerchantName: input.subMerchant.name,
+      draftUrl: input.subMerchant.draftUrl,
+    })
   }
 
   const [sourceCase] = input.parentCaseId
@@ -165,6 +187,8 @@ async function createConfiguredCase(
       targetQueueId: queue.id,
       targetQueueName: queue.name,
       merchantName: merchant.businessName,
+      subMerchantId: input.subMerchant?.id ?? null,
+      subMerchantName: input.subMerchant?.name ?? null,
     },
   })
 
@@ -182,7 +206,105 @@ async function createConfiguredCase(
     caseNumber: created.caseNumber,
     queueId: queue.id,
     queueName: queue.name,
+    subMerchantId: input.subMerchant?.id ?? null,
+    subMerchantName: input.subMerchant?.name ?? null,
   }
+}
+
+async function getFlowSubMerchants(
+  tx: DbTransaction,
+  input: {
+    merchantId: string
+    targetQueueId: string
+    parentCaseId: string | null
+  },
+): Promise<Array<FlowSubMerchant | null>> {
+  const targetQueue = await tx.query.queues.findFirst({
+    where: eq(queues.id, input.targetQueueId),
+    columns: { workflowType: true },
+  })
+
+  if (targetQueue?.workflowType !== 'sub_merchant_form') return [null]
+
+  const [parentCase] = input.parentCaseId
+    ? await tx
+        .select({ workflowType: queues.workflowType })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(eq(cases.id, input.parentCaseId))
+        .limit(1)
+    : []
+
+  const selectedCaseId =
+    input.parentCaseId && parentCase?.workflowType === 'document_review'
+      ? input.parentCaseId
+      : (
+          await tx
+            .select({ caseId: documentReviewDetails.caseId })
+            .from(documentReviewDetails)
+            .innerJoin(cases, eq(documentReviewDetails.caseId, cases.id))
+            .innerJoin(queues, eq(cases.queueId, queues.id))
+            .where(
+              and(
+                eq(cases.merchantId, input.merchantId),
+                eq(queues.workflowType, 'document_review'),
+              ),
+            )
+            .orderBy(desc(documentReviewDetails.updatedAt))
+            .limit(1)
+        )[0]?.caseId
+
+  if (!selectedCaseId) {
+    throw new AppError(
+      409,
+      'Select at least one sub-merchant in document review before creating EP Sub-Merchant Form cases.',
+    )
+  }
+
+  const selected = await tx
+    .select({
+      id: subMerchantDraftTemplates.id,
+      name: subMerchantDraftTemplates.name,
+      draftUrl: subMerchantDraftTemplates.googleDriveWebViewLink,
+    })
+    .from(documentReviewDetails)
+    .innerJoin(
+      subMerchantDraftTemplates,
+      eq(documentReviewDetails.subMerchantId, subMerchantDraftTemplates.id),
+    )
+    .where(eq(documentReviewDetails.caseId, selectedCaseId))
+    .orderBy(asc(subMerchantDraftTemplates.name))
+
+  if (selected.length === 0) {
+    throw new AppError(
+      409,
+      'Select at least one sub-merchant in document review before creating EP Sub-Merchant Form cases.',
+    )
+  }
+
+  return selected
+}
+
+async function createConfiguredCases(
+  tx: DbTransaction,
+  input: {
+    merchantId: string
+    targetQueueId: string
+    parentCaseId: string | null
+    sourceQueueId: string | null
+    triggerType: TriggerType
+  },
+) {
+  const subMerchants = await getFlowSubMerchants(tx, input)
+  const createdCases: CreatedFlowCase[] = []
+
+  for (const subMerchant of subMerchants) {
+    createdCases.push(
+      await createConfiguredCase(tx, { ...input, subMerchant }),
+    )
+  }
+
+  return createdCases
 }
 
 export async function triggerStartCasesForMerchant(
@@ -198,13 +320,13 @@ export async function triggerStartCasesForMerchant(
   const createdCases: CreatedFlowCase[] = []
   for (const rule of rules) {
     createdCases.push(
-      await createConfiguredCase(tx, {
+      ...(await createConfiguredCases(tx, {
         merchantId,
         targetQueueId: rule.targetQueueId,
         parentCaseId: null,
         sourceQueueId: null,
         triggerType: 'form_submission',
-      }),
+      })),
     )
   }
 
@@ -359,13 +481,13 @@ export async function triggerCasesAfterSuccessfulClose(
   const createdCases: CreatedFlowCase[] = []
   for (const rule of rules) {
     createdCases.push(
-      await createConfiguredCase(tx, {
+      ...(await createConfiguredCases(tx, {
         merchantId: sourceCase.merchantId,
         targetQueueId: rule.targetQueueId,
         parentCaseId: sourceCase.id,
         sourceQueueId: sourceCase.queueId,
         triggerType: 'case_close',
-      }),
+      })),
     )
   }
 
