@@ -677,7 +677,7 @@ async function closeOpenCasesAsUnsuccessful(
       )`,
       status: 'closed',
       closeOutcome: 'unsuccessful',
-      slaBreached: sql`${input.now} > ${cases.createdAt} + (
+      slaBreached: sql`${sql.param(input.now, cases.createdAt)} > ${cases.createdAt} + (
         select ${queues.slaHours} * interval '1 hour'
         from ${queues}
         where ${queues.id} = ${cases.queueId}
