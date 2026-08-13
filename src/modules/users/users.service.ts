@@ -60,6 +60,7 @@ function sanitizeUserBase(user: typeof users.$inferSelect) {
     gender: user.gender,
     roleType: user.roleType,
     status: user.status,
+    hasSetPassword: user.passwordHash !== null,
     queueViewScope: user.queueViewScope,
     createdByUserId: user.createdByUserId,
     lastLoginAt: user.lastLoginAt,
