@@ -46,6 +46,7 @@ import type {
   MerchantLimitsMdr,
   MerchantDocumentType,
   MerchantFormSubmission,
+  MerchantStatusValue,
   PriorityValue,
   TerminateMerchantInput,
   UpdatePriorityInput,
@@ -53,6 +54,7 @@ import type {
 import {
   businessScopeValues,
   merchantLimitsMdrSchema,
+  merchantStatusValues,
   priorityValues,
 } from './merchants.schemas'
 import {
@@ -83,6 +85,7 @@ const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 
 const priorityValueSet = new Set<string>(priorityValues)
 const businessScopeValueSet = new Set<string>(businessScopeValues)
+const merchantStatusValueSet = new Set<string>(merchantStatusValues)
 
 function parseCsvValues<TValue extends string>(
   rawValue: string,
@@ -497,6 +500,16 @@ export async function listMerchants(query: ListMerchantsQuery) {
     )
     if (priorities.length > 0) {
       conditions.push(inArray(merchants.priority, priorities))
+    }
+  }
+
+  if (query.status) {
+    const statuses = parseCsvValues<MerchantStatusValue>(
+      query.status,
+      merchantStatusValueSet,
+    )
+    if (statuses.length > 0) {
+      conditions.push(inArray(merchants.status, statuses))
     }
   }
 

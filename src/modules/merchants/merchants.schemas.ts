@@ -581,6 +581,7 @@ export const listMerchantsQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
   search: z.string().trim().max(200).optional(),
+  status: z.string().optional(),
   priority: z.string().optional(),
   currency: z.string().optional(),
   businessScope: z.string().optional(),
