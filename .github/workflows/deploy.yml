@@ -32,6 +32,7 @@ jobs:
 
             APP_DIR="/var/www/onboarding-portal-assanpay-BE"
             BUN="/home/ubuntu/.bun/bin/bun"
+            export PATH="$(dirname "$BUN"):$PATH"
 
             cd "$APP_DIR"
 
