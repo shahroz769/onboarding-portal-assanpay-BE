@@ -1027,6 +1027,56 @@ export const caseLinks = pgTable(
   }),
 )
 
+export const caseFlowCloseJobs = pgTable(
+  'case_flow_close_jobs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sourceCaseId: uuid('source_case_id')
+      .notNull()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    sourceQueueId: uuid('source_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'restrict' }),
+    targetQueueId: uuid('target_queue_id')
+      .notNull()
+      .references(() => queues.id, { onDelete: 'restrict' }),
+    attempts: integer('attempts').default(0).notNull(),
+    availableAt: timestamp('available_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastError: text('last_error'),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    failedAt: timestamp('failed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    caseFlowCloseJobsSourceTargetUnique: uniqueIndex(
+      'case_flow_close_jobs_source_target_unique',
+    ).on(table.sourceCaseId, table.targetQueueId),
+    caseFlowCloseJobsPendingIdx: index('case_flow_close_jobs_pending_idx')
+      .on(table.availableAt, table.createdAt)
+      .where(sql`${table.completedAt} IS NULL AND ${table.failedAt} IS NULL`),
+    caseFlowCloseJobsMerchantIdx: index('case_flow_close_jobs_merchant_idx').on(
+      table.merchantId,
+    ),
+    caseFlowCloseJobsSourceQueueIdx: index(
+      'case_flow_close_jobs_source_queue_idx',
+    ).on(table.sourceQueueId),
+    caseFlowCloseJobsTargetQueueIdx: index(
+      'case_flow_close_jobs_target_queue_idx',
+    ).on(table.targetQueueId),
+    caseFlowCloseJobsAttemptsNonnegative: check(
+      'case_flow_close_jobs_attempts_nonnegative',
+      sql`${table.attempts} >= 0`,
+    ),
+  }),
+)
+
 export const notificationTypeEnum = pgEnum('notification_type', [
   'case_assigned',
   'case_unassigned',

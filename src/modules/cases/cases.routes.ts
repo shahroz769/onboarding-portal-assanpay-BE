@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { z } from 'zod'
 
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
@@ -104,6 +105,10 @@ import {
   uploadAgreementFinalAgreement,
 } from './agreement-case.service'
 import { uploadPhysicalAgreementCopy } from './physical-agreement-case.service'
+import {
+  listFailedCaseFlowCloseJobs,
+  retryFailedCaseFlowCloseJob,
+} from './case-flow.service'
 
 export const caseRoutes = new Hono<AppEnv>()
 
@@ -126,6 +131,8 @@ function parseEmailRecipientType(
   }
   return parsed.data.recipientEmailType
 }
+
+const uuidSchema = z.string().uuid()
 
 // All routes require authentication
 caseRoutes.use('*', requireAuth)
@@ -179,6 +186,23 @@ caseRoutes.post(
     const input = c.req.valid('json' as never) as BulkAssignCaseInput
     const result = await bulkAssignCases(input.ids, input.ownerId, auth.userId)
     return c.json(result)
+  },
+)
+
+// Operational recovery for durable follow-up case creation (admin only).
+caseRoutes.get(
+  '/flow-jobs/failed',
+  requireRoles('super_admin', 'admin'),
+  async (c) => c.json(await listFailedCaseFlowCloseJobs()),
+)
+
+caseRoutes.post(
+  '/flow-jobs/:jobId/retry',
+  requireRoles('super_admin', 'admin'),
+  async (c) => {
+    const jobId = uuidSchema.safeParse(c.req.param('jobId'))
+    if (!jobId.success) throw new AppError(400, 'Invalid case-flow job ID.')
+    return c.json(await retryFailedCaseFlowCloseJob(jobId.data))
   },
 )
 

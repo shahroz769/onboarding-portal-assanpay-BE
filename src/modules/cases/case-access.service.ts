@@ -15,36 +15,32 @@ export async function getAgentQueueAccess(
   userId: string,
   database: DbExecutor = getDb(),
 ) {
-  const user = await database.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { roleType: true, queueViewScope: true },
-  })
-
-  if (!user || user.roleType !== 'agent') return null
-
   const rows = await database
     .select({
+      roleType: users.roleType,
+      viewScope: users.queueViewScope,
       queueId: userQueueAccess.queueId,
       accessType: userQueueAccess.accessType,
     })
-    .from(userQueueAccess)
-    .where(eq(userQueueAccess.userId, userId))
+    .from(users)
+    .leftJoin(userQueueAccess, eq(userQueueAccess.userId, users.id))
+    .where(eq(users.id, userId))
+
+  const user = rows[0]
+  if (!user || user.roleType !== 'agent') return null
 
   return {
-    viewScope: user.queueViewScope,
+    viewScope: user.viewScope,
     viewQueueIds: rows
       .filter((row) => row.accessType === 'view')
-      .map((row) => row.queueId),
+      .flatMap((row) => (row.queueId ? [row.queueId] : [])),
     workQueueIds: rows
       .filter((row) => row.accessType === 'work')
-      .map((row) => row.queueId),
+      .flatMap((row) => (row.queueId ? [row.queueId] : [])),
   }
 }
 
-export async function assertCanViewCase(
-  caseId: string,
-  actor?: SessionUser,
-) {
+export async function assertCanViewCase(caseId: string, actor?: SessionUser) {
   if (!actor || actor.roleType !== 'agent') return
 
   const access = await getAgentQueueAccess(actor.userId)
@@ -76,6 +72,19 @@ export async function assertCanWorkCase(
 
   if (!caseRow) throw new AppError(404, 'Case not found.')
   if (!access.workQueueIds.includes(caseRow.queueId)) {
+    throw new AppError(403, 'You do not have working access to this queue.')
+  }
+}
+
+export async function assertCanWorkQueue(
+  queueId: string,
+  userId: string,
+  database: DbExecutor = getDb(),
+) {
+  const access = await getAgentQueueAccess(userId, database)
+  if (!access) return
+
+  if (!access.workQueueIds.includes(queueId)) {
     throw new AppError(403, 'You do not have working access to this queue.')
   }
 }
@@ -125,6 +134,9 @@ export async function assertCaseOwner(
 
   if (!caseRow) throw new AppError(404, 'Case not found.')
   if (caseRow.ownerId !== userId) {
-    throw new AppError(403, 'Only the current case owner can work on this case.')
+    throw new AppError(
+      403,
+      'Only the current case owner can work on this case.',
+    )
   }
 }

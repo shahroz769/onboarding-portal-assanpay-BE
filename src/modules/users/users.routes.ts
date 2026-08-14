@@ -6,12 +6,14 @@ import { requireRoles } from '../../middleware/rbac'
 import type { AppEnv } from '../../types/auth'
 import { createUserSchema } from '../auth/auth.schemas'
 import {
+  bulkResetPasswordSchema,
   bulkUserStatusSchema,
   listUsersQuerySchema,
   updateUserSchema,
   userIdParamSchema,
 } from './users.schemas'
 import {
+  bulkSendResetPasswords,
   bulkUpdateUserStatus,
   createUser,
   deactivateUser,
@@ -52,9 +54,20 @@ userRoutes.post(
 )
 
 userRoutes.post(
+  '/bulk-reset-password',
+  zodValidator('json', bulkResetPasswordSchema),
+  requireRoles('super_admin'),
+  async (c) => {
+    const input = c.req.valid('json')
+    const result = await bulkSendResetPasswords(c.var.auth, input.ids)
+    return c.json(result)
+  },
+)
+
+userRoutes.post(
   '/:id/reset-password',
   zodValidator('param', userIdParamSchema),
-  requireRoles('super_admin', 'admin'),
+  requireRoles('super_admin'),
   async (c) => {
     const { id } = c.req.valid('param')
     const result = await sendResetPassword(c.var.auth, id)

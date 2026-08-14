@@ -5,35 +5,95 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 30s
+          command_timeout: 15m
           script_stop: true
           script: |
-            set -e
+            set -Eeuo pipefail
 
             APP_DIR="/var/www/onboarding-portal-assanpay-BE"
             BUN="/home/ubuntu/.bun/bin/bun"
 
             cd "$APP_DIR"
 
+            PREVIOUS_COMMIT="$(git rev-parse HEAD)"
+            CHECKOUT_CHANGED=0
+            DEPLOY_COMPLETE=0
+
+            restore_previous_release() {
+              exit_code=$?
+
+              if [ "$CHECKOUT_CHANGED" -eq 1 ] && [ "$DEPLOY_COMPLETE" -eq 0 ]; then
+                echo "Deployment failed; restoring application code to $PREVIOUS_COMMIT."
+                set +e
+                git reset --hard "$PREVIOUS_COMMIT"
+                "$BUN" install --frozen-lockfile
+                pm2 restart onboarding-backend --update-env
+              fi
+
+              exit "$exit_code"
+            }
+
+            trap restore_previous_release EXIT
+
             echo "Current commit before deployment:"
             git log --oneline -1
 
             git fetch origin main
             git reset --hard origin/main
+            CHECKOUT_CHANGED=1
 
             "$BUN" install --frozen-lockfile
 
+            # Keep the existing process serving traffic until the checkout is
+            # validated and all forward-only migrations have committed.
+            "$BUN" run typecheck
+            "$BUN" run db:migrate
+
             pm2 restart onboarding-backend --update-env
+
+            HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:3000/health/db}"
+            for attempt in $(seq 1 20); do
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                --connect-timeout 2 \
+                --max-time 5 \
+                "$HEALTH_URL"; then
+                echo
+                break
+              fi
+
+              if [ "$attempt" -eq 20 ]; then
+                echo "Backend health check failed after restart."
+                pm2 logs onboarding-backend --lines 100 --nostream
+                exit 1
+              fi
+
+              sleep 2
+            done
+
+            DEPLOY_COMPLETE=1
             pm2 save
 
             echo "Deployed commit:"

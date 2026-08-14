@@ -48,6 +48,36 @@ const envSchema = z.object({
     .positive()
     .max(3600)
     .default(20),
+  CASE_FLOW_WORKER_POLL_MS: z.coerce
+    .number()
+    .int()
+    .min(250)
+    .max(60_000)
+    .default(1_000),
+  CASE_FLOW_WORKER_BATCH_SIZE: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .default(5),
+  CASE_FLOW_WORKER_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(20)
+    .default(8),
+  CASE_FLOW_WORKER_RETRY_BASE_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60 * 60 * 1_000)
+    .default(30_000),
+  CASE_FLOW_WORKER_RETRY_MAX_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(24 * 60 * 60 * 1_000)
+    .default(15 * 60_000),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),

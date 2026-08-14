@@ -78,7 +78,7 @@ import { paymentMethodSettingsSchema } from '../configuration/configuration.sche
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
 import {
   assertCreationRequirementsSatisfied,
-  triggerCasesAfterSuccessfulClose,
+  enqueueCasesAfterSuccessfulClose,
 } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
@@ -313,11 +313,13 @@ export async function advanceStage(caseId: string, userId: string) {
 
   const currentStageId = caseData.currentStageId
 
-  const currentStage = await loadQueueStageForCase(
-    db,
-    currentStageId,
-    caseData.queueId,
-  )
+  const [currentStage, queue] = await Promise.all([
+    loadQueueStageForCase(db, currentStageId, caseData.queueId),
+    db.query.queues.findFirst({
+      where: eq(queues.id, caseData.queueId),
+      columns: { qcEnabled: true, slug: true, workflowType: true, slaHours: true },
+    }),
+  ])
 
   if (!currentStage || currentStage.category !== 'in_progress') {
     throw new AppError(
@@ -325,11 +327,6 @@ export async function advanceStage(caseId: string, userId: string) {
       'Case can only be advanced from an in-progress stage.',
     )
   }
-
-  const queue = await db.query.queues.findFirst({
-    where: eq(queues.id, caseData.queueId),
-    columns: { qcEnabled: true, slug: true, workflowType: true, slaHours: true },
-  })
 
   if (!queue) {
     throw new AppError(500, 'Case queue is not configured.')
@@ -710,7 +707,7 @@ export async function advanceStage(caseId: string, userId: string) {
         return
       }
 
-      await triggerCasesAfterSuccessfulClose(tx, {
+      await enqueueCasesAfterSuccessfulClose(tx, {
         id: caseId,
         merchantId: locked.merchantId,
         queueId: locked.queueId,
@@ -792,30 +789,24 @@ export async function closeUnsuccessful(
     }
   }
 
-  const useClosedStatus =
-    (queue != null && (isQueueWorkflowType(queue, 'document_review') || isQueueWorkflowType(queue, 'agreement')))
-
-  const terminalStage = useClosedStatus
-    ? await db.query.queueStages.findFirst({
-        where: and(
-          eq(queueStages.queueId, caseData.queueId),
-          eq(queueStages.category, 'closed'),
-        ),
-      })
-    : await db.query.queueStages.findFirst({
-        where: and(
-          eq(queueStages.queueId, caseData.queueId),
-          eq(queueStages.category, 'error'),
-        ),
-      })
+  const terminalStages = await db.query.queueStages.findMany({
+    where: and(
+      eq(queueStages.queueId, caseData.queueId),
+      inArray(queueStages.category, ['closed', 'error']),
+    ),
+  })
+  const closedStage = terminalStages.find((stage) => stage.category === 'closed')
+  const errorStage = terminalStages.find((stage) => stage.category === 'error')
+  const prefersClosedStage =
+    queue != null &&
+    (isQueueWorkflowType(queue, 'document_review') ||
+      isQueueWorkflowType(queue, 'agreement'))
+  const terminalStage = prefersClosedStage
+    ? (closedStage ?? errorStage)
+    : (errorStage ?? closedStage)
 
   if (!terminalStage) {
-    throw new AppError(
-      500,
-      useClosedStatus
-        ? 'No closed stage configured for this queue.'
-        : 'No error stage configured for this queue.',
-    )
+    throw new AppError(500, 'No terminal stage configured for this queue.')
   }
 
   const now = new Date()

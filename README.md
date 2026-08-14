@@ -17,6 +17,9 @@ Copy `.env.example` to `.env` and replace placeholders:
 - `DATABASE_POOL_MAX`: maximum Postgres.js connections per backend process (default `10`).
 - `DATABASE_CONNECT_TIMEOUT_SECONDS`: connection establishment timeout (default `10`).
 - `DATABASE_IDLE_TIMEOUT_SECONDS`: close unused client connections after this interval (default `20`).
+- `CASE_FLOW_WORKER_*`: polling, batch, and bounded exponential retry controls
+  for durable follow-up case creation. The defaults poll every second, process
+  five jobs per cycle, and stop retrying after eight failed attempts.
 - JWT secrets: distinct random values of at least 32 characters.
 - CORS, cookie, and `PUBLIC_APP_URL`: configure for the separately hosted frontend/backend.
 - `TRUST_PROXY_HEADERS`: enable only behind a proxy that overwrites forwarding headers.
@@ -40,7 +43,11 @@ bun run db:audit
 bun run db:generate
 ```
 
-The API defaults to `http://localhost:3000`; database readiness is at `/health/db`.
+The API defaults to `http://localhost:3000`; database and case-flow worker
+readiness are at `/health/db`. The worker health payload reports pending jobs,
+permanently failed jobs, the oldest pending timestamp, and the last cycle.
+Admins can inspect failed jobs at `GET /api/cases/flow-jobs/failed` and requeue
+one after correcting its cause with `POST /api/cases/flow-jobs/:jobId/retry`.
 Run `db:audit` only against a migrated development or staging database. It is
 read-only and checks duplicate indexes, foreign-key index coverage, constraint
 validation, and the query-critical indexes introduced by the optimization migration.
@@ -62,6 +69,10 @@ validation, and the query-critical indexes introduced by the optimization migrat
 
 Migrations are forward-only. Add a new migration under `drizzle/`, update the journal, and run `bun run db:migrate` with the direct URL. Never rewrite a migration that may have reached another environment.
 
-Pushes to `main` run frozen installation, typecheck, and tests. Deployment checks out the triggering SHA on EC2, migrates, restarts PM2, and polls `/health/db`. If health fails after a schema change, deploy a forward repair rather than blindly reversing production migrations.
+Pushes to `main` perform a frozen installation and typecheck, migrate PlanetScale
+through `DIRECT_DATABASE_URL`, restart PM2, and poll `/health/db`. Deployments are
+serialized, and a failed deployment restores the previous application checkout.
+Migrations are not reversed, so every production migration must remain compatible
+with the previous application version until the new version passes its health check.
 
 The frontend is maintained separately at `../onboarding-portal-assanpay-FE`.

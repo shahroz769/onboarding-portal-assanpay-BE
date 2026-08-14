@@ -9,6 +9,7 @@ import {
   inArray,
   isNull,
   lt,
+  notInArray,
   or,
   sql,
 } from 'drizzle-orm'
@@ -76,10 +77,7 @@ import {
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
-import {
-  assertCreationRequirementsSatisfied,
-  triggerCasesAfterSuccessfulClose,
-} from './case-flow.service'
+import { assertCreationRequirementsSatisfied } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -130,7 +128,6 @@ import {
 import { isCaseSlaBreached } from './case-sla'
 import {
   assertCanViewCase,
-  assertCanWorkCase,
   assertOwnerCanWorkCases,
   getAgentQueueAccess,
 } from './case-access.service'
@@ -617,17 +614,38 @@ export async function updateCasePriority(
 
   const existing = await db.query.cases.findFirst({
     where: eq(cases.id, caseId),
-    columns: { id: true },
+    columns: {
+      id: true,
+      status: true,
+      closeOutcome: true,
+      closedAt: true,
+    },
   })
 
   if (!existing) {
     throw new AppError(404, 'Case not found.')
   }
 
+  if (
+    existing.status === 'closed' ||
+    existing.status === 'error' ||
+    existing.closeOutcome != null ||
+    existing.closedAt != null
+  ) {
+    throw new AppError(409, 'Priority cannot be changed for a closed case.')
+  }
+
   const [updated] = await db
     .update(cases)
     .set({ priority, updatedAt: new Date() })
-    .where(eq(cases.id, caseId))
+    .where(
+      and(
+        eq(cases.id, caseId),
+        notInArray(cases.status, ['closed', 'error']),
+        isNull(cases.closeOutcome),
+        isNull(cases.closedAt),
+      ),
+    )
     .returning({
       id: cases.id,
       priority: cases.priority,
@@ -635,7 +653,7 @@ export async function updateCasePriority(
     })
 
   if (!updated) {
-    throw new AppError(500, 'Failed to update case priority.')
+    throw new AppError(409, 'Priority cannot be changed for a closed case.')
   }
 
   return updated
@@ -652,32 +670,39 @@ export async function cascadeMerchantPriority(
   await db
     .update(cases)
     .set({ priority, updatedAt: new Date() })
-    .where(eq(cases.merchantId, merchantId))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        notInArray(cases.status, ['closed', 'error']),
+        isNull(cases.closeOutcome),
+        isNull(cases.closedAt),
+      ),
+    )
 }
 
 // ─── Get Case Detail ────────────────────────────────────────────────────────
 
 export async function takeOwnership(caseId: string, userId: string) {
   const db = getDb()
-  await assertCanWorkCase(caseId, userId)
-  const actor = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { name: true },
-  })
-
-  const existing = await db
-    .select({
-      id: cases.id,
-      ownerId: cases.ownerId,
-      currentStageId: cases.currentStageId,
-      queueId: cases.queueId,
-      status: cases.status,
-      closeOutcome: cases.closeOutcome,
-      closedAt: cases.closedAt,
-    })
-    .from(cases)
-    .where(eq(cases.id, caseId))
-    .limit(1)
+  const [actor, existing] = await Promise.all([
+    db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { name: true },
+    }),
+    db
+      .select({
+        id: cases.id,
+        ownerId: cases.ownerId,
+        currentStageId: cases.currentStageId,
+        queueId: cases.queueId,
+        status: cases.status,
+        closeOutcome: cases.closeOutcome,
+        closedAt: cases.closedAt,
+      })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .limit(1),
+  ])
 
   if (!existing[0]) {
     throw new AppError(404, 'Case not found.')

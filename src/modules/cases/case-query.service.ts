@@ -583,9 +583,26 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
 
   const caseData = caseRow[0]
 
-  // Fetch all related data in parallel
+  const queue = await db.query.queues.findFirst({
+    where: eq(queues.id, caseData.queueId),
+  })
+
+  if (!queue) {
+    throw new AppError(500, 'Case data integrity error.')
+  }
+
+  const workflowType = queue.workflowType
+  const needsMerchantDocuments =
+    workflowType === 'document_review' ||
+    workflowType === 'card' ||
+    workflowType === 'sub_merchant_form'
+  const needsMidCredentials =
+    workflowType === 'mid' ||
+    workflowType === 'testing' ||
+    workflowType === 'wordpress'
+
+  // Fetch core data plus only the projection required by this workflow.
   const [
-    queue,
     stagesResult,
     merchantRow,
     documents,
@@ -604,9 +621,6 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     paymentMethods,
     payoutMethods,
   ] = await Promise.all([
-    db.query.queues.findFirst({
-      where: eq(queues.id, caseData.queueId),
-    }),
     db
       .select()
       .from(queueStages)
@@ -615,83 +629,110 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     db.query.merchants.findFirst({
       where: eq(merchants.id, caseData.merchantId),
     }),
-    db
-      .select()
-      .from(merchantDocuments)
-      .where(eq(merchantDocuments.merchantId, caseData.merchantId)),
-    db
-      .select({
-        id: caseFieldReviews.id,
-        fieldName: caseFieldReviews.fieldName,
-        status: caseFieldReviews.status,
-        remarks: caseFieldReviews.remarks,
-        reviewedBy: caseFieldReviews.reviewedBy,
-        reviewedByName: users.name,
-        updatedAt: caseFieldReviews.updatedAt,
-        resubmittedAt: caseFieldReviews.resubmittedAt,
-      })
-      .from(caseFieldReviews)
-      .leftJoin(users, eq(caseFieldReviews.reviewedBy, users.id))
-      .where(eq(caseFieldReviews.caseId, caseId)),
-    db
-      .select({
-        createdAt: caseHistory.createdAt,
-      })
-      .from(caseHistory)
-      .where(
-        and(
-          eq(caseHistory.caseId, caseId),
-          inArray(
-            caseHistory.action,
-            DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
-          ),
-        ),
-      )
-      .orderBy(desc(caseHistory.createdAt))
-      .limit(1)
-      .then((rows: Array<{ createdAt: Date }>) => rows[0] ?? null),
-    getSubMerchantFormDetails(caseId),
-    db
-      .select({
-        businessType: agreementCaseDetails.businessType,
-        draftKey: agreementCaseDetails.draftKey,
-        draftLabel: agreementCaseDetails.draftLabel,
-        draftUrl: agreementCaseDetails.draftUrl,
-        emailStatus: agreementCaseDetails.emailStatus,
-        emailLogId: agreementCaseDetails.emailLogId,
-        emailSentAt: agreementCaseDetails.emailSentAt,
-        emailRecipient: agreementCaseDetails.emailRecipient,
-        lastRejectionRemarks: agreementCaseDetails.lastRejectionRemarks,
-        finalAgreementId: caseFiles.id,
-        finalAgreementOriginalName: caseFiles.originalName,
-        finalAgreementMimeType: caseFiles.mimeType,
-        finalAgreementSizeBytes: caseFiles.sizeBytes,
-        finalAgreementGoogleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-        finalAgreementGoogleDriveDownloadLink:
-          caseFiles.googleDriveDownloadLink,
-        finalAgreementCreatedAt: caseFiles.createdAt,
-      })
-      .from(agreementCaseDetails)
-      .leftJoin(
-        caseFiles,
-        eq(agreementCaseDetails.finalAgreementFileId, caseFiles.id),
-      )
-      .where(eq(agreementCaseDetails.caseId, caseId))
-      .limit(1)
-      .then((rows) => rows[0] ?? null),
-    getTestingLimitsAppliedEntryForMerchant(caseData.merchantId),
-    getLiveLimitsAppliedEntry(caseId),
-    getInternalPortalMidLimitsAppliedEntryForMerchant(caseData.merchantId),
-    getWordpressWebsiteDetails(caseId),
-    getLatestWordpressWebsiteDetailsForMerchant(caseData.merchantId),
-    getDocumentReviewDetails(caseId),
-    getLatestDocumentReviewDetailsForMerchant(caseData.merchantId),
-    getMidCreationCredentials(caseData.merchantId),
-    getPaymentMethodSettings(),
-    getPayoutMethodSettings(),
+    needsMerchantDocuments
+      ? db
+          .select()
+          .from(merchantDocuments)
+          .where(eq(merchantDocuments.merchantId, caseData.merchantId))
+      : Promise.resolve([]),
+    workflowType === 'document_review'
+      ? db
+          .select({
+            id: caseFieldReviews.id,
+            fieldName: caseFieldReviews.fieldName,
+            status: caseFieldReviews.status,
+            remarks: caseFieldReviews.remarks,
+            reviewedBy: caseFieldReviews.reviewedBy,
+            reviewedByName: users.name,
+            updatedAt: caseFieldReviews.updatedAt,
+            resubmittedAt: caseFieldReviews.resubmittedAt,
+          })
+          .from(caseFieldReviews)
+          .leftJoin(users, eq(caseFieldReviews.reviewedBy, users.id))
+          .where(eq(caseFieldReviews.caseId, caseId))
+      : Promise.resolve([]),
+    workflowType === 'document_review'
+      ? db
+          .select({ createdAt: caseHistory.createdAt })
+          .from(caseHistory)
+          .where(
+            and(
+              eq(caseHistory.caseId, caseId),
+              inArray(
+                caseHistory.action,
+                DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
+              ),
+            ),
+          )
+          .orderBy(desc(caseHistory.createdAt))
+          .limit(1)
+          .then((rows: Array<{ createdAt: Date }>) => rows[0] ?? null)
+      : Promise.resolve(null),
+    Promise.resolve(null),
+    workflowType === 'agreement'
+      ? db
+          .select({
+            businessType: agreementCaseDetails.businessType,
+            draftKey: agreementCaseDetails.draftKey,
+            draftLabel: agreementCaseDetails.draftLabel,
+            draftUrl: agreementCaseDetails.draftUrl,
+            emailStatus: agreementCaseDetails.emailStatus,
+            emailLogId: agreementCaseDetails.emailLogId,
+            emailSentAt: agreementCaseDetails.emailSentAt,
+            emailRecipient: agreementCaseDetails.emailRecipient,
+            lastRejectionRemarks: agreementCaseDetails.lastRejectionRemarks,
+            finalAgreementId: caseFiles.id,
+            finalAgreementOriginalName: caseFiles.originalName,
+            finalAgreementMimeType: caseFiles.mimeType,
+            finalAgreementSizeBytes: caseFiles.sizeBytes,
+            finalAgreementGoogleDriveWebViewLink:
+              caseFiles.googleDriveWebViewLink,
+            finalAgreementGoogleDriveDownloadLink:
+              caseFiles.googleDriveDownloadLink,
+            finalAgreementCreatedAt: caseFiles.createdAt,
+          })
+          .from(agreementCaseDetails)
+          .leftJoin(
+            caseFiles,
+            eq(agreementCaseDetails.finalAgreementFileId, caseFiles.id),
+          )
+          .where(eq(agreementCaseDetails.caseId, caseId))
+          .limit(1)
+          .then((rows) => rows[0] ?? null)
+      : Promise.resolve(null),
+    workflowType === 'testing'
+      ? getTestingLimitsAppliedEntryForMerchant(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'live'
+      ? getLiveLimitsAppliedEntry(caseId)
+      : Promise.resolve(null),
+    workflowType === 'mid'
+      ? getInternalPortalMidLimitsAppliedEntryForMerchant(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'wordpress'
+      ? getWordpressWebsiteDetails(caseId)
+      : Promise.resolve(null),
+    workflowType === 'sub_merchant_form'
+      ? getLatestWordpressWebsiteDetailsForMerchant(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'document_review'
+      ? getDocumentReviewDetails(caseId)
+      : Promise.resolve(null),
+    workflowType === 'wordpress'
+      ? getLatestDocumentReviewDetailsForMerchant(caseData.merchantId)
+      : Promise.resolve(null),
+    needsMidCredentials
+      ? getMidCreationCredentials(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'mid'
+      ? getPaymentMethodSettings()
+      : Promise.resolve([]),
+    workflowType === 'mid'
+      ? getPayoutMethodSettings()
+      : Promise.resolve([]),
   ])
 
-  if (!queue || !merchantRow) {
+  if (!merchantRow) {
     throw new AppError(500, 'Case data integrity error.')
   }
 

@@ -24,6 +24,7 @@ const expectedIndexes = [
   'cases_merchant_queue_idx',
   'cases_open_merchant_idx',
   'cases_successful_flow_idx',
+  'case_flow_close_jobs_pending_idx',
   'case_comments_case_created_idx',
   'case_history_case_action_created_idx',
   'case_history_case_created_idx',

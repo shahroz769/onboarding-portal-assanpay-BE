@@ -76,4 +76,8 @@ export const bulkUserStatusSchema = z.object({
   status: z.enum(['active', 'inactive']),
 })
 
+export const bulkResetPasswordSchema = z.object({
+  ids: z.array(z.uuid()).min(1).max(100),
+})
+
 export type ListUsersQuery = z.infer<typeof listUsersQuerySchema>

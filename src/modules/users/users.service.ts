@@ -36,6 +36,8 @@ type UserMutationInput = QueueAccessInput & {
 }
 
 function formatExpiryDate(date: Date) {
+  if (date.getUTCFullYear() >= 9999) return 'no expiry'
+
   return new Intl.DateTimeFormat('en', {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -525,16 +527,16 @@ export async function bulkUpdateUserStatus(
 }
 
 export async function sendResetPassword(actor: SessionUser, userId: string) {
+  if (actor.roleType !== 'super_admin') {
+    throw new AppError(403, 'Only Super Admins can send reset emails.')
+  }
+
   const user = await getDb().query.users.findFirst({
     where: and(eq(users.id, userId), isNull(users.deletedAt)),
   })
 
   if (!user) {
     throw new AppError(404, 'User not found.')
-  }
-
-  if (actor.roleType === 'admin' && user.roleType !== 'agent') {
-    throw new AppError(403, 'Admins can only reset agent passwords.')
   }
 
   await sendPasswordEmail({
@@ -546,6 +548,67 @@ export async function sendResetPassword(actor: SessionUser, userId: string) {
   })
 
   return { success: true }
+}
+
+export async function bulkSendResetPasswords(
+  actor: SessionUser,
+  ids: string[],
+) {
+  if (actor.roleType !== 'super_admin') {
+    throw new AppError(403, 'Only Super Admins can send bulk reset emails.')
+  }
+
+  const uniqueIds = uniqueValues(ids)
+  if (uniqueIds.length === 0 || uniqueIds.length > 100) {
+    throw new AppError(400, 'Select between 1 and 100 users.')
+  }
+
+  const targetUsers = await getDb().query.users.findMany({
+    where: and(inArray(users.id, uniqueIds), isNull(users.deletedAt)),
+    columns: { id: true, email: true, name: true },
+  })
+  const foundIds = new Set(targetUsers.map((user) => user.id))
+  if (uniqueIds.some((id) => !foundIds.has(id))) {
+    throw new AppError(404, 'One or more selected users no longer exist.')
+  }
+
+  const failedIds: string[] = []
+  let sent = 0
+  const concurrency = 5
+
+  for (let index = 0; index < targetUsers.length; index += concurrency) {
+    const batch = targetUsers.slice(index, index + concurrency)
+    const results = await Promise.allSettled(
+      batch.map((user) =>
+        sendPasswordEmail({
+          userId: user.id,
+          email: user.email,
+          name: user.name,
+          purpose: 'reset',
+          actorId: actor.userId,
+        }),
+      ),
+    )
+
+    results.forEach((result, resultIndex) => {
+      if (result.status === 'fulfilled') {
+        sent += 1
+      } else {
+        failedIds.push(batch[resultIndex]!.id)
+      }
+    })
+  }
+
+  if (sent === 0) {
+    throw new AppError(502, 'Failed to send password reset emails.')
+  }
+
+  return {
+    requested: targetUsers.length,
+    sent,
+    failed: failedIds.length,
+    failedIds,
+  }
 }
 
 export async function deactivateUser(actor: SessionUser, userId: string) {

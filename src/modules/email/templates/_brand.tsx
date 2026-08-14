@@ -681,7 +681,7 @@ export function ExpiryNote({ expiresAt }: { expiresAt: string }) {
           and can be used only once.
         </>
       ) : (
-        <>This secure link can be used only once.</>
+        <>No expiry.</>
       )}
     </Text>
   )

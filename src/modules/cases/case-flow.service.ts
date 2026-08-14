@@ -1,8 +1,20 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  sql,
+} from 'drizzle-orm'
 
-import type { getDb } from '../../db/client'
+import { getDb } from '../../db/client'
+import { env } from '../../config/env'
 import {
   caseFlowCloseBlockers,
+  caseFlowCloseJobs,
   caseFlowCloseTriggers,
   caseFlowCreationRequirements,
   caseFlowStartRules,
@@ -299,9 +311,7 @@ async function createConfiguredCases(
   const createdCases: CreatedFlowCase[] = []
 
   for (const subMerchant of subMerchants) {
-    createdCases.push(
-      await createConfiguredCase(tx, { ...input, subMerchant }),
-    )
+    createdCases.push(await createConfiguredCase(tx, { ...input, subMerchant }))
   }
 
   return createdCases
@@ -379,8 +389,7 @@ export async function assertCloseBlockersSatisfied(
   const satisfiedQueueIds = new Set(
     candidateRows
       .filter(
-        (row) =>
-          row.status === 'closed' && row.closeOutcome === 'successful',
+        (row) => row.status === 'closed' && row.closeOutcome === 'successful',
       )
       .map((row) => row.queueId),
   )
@@ -443,8 +452,7 @@ export async function assertCreationRequirementsSatisfied(
   const satisfiedQueueIds = new Set(
     candidateRows
       .filter(
-        (row) =>
-          row.status === 'closed' && row.closeOutcome === 'successful',
+        (row) => row.status === 'closed' && row.closeOutcome === 'successful',
       )
       .map((row) => row.queueId),
   )
@@ -460,7 +468,7 @@ export async function assertCreationRequirementsSatisfied(
   }
 }
 
-export async function triggerCasesAfterSuccessfulClose(
+export async function enqueueCasesAfterSuccessfulClose(
   tx: DbTransaction,
   sourceCase: { id: string; merchantId: string; queueId: string },
 ) {
@@ -478,18 +486,190 @@ export async function triggerCasesAfterSuccessfulClose(
       asc(caseFlowCloseTriggers.createdAt),
     )
 
-  const createdCases: CreatedFlowCase[] = []
-  for (const rule of rules) {
-    createdCases.push(
-      ...(await createConfiguredCases(tx, {
+  if (rules.length === 0) return []
+
+  return tx
+    .insert(caseFlowCloseJobs)
+    .values(
+      rules.map((rule) => ({
+        sourceCaseId: sourceCase.id,
         merchantId: sourceCase.merchantId,
-        targetQueueId: rule.targetQueueId,
-        parentCaseId: sourceCase.id,
         sourceQueueId: sourceCase.queueId,
-        triggerType: 'case_close',
+        targetQueueId: rule.targetQueueId,
       })),
     )
+    .onConflictDoNothing()
+    .returning({ id: caseFlowCloseJobs.id })
+}
+
+// Compatibility export for case modules that still share the legacy import set.
+export const triggerCasesAfterSuccessfulClose = enqueueCasesAfterSuccessfulClose
+
+const CASE_FLOW_JOB_ERROR_MAX_LENGTH = 1_000
+
+function formatCaseFlowJobError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.slice(0, CASE_FLOW_JOB_ERROR_MAX_LENGTH)
+}
+
+export async function processCaseFlowCloseJobs(batchSize = 5) {
+  const db = getDb()
+  let completed = 0
+  let failed = 0
+
+  for (let index = 0; index < batchSize; index += 1) {
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .select({
+          id: caseFlowCloseJobs.id,
+          sourceCaseId: caseFlowCloseJobs.sourceCaseId,
+          merchantId: caseFlowCloseJobs.merchantId,
+          sourceQueueId: caseFlowCloseJobs.sourceQueueId,
+          targetQueueId: caseFlowCloseJobs.targetQueueId,
+          attempts: caseFlowCloseJobs.attempts,
+        })
+        .from(caseFlowCloseJobs)
+        .where(
+          and(
+            isNull(caseFlowCloseJobs.completedAt),
+            isNull(caseFlowCloseJobs.failedAt),
+            lte(caseFlowCloseJobs.availableAt, new Date()),
+          ),
+        )
+        .orderBy(
+          asc(caseFlowCloseJobs.availableAt),
+          asc(caseFlowCloseJobs.createdAt),
+        )
+        .limit(1)
+        .for('update', { skipLocked: true })
+
+      if (!job) return { handled: false, completed: false, failed: false }
+
+      try {
+        // The nested transaction is a savepoint. If downstream creation
+        // fails, its writes roll back while this outer transaction retains
+        // the job lock and safely records retry state.
+        await tx.transaction(async (jobTx) => {
+          await createConfiguredCases(jobTx, {
+            merchantId: job.merchantId,
+            targetQueueId: job.targetQueueId,
+            parentCaseId: job.sourceCaseId,
+            sourceQueueId: job.sourceQueueId,
+            triggerType: 'case_close',
+          })
+        })
+
+        await tx
+          .update(caseFlowCloseJobs)
+          .set({
+            completedAt: new Date(),
+            lastError: null,
+          })
+          .where(eq(caseFlowCloseJobs.id, job.id))
+
+        return { handled: true, completed: true, failed: false }
+      } catch (error) {
+        const nextAttempts = job.attempts + 1
+        const exhausted = nextAttempts >= env.CASE_FLOW_WORKER_MAX_ATTEMPTS
+        const retryDelay = Math.min(
+          env.CASE_FLOW_WORKER_RETRY_BASE_MS * 2 ** job.attempts,
+          env.CASE_FLOW_WORKER_RETRY_MAX_MS,
+        )
+
+        await tx
+          .update(caseFlowCloseJobs)
+          .set({
+            attempts: nextAttempts,
+            availableAt: exhausted
+              ? new Date()
+              : new Date(Date.now() + retryDelay),
+            failedAt: exhausted ? new Date() : null,
+            lastError: formatCaseFlowJobError(error),
+          })
+          .where(
+            and(
+              eq(caseFlowCloseJobs.id, job.id),
+              isNull(caseFlowCloseJobs.completedAt),
+              isNull(caseFlowCloseJobs.failedAt),
+            ),
+          )
+
+        console.error('[case-flow] Failed to process close job:', error)
+        return { handled: true, completed: false, failed: exhausted }
+      }
+    })
+
+    if (!result.handled) break
+    if (result.completed) completed += 1
+    if (result.failed) failed += 1
   }
 
-  return createdCases
+  return { completed, failed }
+}
+
+export async function getCaseFlowCloseJobHealth() {
+  const [row] = await getDb()
+    .select({
+      pending: sql<number>`count(*) filter (
+        where ${caseFlowCloseJobs.completedAt} is null
+          and ${caseFlowCloseJobs.failedAt} is null
+      )`,
+      failed: sql<number>`count(*) filter (
+        where ${caseFlowCloseJobs.failedAt} is not null
+      )`,
+      oldestPendingAt: sql<Date | null>`min(${caseFlowCloseJobs.createdAt}) filter (
+        where ${caseFlowCloseJobs.completedAt} is null
+          and ${caseFlowCloseJobs.failedAt} is null
+      )`,
+    })
+    .from(caseFlowCloseJobs)
+
+  return {
+    pending: Number(row?.pending ?? 0),
+    failed: Number(row?.failed ?? 0),
+    oldestPendingAt: row?.oldestPendingAt ?? null,
+  }
+}
+
+export async function listFailedCaseFlowCloseJobs() {
+  return getDb()
+    .select({
+      id: caseFlowCloseJobs.id,
+      sourceCaseId: caseFlowCloseJobs.sourceCaseId,
+      merchantId: caseFlowCloseJobs.merchantId,
+      sourceQueueId: caseFlowCloseJobs.sourceQueueId,
+      targetQueueId: caseFlowCloseJobs.targetQueueId,
+      attempts: caseFlowCloseJobs.attempts,
+      lastError: caseFlowCloseJobs.lastError,
+      failedAt: caseFlowCloseJobs.failedAt,
+    })
+    .from(caseFlowCloseJobs)
+    .where(isNotNull(caseFlowCloseJobs.failedAt))
+    .orderBy(desc(caseFlowCloseJobs.failedAt))
+    .limit(100)
+}
+
+export async function retryFailedCaseFlowCloseJob(jobId: string) {
+  const [retried] = await getDb()
+    .update(caseFlowCloseJobs)
+    .set({
+      attempts: 0,
+      availableAt: new Date(),
+      lastError: null,
+      failedAt: null,
+    })
+    .where(
+      and(
+        eq(caseFlowCloseJobs.id, jobId),
+        isNull(caseFlowCloseJobs.completedAt),
+        isNotNull(caseFlowCloseJobs.failedAt),
+      ),
+    )
+    .returning({ id: caseFlowCloseJobs.id })
+
+  if (!retried) {
+    throw new AppError(404, 'Failed case-flow job not found.')
+  }
+
+  return retried
 }

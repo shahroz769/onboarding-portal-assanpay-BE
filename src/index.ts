@@ -5,12 +5,16 @@ import { bodyLimit } from 'hono/body-limit'
 import { rateLimiter } from 'hono-rate-limiter'
 
 import { env } from './config/env'
-import { getDb } from './db/client'
+import { closeQueryClient, getDb } from './db/client'
 import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
 import { getClientIp } from './lib/client-ip'
 import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
+import {
+  getCaseFlowCloseJobHealth,
+  processCaseFlowCloseJobs,
+} from './modules/cases/case-flow.service'
 import { configurationRoutes } from './modules/configuration/configuration.routes'
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
@@ -24,6 +28,11 @@ import { userRoutes } from './modules/users/users.routes'
 import type { AppEnv } from './types/auth'
 
 const app = new Hono<AppEnv>()
+
+let caseFlowWorkerPromise: Promise<void> | null = null
+let caseFlowWorkerLastCycleAt: Date | null = null
+let caseFlowWorkerLastDurationMs: number | null = null
+let caseFlowWorkerLastError: string | null = null
 
 const publicRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -58,6 +67,32 @@ app.use(
 
 app.onError(errorHandler)
 
+app.use('/api/cases/*', async (c, next) => {
+  const startedAt = performance.now()
+  let outcome = 'success'
+
+  try {
+    await next()
+  } catch (error) {
+    outcome = 'error'
+    throw error
+  } finally {
+    const durationMs = Math.round((performance.now() - startedAt) * 100) / 100
+    if (c.req.method !== 'GET' || durationMs >= 250) {
+      console.info(
+        JSON.stringify({
+          event: 'case_request_completed',
+          method: c.req.method,
+          path: c.req.path,
+          status: c.res.status,
+          outcome,
+          durationMs,
+        }),
+      )
+    }
+  }
+})
+
 app.use('/api/public/*', publicRateLimiter)
 app.use('/api/public/merchant-form', publicMultipartLimit)
 app.use('/api/public/resubmission/*', publicMultipartLimit)
@@ -71,11 +106,21 @@ app.get('/', (c) => {
 })
 
 app.get('/health/db', async (c) => {
-  const result = await getDb().execute(sql`select 1 as ok`)
+  const [result, caseFlowJobs] = await Promise.all([
+    getDb().execute(sql`select 1 as ok`),
+    getCaseFlowCloseJobHealth(),
+  ])
 
   return c.json({
-    status: 'ok',
+    status: caseFlowJobs.failed > 0 ? 'degraded' : 'ok',
     db: result[0]?.ok === 1,
+    caseFlowWorker: {
+      running: caseFlowWorkerPromise !== null,
+      lastCycleAt: caseFlowWorkerLastCycleAt,
+      lastDurationMs: caseFlowWorkerLastDurationMs,
+      lastCycleSucceeded: caseFlowWorkerLastError === null,
+      ...caseFlowJobs,
+    },
   })
 })
 
@@ -123,8 +168,80 @@ async function purgeExpiredRefreshTokens() {
 }
 
 // Run cleanup immediately on startup, then every 6 hours
-purgeExpiredRefreshTokens()
-setInterval(purgeExpiredRefreshTokens, 6 * 60 * 60 * 1000)
+void purgeExpiredRefreshTokens()
+const refreshTokenCleanupInterval = setInterval(
+  () => void purgeExpiredRefreshTokens(),
+  6 * 60 * 60 * 1000,
+)
+
+function drainCaseFlowCloseJobs() {
+  if (caseFlowWorkerPromise) return caseFlowWorkerPromise
+
+  const startedAt = performance.now()
+  caseFlowWorkerPromise = (async () => {
+    try {
+      const result = await processCaseFlowCloseJobs(
+        env.CASE_FLOW_WORKER_BATCH_SIZE,
+      )
+      caseFlowWorkerLastError = null
+
+      if (result.completed > 0 || result.failed > 0) {
+        console.info(
+          JSON.stringify({
+            event: 'case_flow_worker_cycle',
+            ...result,
+          }),
+        )
+      }
+    } catch (error) {
+      caseFlowWorkerLastError =
+        error instanceof Error ? error.message : String(error)
+      console.error('[case-flow] Worker cycle failed:', error)
+    } finally {
+      caseFlowWorkerLastCycleAt = new Date()
+      caseFlowWorkerLastDurationMs =
+        Math.round((performance.now() - startedAt) * 100) / 100
+      caseFlowWorkerPromise = null
+    }
+  })()
+
+  return caseFlowWorkerPromise
+}
+
+void drainCaseFlowCloseJobs()
+const caseFlowWorkerInterval = setInterval(
+  () => void drainCaseFlowCloseJobs(),
+  env.CASE_FLOW_WORKER_POLL_MS,
+)
+
+let shuttingDown = false
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.info(`[shutdown] ${signal} received; draining background work.`)
+
+  clearInterval(refreshTokenCleanupInterval)
+  clearInterval(caseFlowWorkerInterval)
+
+  const activeWorker = caseFlowWorkerPromise
+  if (activeWorker) {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      activeWorker,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 10_000)
+      }),
+    ])
+    if (timeout) clearTimeout(timeout)
+  }
+
+  await closeQueryClient()
+  process.exit(0)
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'))
+process.once('SIGINT', () => void shutdown('SIGINT'))
 
 export default {
   port: env.APP_PORT,

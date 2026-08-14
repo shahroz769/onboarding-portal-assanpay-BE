@@ -372,6 +372,20 @@
       "when": 1784851200000,
       "tag": "0053_multi_sub_merchants",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1786665600000,
+      "tag": "0054_case_flow_close_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1786752000000,
+      "tag": "0055_repair_case_flow_close_jobs_failure_tracking",
+      "breakpoints": true
     }
   ]
 }

@@ -29,3 +29,12 @@ export function getDb() {
 
   return database
 }
+
+export async function closeQueryClient() {
+  if (!client) return
+
+  const currentClient = client
+  client = null
+  database = null
+  await currentClient.end({ timeout: 5 })
+}
