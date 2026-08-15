@@ -67,32 +67,6 @@ app.use(
 
 app.onError(errorHandler)
 
-app.use('/api/cases/*', async (c, next) => {
-  const startedAt = performance.now()
-  let outcome = 'success'
-
-  try {
-    await next()
-  } catch (error) {
-    outcome = 'error'
-    throw error
-  } finally {
-    const durationMs = Math.round((performance.now() - startedAt) * 100) / 100
-    if (c.req.method !== 'GET' || durationMs >= 250) {
-      console.info(
-        JSON.stringify({
-          event: 'case_request_completed',
-          method: c.req.method,
-          path: c.req.path,
-          status: c.res.status,
-          outcome,
-          durationMs,
-        }),
-      )
-    }
-  }
-})
-
 app.use('/api/public/*', publicRateLimiter)
 app.use('/api/public/merchant-form', publicMultipartLimit)
 app.use('/api/public/resubmission/*', publicMultipartLimit)
