@@ -154,7 +154,7 @@ type AppliedPortalMidLimitRow = {
 }
 
 type DashboardTrendRow = {
-  metric: 'submission' | 'opened' | 'closed'
+  metric: 'submission' | 'opened' | 'closed' | 'went_live'
   day: string
   count: number
 }
@@ -539,6 +539,16 @@ export async function getDashboard(query: DashboardQuery) {
       where ${cases.closedAt} >= ${from.toISOString()}
         and ${cases.closedAt} < ${addDays(startOfDay(to), 1).toISOString()}
       group by "day"
+      union all
+      select
+        'went_live'::text as "metric",
+        to_char(${merchants.liveAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
+        count(*)::int as "count"
+      from ${merchants}
+      where ${merchants.deletedAt} is null
+        and ${merchants.liveAt} >= ${from.toISOString()}
+        and ${merchants.liveAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      group by "day"
     `),
 
   ])
@@ -620,6 +630,11 @@ export async function getDashboard(query: DashboardQuery) {
       .filter((row) => row.metric === 'closed')
       .map((row) => [row.day, row.count]),
   )
+  const wentLiveMap = new Map(
+    trendRows
+      .filter((row) => row.metric === 'went_live')
+      .map((row) => [row.day, row.count]),
+  )
 
   const submissionsTrend = series.map((day) => ({
     date: day,
@@ -629,6 +644,10 @@ export async function getDashboard(query: DashboardQuery) {
     date: day,
     new: newMap.get(day) ?? 0,
     closed: closedMap.get(day) ?? 0,
+  }))
+  const merchantsLiveTrend = series.map((day) => ({
+    date: day,
+    count: wentLiveMap.get(day) ?? 0,
   }))
 
   return {
@@ -669,6 +688,7 @@ export async function getDashboard(query: DashboardQuery) {
     trends: {
       submissions: submissionsTrend,
       caseFlow: caseFlowTrend,
+      merchantsLive: merchantsLiveTrend,
     },
     portalMids,
   }
