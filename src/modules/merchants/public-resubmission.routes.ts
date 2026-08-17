@@ -13,6 +13,7 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
+import { assertFileSizeLimit } from '../../lib/storage/file-limits'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   cleanupFailedAttemptObjects,
@@ -32,7 +33,6 @@ import {
 } from '../cases/field-labels'
 import { getResubmissionContext } from '../cases/case-documents-review.service'
 import {
-  MAX_FILE_SIZE_BYTES,
   getAllowedDocumentTypes,
   getRequiredDocumentTypes,
   normalizeMimeType,
@@ -282,12 +282,10 @@ resubmissionRoutes.post('/:token', async (c) => {
           `${DOCUMENT_TYPE_LABELS[existing.documentType]} must be uploaded again.`,
         )
       }
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        throw new AppError(
-          413,
-          `${DOCUMENT_TYPE_LABELS[existing.documentType]} exceeds the 10 MB limit.`,
-        )
-      }
+      assertFileSizeLimit(
+        file,
+        DOCUMENT_TYPE_LABELS[existing.documentType],
+      )
       const mimeType = normalizeMimeType(file)
       await assertFileContentSignature({
         file,

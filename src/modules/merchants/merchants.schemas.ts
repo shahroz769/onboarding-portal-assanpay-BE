@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
 import { AppError } from '../../lib/errors'
+import {
+  MAX_FILE_SIZE_BYTES,
+  assertFileSizeLimit,
+} from '../../lib/storage/file-limits'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 
 export const merchantTypes = [
@@ -130,7 +134,7 @@ export type MerchantDocumentType = (typeof allDocumentTypes)[number]
 
 const documentTypeSet = new Set<string>(allDocumentTypes)
 
-export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+export { MAX_FILE_SIZE_BYTES }
 export const MAX_FILE_COUNT = allDocumentTypes.length
 
 export const allowedFileMimeTypes = [
@@ -391,9 +395,7 @@ export async function parseMerchantFormData(
       continue
     }
 
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      throw new AppError(413, `Document "${key}" exceeds the 10 MB limit.`)
-    }
+    assertFileSizeLimit(file, `Document "${key}"`)
 
     const mimeType = normalizeMimeType(file)
     await assertFileContentSignature({

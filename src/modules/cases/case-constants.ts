@@ -1,7 +1,8 @@
 import { caseStatusValues } from './cases.schemas'
+import { MAX_FILE_SIZE_BYTES } from '../../lib/storage/file-limits'
 
 export const caseStatusValueSet = new Set<string>(caseStatusValues)
-export const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = 1024 * 1024
+export const MAX_SUB_MERCHANT_FINAL_FORM_BYTES = MAX_FILE_SIZE_BYTES
 export const SUB_MERCHANT_FINAL_FORM_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -40,7 +41,7 @@ export const MID_CREATION_CREDENTIALS_SENT_ACTIONS = [
 ] as const
 export type ManualCommunicationChannel = 'email' | 'whatsapp'
 export const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
-export const MAX_PHYSICAL_AGREEMENT_BYTES = 10 * 1024 * 1024
+export const MAX_PHYSICAL_AGREEMENT_BYTES = MAX_FILE_SIZE_BYTES
 export const PHYSICAL_AGREEMENT_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -54,7 +55,7 @@ export const PHYSICAL_AGREEMENT_EXTENSIONS = new Set([
   '.png',
   '.webp',
 ])
-export const MAX_WORDPRESS_SCREENSHOT_BYTES = 10 * 1024 * 1024
+export const MAX_WORDPRESS_SCREENSHOT_BYTES = MAX_FILE_SIZE_BYTES
 export const WORDPRESS_SCREENSHOT_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',

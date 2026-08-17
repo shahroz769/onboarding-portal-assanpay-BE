@@ -14,6 +14,7 @@ import {
   subMerchantDraftTemplates,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { assertFileSizeLimit } from '../../lib/storage/file-limits'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchantType } from '../cases/agreement.config'
 import {
@@ -42,7 +43,6 @@ const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
 const MERCHANT_PORTAL_KEY = 'merchant-portal'
 const PAYMENT_METHODS_KEY = 'payment-methods'
 const PAYOUT_METHODS_KEY = 'payout-methods'
-const MAX_DRAFT_BYTES = 5 * 1024 * 1024
 const DRAFT_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -1098,9 +1098,7 @@ async function uploadConfigurationDraft(input: {
 }
 
 function validateDraftFile(file: File) {
-  if (file.size > MAX_DRAFT_BYTES) {
-    throw new AppError(400, 'Draft file must be 5 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Draft file')
 
   const mimeType = file.type || 'application/octet-stream'
   const extension = getFileExtension(file.name)

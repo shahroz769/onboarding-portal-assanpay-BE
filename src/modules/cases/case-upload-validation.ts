@@ -1,12 +1,10 @@
 import { AppError } from '../../lib/errors'
+import { assertFileSizeLimit } from '../../lib/storage/file-limits'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 import {
   AGREEMENT_FILE_EXTENSIONS,
   AGREEMENT_FILE_MIME_TYPES,
   EMAIL_PROOF_MIME_TYPES,
-  MAX_PHYSICAL_AGREEMENT_BYTES,
-  MAX_SUB_MERCHANT_FINAL_FORM_BYTES,
-  MAX_WORDPRESS_SCREENSHOT_BYTES,
   PHYSICAL_AGREEMENT_EXTENSIONS,
   PHYSICAL_AGREEMENT_MIME_TYPES,
   SUB_MERCHANT_FINAL_FORM_EXTENSIONS,
@@ -21,9 +19,7 @@ export function getFileExtension(fileName: string) {
 }
 
 export async function validateSubMerchantFinalFormFile(file: File) {
-  if (file.size > MAX_SUB_MERCHANT_FINAL_FORM_BYTES) {
-    throw new AppError(400, 'Final Form must be 1 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Final Form')
 
   const extension = getFileExtension(file.name)
   const mimeType = file.type || 'application/octet-stream'
@@ -42,9 +38,7 @@ export async function validateSubMerchantFinalFormFile(file: File) {
 }
 
 export async function validateWordpressScreenshotFile(file: File) {
-  if (file.size > MAX_WORDPRESS_SCREENSHOT_BYTES) {
-    throw new AppError(400, 'Each screenshot must be 10 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Screenshot')
 
   const extension = getFileExtension(file.name)
   const mimeType = file.type || 'application/octet-stream'
@@ -63,9 +57,7 @@ export async function validateWordpressScreenshotFile(file: File) {
 }
 
 export async function validateEmailProofFile(file: File) {
-  if (file.size > 10 * 1024 * 1024) {
-    throw new AppError(400, 'Screenshot must be 10 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Screenshot')
   const mimeType = file.type || 'application/octet-stream'
   if (!EMAIL_PROOF_MIME_TYPES.has(mimeType)) {
     throw new AppError(400, 'Screenshot must be a JPEG, PNG, or WebP image.')
@@ -79,9 +71,7 @@ export async function validateEmailProofFile(file: File) {
 }
 
 export async function validateAgreementFile(file: File) {
-  if (file.size > MAX_SUB_MERCHANT_FINAL_FORM_BYTES) {
-    throw new AppError(400, 'Agreement must be 1 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Agreement')
 
   const extension = getFileExtension(file.name)
   const mimeType = file.type || 'application/octet-stream'
@@ -100,9 +90,7 @@ export async function validateAgreementFile(file: File) {
 }
 
 export async function validatePhysicalAgreementFile(file: File) {
-  if (file.size > MAX_PHYSICAL_AGREEMENT_BYTES) {
-    throw new AppError(400, 'Physical agreement copy must be 10 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Physical agreement copy')
 
   const extension = getFileExtension(file.name)
   const mimeType = file.type || 'application/octet-stream'

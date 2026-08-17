@@ -13,6 +13,7 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
+import { assertFileSizeLimit } from '../../lib/storage/file-limits'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   cleanupFailedAttemptObjects,
@@ -34,7 +35,6 @@ import {
 
 export const agreementUploadRoutes = new Hono<AppEnv>()
 
-const MAX_AGREEMENT_BYTES = 1024 * 1024
 const AGREEMENT_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -262,9 +262,7 @@ agreementUploadRoutes.post('/:token', async (c) => {
 })
 
 async function validateAgreementUpload(file: File) {
-  if (file.size > MAX_AGREEMENT_BYTES) {
-    throw new AppError(400, 'Agreement must be 1 MB or smaller.')
-  }
+  assertFileSizeLimit(file, 'Agreement')
 
   const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
   if (

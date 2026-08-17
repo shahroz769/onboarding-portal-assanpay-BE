@@ -9,6 +9,7 @@ import { closeQueryClient, getDb } from './db/client'
 import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
 import { getClientIp } from './lib/client-ip'
+import { MAX_FILE_SIZE_BYTES } from './lib/storage/file-limits'
 import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
 import {
@@ -49,7 +50,7 @@ const publicMultipartLimit = bodyLimit({
 })
 
 const agreementMultipartLimit = bodyLimit({
-  maxSize: 2 * 1024 * 1024,
+  maxSize: MAX_FILE_SIZE_BYTES + 1024 * 1024,
   onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
 })
 
