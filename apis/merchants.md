@@ -103,3 +103,33 @@ Error responses:
 - `415` unsupported file type
 - `500` storage env not configured
 - `502` Google Drive upload/create failure
+
+## DELETE `/api/merchants/:id/permanent`
+
+Purpose:
+
+- Permanently delete a merchant and all merchant/case records
+- Delete all Google Drive objects explicitly owned by that merchant
+
+Access: authenticated `super_admin` only.
+
+Request body:
+
+```json
+{
+  "confirmation": "Exact Merchant Business Name"
+}
+```
+
+The confirmation must exactly match the merchant business name. Drive cleanup
+is restricted to objects in the storage ownership ledger; deletion is rejected
+if a merchant root folder or linked merchant/case file is not represented there.
+
+Success response:
+
+```json
+{
+  "id": "uuid",
+  "deletedStorageObjectCount": 12
+}
+```

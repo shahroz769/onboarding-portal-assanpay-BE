@@ -10,6 +10,7 @@ import {
   bulkTerminateMerchantsSchema,
   listMerchantsQuerySchema,
   merchantLimitsMdrSchema,
+  permanentlyDeleteMerchantSchema,
   terminateMerchantSchema,
   updatePrioritySchema,
 } from './merchants.schemas'
@@ -19,6 +20,7 @@ import type {
   BulkTerminateMerchantsInput,
   ListMerchantsQuery,
   MerchantLimitsMdr,
+  PermanentlyDeleteMerchantInput,
   TerminateMerchantInput,
   UpdatePriorityInput,
 } from './merchants.schemas'
@@ -28,6 +30,7 @@ import {
   bulkUpdatePriority,
   getMerchantDetail,
   listMerchants,
+  permanentlyDeleteMerchant,
   resetMerchantLimitsMdr,
   softDeleteMerchant,
   terminateMerchant,
@@ -92,6 +95,19 @@ merchantRoutes.patch(
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as TerminateMerchantInput
     const result = await terminateMerchant(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+// DELETE /api/merchants/:id/permanent — Delete all merchant DB and Drive data
+merchantRoutes.delete(
+  '/:id/permanent',
+  requireRoles('super_admin'),
+  zodValidator('json', permanentlyDeleteMerchantSchema),
+  async (c) => {
+    const id = c.req.param('id')
+    const input = c.req.valid('json' as never) as PermanentlyDeleteMerchantInput
+    const result = await permanentlyDeleteMerchant(id, input)
     return c.json(result)
   },
 )

@@ -21,6 +21,7 @@ import {
   caseHistory,
   caseFiles,
   cases,
+  emailLog,
   merchantDocuments,
   merchants,
   queues,
@@ -47,6 +48,7 @@ import type {
   MerchantDocumentType,
   MerchantFormSubmission,
   MerchantStatusValue,
+  PermanentlyDeleteMerchantInput,
   PriorityValue,
   TerminateMerchantInput,
   UpdatePriorityInput,
@@ -666,6 +668,133 @@ export async function softDeleteMerchant(merchantId: string) {
   }
 
   return deleted
+}
+
+export async function permanentlyDeleteMerchant(
+  merchantId: string,
+  input: PermanentlyDeleteMerchantInput,
+) {
+  const db = getDb()
+  return db.transaction(async (tx) => {
+    const [merchant] = await tx
+      .select({
+        id: merchants.id,
+        businessName: merchants.businessName,
+        googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
+        googleDrivePublicFolderId: merchants.googleDrivePublicFolderId,
+      })
+      .from(merchants)
+      .where(eq(merchants.id, merchantId))
+      .for('update')
+
+    if (!merchant) {
+      throw new AppError(404, 'Merchant not found.')
+    }
+
+    if (input.confirmation !== merchant.businessName) {
+      throw new AppError(400, 'Merchant name confirmation does not match.')
+    }
+
+    const ownedStorageObjects = await tx
+      .select({
+        provider: storageObjects.provider,
+        providerObjectId: storageObjects.providerObjectId,
+        objectKind: storageObjects.objectKind,
+      })
+      .from(storageObjects)
+      .where(eq(storageObjects.merchantId, merchantId))
+
+    const ownedGoogleDriveObjects = ownedStorageObjects.filter(
+      (object) => object.provider === 'google_drive',
+    )
+    const linkedMerchantFiles = await tx
+      .select({ providerObjectId: merchantDocuments.googleDriveFileId })
+      .from(merchantDocuments)
+      .where(eq(merchantDocuments.merchantId, merchantId))
+    const linkedCaseFiles = await tx
+      .select({ providerObjectId: caseFiles.googleDriveFileId })
+      .from(caseFiles)
+      .innerJoin(cases, eq(caseFiles.caseId, cases.id))
+      .where(eq(cases.merchantId, merchantId))
+    const unsupportedProviders = new Set(
+      ownedStorageObjects
+        .filter((object) => object.provider !== 'google_drive')
+        .map((object) => object.provider),
+    )
+
+    if (unsupportedProviders.size > 0) {
+      throw new AppError(
+        409,
+        `Merchant storage includes unsupported providers: ${Array.from(unsupportedProviders).join(', ')}.`,
+      )
+    }
+
+    const rootFolderIds = new Set(
+      [
+        merchant.googleDrivePrivateFolderId,
+        merchant.googleDrivePublicFolderId,
+      ].filter((folderId): folderId is string => Boolean(folderId)),
+    )
+    const ownedFolderIds = new Set(
+      ownedGoogleDriveObjects
+        .filter((object) => object.objectKind === 'folder')
+        .map((object) => object.providerObjectId),
+    )
+    const unownedRootFolderIds = Array.from(rootFolderIds).filter(
+      (folderId) => !ownedFolderIds.has(folderId),
+    )
+    const ownedProviderObjectIds = new Set(
+      ownedGoogleDriveObjects.map((object) => object.providerObjectId),
+    )
+    const unownedLinkedFileIds = [...linkedMerchantFiles, ...linkedCaseFiles]
+      .map((file) => file.providerObjectId)
+      .filter((fileId) => !ownedProviderObjectIds.has(fileId))
+
+    if (unownedRootFolderIds.length > 0 || unownedLinkedFileIds.length > 0) {
+      throw new AppError(
+        409,
+        'Merchant Drive ownership is incomplete. Run pending migrations before deleting this merchant.',
+      )
+    }
+
+    const storage = new GoogleDriveStorageProvider()
+    const nonRootObjectIds = Array.from(
+      new Set(
+        ownedGoogleDriveObjects
+          .map((object) => object.providerObjectId)
+          .filter((objectId) => !rootFolderIds.has(objectId)),
+      ),
+    )
+
+    await Promise.all(
+      nonRootObjectIds.map((objectId) => storage.deleteFile(objectId)),
+    )
+    await Promise.all(
+      Array.from(rootFolderIds).map((folderId) => storage.deleteFile(folderId)),
+    )
+
+    await tx.delete(emailLog).where(
+      sql`${emailLog.merchantId} = ${merchantId}
+        or ${emailLog.caseId} in (
+          select ${cases.id} from ${cases}
+          where ${cases.merchantId} = ${merchantId}
+        )`,
+    )
+
+    const [deletedMerchant] = await tx
+      .delete(merchants)
+      .where(eq(merchants.id, merchantId))
+      .returning({ id: merchants.id })
+
+    if (!deletedMerchant) {
+      throw new AppError(404, 'Merchant not found.')
+    }
+
+    return {
+      id: deletedMerchant.id,
+      deletedStorageObjectCount: ownedGoogleDriveObjects.length,
+    }
+  })
 }
 
 async function closeOpenCasesAsUnsuccessful(

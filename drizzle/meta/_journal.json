@@ -386,6 +386,13 @@
       "when": 1786752000000,
       "tag": "0055_repair_case_flow_close_jobs_failure_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1786924800000,
+      "tag": "0056_backfill_merchant_root_ownership",
+      "breakpoints": true
     }
   ]
 }

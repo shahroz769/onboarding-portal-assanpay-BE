@@ -629,6 +629,13 @@ export const terminateMerchantSchema = z.object({
 })
 export type TerminateMerchantInput = z.infer<typeof terminateMerchantSchema>
 
+export const permanentlyDeleteMerchantSchema = z.object({
+  confirmation: z.string().trim().min(1).max(160),
+})
+export type PermanentlyDeleteMerchantInput = z.infer<
+  typeof permanentlyDeleteMerchantSchema
+>
+
 export const bulkTerminateMerchantsSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
   reason: z.string().trim().min(1).max(1000),

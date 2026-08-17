@@ -40,3 +40,14 @@ work:
 
 Do not call `storage.deleteFile` from feature modules for previous versions or
 shared folders.
+
+## Permanent merchant deletion
+
+The super-admin permanent-delete flow is the only successful-object retention
+exception. It may delete only provider objects recorded in `storage_objects`
+for that merchant. Merchant root folder IDs and every file linked from merchant
+or case tables must have matching ownership rows before cleanup begins. The
+flow locks the merchant row while provider cleanup runs, then removes
+merchant-linked email logs and the merchant row in the same database
+transaction; foreign-key cascades remove the remaining merchant and case
+records. Deleting an owned merchant root recursively removes its contents.
