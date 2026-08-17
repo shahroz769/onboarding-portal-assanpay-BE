@@ -657,10 +657,29 @@ export async function updateMerchantPriority(
 export async function softDeleteMerchant(merchantId: string) {
   const db = getDb()
 
+  const [merchant] = await db
+    .select({ status: merchants.status })
+    .from(merchants)
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+
+  if (!merchant) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  if (merchant.status !== 'terminated') {
+    throw new AppError(409, 'Only terminated merchants can be deleted.')
+  }
+
   const [deleted] = await db
     .update(merchants)
     .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+    .where(
+      and(
+        eq(merchants.id, merchantId),
+        eq(merchants.status, 'terminated'),
+        isNull(merchants.deletedAt),
+      ),
+    )
     .returning({ id: merchants.id })
 
   if (!deleted) {
@@ -680,6 +699,7 @@ export async function permanentlyDeleteMerchant(
       .select({
         id: merchants.id,
         businessName: merchants.businessName,
+        status: merchants.status,
         googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
         googleDrivePublicFolderId: merchants.googleDrivePublicFolderId,
       })
@@ -689,6 +709,13 @@ export async function permanentlyDeleteMerchant(
 
     if (!merchant) {
       throw new AppError(404, 'Merchant not found.')
+    }
+
+    if (merchant.status !== 'terminated') {
+      throw new AppError(
+        409,
+        'Only terminated merchants can be permanently deleted.',
+      )
     }
 
     if (input.confirmation !== merchant.businessName) {
@@ -938,7 +965,13 @@ export async function bulkSoftDeleteMerchants(ids: string[]) {
   const result = await db
     .update(merchants)
     .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+    .where(
+      and(
+        inArray(merchants.id, ids),
+        eq(merchants.status, 'terminated'),
+        isNull(merchants.deletedAt),
+      ),
+    )
     .returning({ id: merchants.id })
 
   return { deletedCount: result.length }
