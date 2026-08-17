@@ -13,6 +13,17 @@ export const caseStatusValues = [
 ] as const
 export type CaseStatusValue = (typeof caseStatusValues)[number]
 
+export const caseListStatusFilterValues = [
+  ...caseStatusValues,
+  'unsuccessful',
+] as const
+export type CaseListStatusFilterValue =
+  (typeof caseListStatusFilterValues)[number]
+
+const caseListStatusFilterValueSet = new Set<string>(
+  caseListStatusFilterValues,
+)
+
 // Ordered index for transition validation
 const statusOrder: Record<CaseStatusValue, number> = {
   new: 0,
@@ -102,7 +113,16 @@ export const listCasesQuerySchema = z.object({
   search: z.string().optional(),
   queueId: z.string().uuid().optional(),
   ownerId: z.string().optional(),
-  status: z.string().optional(),
+  status: z
+    .string()
+    .refine((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .every((item) => caseListStatusFilterValueSet.has(item)),
+    )
+    .optional(),
   sortBy: z
     .enum([
       'caseNumber',

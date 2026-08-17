@@ -9,6 +9,7 @@ import {
   inArray,
   isNull,
   lt,
+  ne,
   or,
   sql,
 } from 'drizzle-orm'
@@ -98,8 +99,13 @@ import {
   isDocumentFieldName,
 } from './field-labels'
 import { issueToken } from './case-resubmission-tokens.service'
-import { caseStatusValues, isValidStatusTransition } from './cases.schemas'
+import {
+  caseListStatusFilterValues,
+  caseStatusValues,
+  isValidStatusTransition,
+} from './cases.schemas'
 import type {
+  CaseListStatusFilterValue,
   CaseStatusValue,
   CloseUnsuccessfulInput,
   CreateCaseInput,
@@ -166,7 +172,6 @@ import {
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_MIME_TYPES,
   WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
-  caseStatusValueSet,
   type ManualCommunicationChannel,
 } from './case-constants'
 import {
@@ -402,12 +407,28 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
   }
 
   if (query.status) {
-    const statuses = parseCsvValues<CaseStatusValue>(
+    const requestedStatuses = parseCsvValues<CaseListStatusFilterValue>(
       query.status,
-      caseStatusValueSet,
+      new Set(caseListStatusFilterValues),
     )
+    const includeUnsuccessful = requestedStatuses.includes('unsuccessful')
+    const statuses = requestedStatuses.filter(
+      (status): status is CaseStatusValue => status !== 'unsuccessful',
+    )
+
     if (statuses.length > 0) {
-      conditions.push(inArray(cases.status, statuses))
+      const statusCondition = and(
+        inArray(cases.status, statuses),
+        or(isNull(cases.closeOutcome), ne(cases.closeOutcome, 'unsuccessful')),
+      )
+
+      conditions.push(
+        includeUnsuccessful
+          ? or(statusCondition, eq(cases.closeOutcome, 'unsuccessful'))
+          : statusCondition,
+      )
+    } else if (includeUnsuccessful) {
+      conditions.push(eq(cases.closeOutcome, 'unsuccessful'))
     }
   }
 
