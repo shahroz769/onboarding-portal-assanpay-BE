@@ -622,6 +622,19 @@ export async function updateMerchantPriority(
   const db = getDb()
 
   const [updated] = await db.transaction(async (tx) => {
+    const [merchant] = await tx
+      .select({ status: merchants.status })
+      .from(merchants)
+      .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+
+    if (!merchant) {
+      throw new AppError(404, 'Merchant not found.')
+    }
+
+    if (merchant.status === 'terminated') {
+      throw new AppError(409, 'Terminated merchant priority cannot be changed.')
+    }
+
     const now = new Date()
     const updatedRows = await tx
       .update(merchants)
@@ -630,7 +643,13 @@ export async function updateMerchantPriority(
         priorityNote: input.note,
         updatedAt: now,
       })
-      .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+      .where(
+        and(
+          eq(merchants.id, merchantId),
+          ne(merchants.status, 'terminated'),
+          isNull(merchants.deletedAt),
+        ),
+      )
       .returning({
         id: merchants.id,
         priority: merchants.priority,
@@ -993,7 +1012,13 @@ export async function bulkUpdatePriority(
         priorityNote: note,
         updatedAt: now,
       })
-      .where(and(inArray(merchants.id, ids), isNull(merchants.deletedAt)))
+      .where(
+        and(
+          inArray(merchants.id, ids),
+          ne(merchants.status, 'terminated'),
+          isNull(merchants.deletedAt),
+        ),
+      )
       .returning({ id: merchants.id })
 
     const updatedIds = updatedRows.map((row) => row.id)
