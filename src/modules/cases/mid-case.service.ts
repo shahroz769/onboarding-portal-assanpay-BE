@@ -332,6 +332,7 @@ export async function loadMidCreationCase(caseId: string, userId: string) {
       status: cases.status,
       queueId: cases.queueId,
       merchantId: cases.merchantId,
+      merchantNumber: merchants.merchantNumber,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
@@ -421,7 +422,10 @@ export async function sendMidCreationCredentialsEmail(
   const cardRate = isShopify
     ? `${limitsAndMdr.rates.cardShopify}%`
     : `${limitsAndMdr.rates.cardDefault}%`
-  const portalPassword = buildPortalPassword(credentials.email)
+  const portalPassword = buildPortalPassword(
+    credentials.email,
+    caseRow.merchantNumber,
+  )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
 
   const emailResult = await sendEmail({

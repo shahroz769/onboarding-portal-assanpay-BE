@@ -258,6 +258,7 @@ export async function getResubmissionEmailPreview(
       queueSlug: queues.slug,
       workflowType: queues.workflowType,
       merchantId: cases.merchantId,
+      merchantNumber: merchants.merchantNumber,
       merchantName: merchants.businessName,
       merchantOwnerName: merchants.ownerFullName,
       merchantSubmitterEmail: merchants.submitterEmail,
@@ -879,7 +880,10 @@ export async function getMidCreationEmailPreview(
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
   const isShopify = caseRow.websiteCms === 'shopify'
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
-  const portalPassword = buildPortalPassword(credentials.email)
+  const portalPassword = buildPortalPassword(
+    credentials.email,
+    caseRow.merchantNumber,
+  )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
   const body = buildMidCreationMessageBody({
     merchantName: caseRow.merchantName,
