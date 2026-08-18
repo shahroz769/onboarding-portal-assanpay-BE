@@ -699,17 +699,7 @@ export function getCaseDetailMerchant(input: {
   ownerId: string | null
   actor?: SessionUser
 }) {
-  if (
-    input.workflowType !== 'mid' ||
-    input.actor?.userId === input.ownerId
-  ) {
-    return input.merchant
-  }
-
-  const merchant = { ...input.merchant } as Record<string, unknown>
-  delete merchant.bankName
-  delete merchant.accountNumberIban
-  return merchant
+  return input.merchant
 }
 
 // ─── Create Case ────────────────────────────────────────────────────────────
