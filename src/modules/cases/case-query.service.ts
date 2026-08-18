@@ -639,6 +639,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     caseDocumentReviewDetail,
     merchantDocumentReviewDetail,
     midCreationCredentials,
+    limitsAndMdr,
     paymentMethods,
     payoutMethods,
   ] = await Promise.all([
@@ -744,6 +745,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       : Promise.resolve(null),
     needsMidCredentials
       ? getMidCreationCredentials(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'mid'
+      ? getLimitsAndMdrSettings()
       : Promise.resolve(null),
     workflowType === 'mid'
       ? getPaymentMethodSettings()
@@ -1058,6 +1062,13 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
           ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
           : null,
     },
+    midConfiguration: isQueueWorkflowType(queue, 'mid')
+      ? {
+          limitsAndMdr,
+          paymentMethods,
+          payoutMethods,
+        }
+      : null,
     live: {
       limitsAppliedAt: liveLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
       limitsAppliedBy: liveLimitsAppliedEntry?.actorId
