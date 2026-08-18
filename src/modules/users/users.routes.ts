@@ -18,6 +18,7 @@ import {
   createUser,
   deactivateUser,
   getUserById,
+  listActiveUserDirectory,
   listUsers,
   sendResetPassword,
   updateUser,
@@ -52,6 +53,11 @@ userRoutes.post(
     return c.json(result)
   },
 )
+
+userRoutes.get('/directory', async (c) => {
+  const users = await listActiveUserDirectory()
+  return c.json({ users })
+})
 
 userRoutes.post(
   '/bulk-reset-password',

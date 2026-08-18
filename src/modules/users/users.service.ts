@@ -1,4 +1,15 @@
-import { and, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
@@ -332,6 +343,18 @@ export async function listUsers(query: ListUsersQuery = {}) {
   })
 
   return hydrateUsers(result)
+}
+
+export async function listActiveUserDirectory() {
+  return getDb().query.users.findMany({
+    columns: {
+      id: true,
+      name: true,
+      username: true,
+    },
+    where: and(eq(users.status, 'active'), isNull(users.deletedAt)),
+    orderBy: (table) => [asc(table.name), asc(table.username)],
+  })
 }
 
 export async function getUserById(id: string) {

@@ -1,6 +1,6 @@
 # Repository operating rules
 
-If a contract change requires frontend work, use `C:\Users\shahr\Desktop\Onboarding Portal\onboarding-portal-assanpay-FE` and read its `AGENTS.md` first.
+If a contract change requires frontend work, use `C:\Users\OFFICE\Downloads\Onboarding Portal\onboarding-portal-assanpay-FE` and read its `AGENTS.md` first.
 
 - Stack: Bun, Hono, strict TypeScript, Drizzle, PostgreSQL.
 - Style: two spaces, single quotes, trailing commas, no semicolons.

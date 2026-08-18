@@ -93,6 +93,38 @@ Possible errors:
 - `401` Invalid access token.
 - `403` Insufficient permissions.
 
+## GET `/api/users/directory`
+
+Purpose:
+
+- Returns the minimal identity fields needed for employee mentions
+- Includes active, non-deleted users only
+
+Allowed roles:
+
+- Any authenticated user
+
+Success response:
+
+- Status: `200`
+
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "name": "Jane Doe",
+      "username": "jane01"
+    }
+  ]
+}
+```
+
+Possible errors:
+
+- `401` Missing bearer token.
+- `401` Invalid access token.
+
 ## GET `/api/users/:id`
 
 Purpose:
