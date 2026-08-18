@@ -25,8 +25,14 @@ import {
   getPaymentMethodSettings,
   getPayoutMethodSettings,
 } from '../configuration/configuration.service'
-import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
-import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
+import {
+  paymentMethodSettingsSchema,
+  payoutMethodSettingsSchema,
+} from '../configuration/configuration.schemas'
+import type {
+  PaymentMethodSettings,
+  PayoutMethodSettings,
+} from '../configuration/configuration.schemas'
 import type { QueueWorkflowType } from '../queues/queue-workflow'
 import {
   buildInternalMerchantEmail,
@@ -243,7 +249,9 @@ export async function getWordpressWebsiteDetails(caseId: string) {
   }
 }
 
-export async function getLatestWordpressWebsiteDetailsForMerchant(merchantId: string) {
+export async function getLatestWordpressWebsiteDetailsForMerchant(
+  merchantId: string,
+) {
   const [latestWordpressCase] = await getDb()
     .select({
       caseId: cases.id,
@@ -298,7 +306,9 @@ export async function getDocumentReviewDetails(caseId: string) {
   }
 }
 
-export async function getLatestDocumentReviewDetailsForMerchant(merchantId: string) {
+export async function getLatestDocumentReviewDetailsForMerchant(
+  merchantId: string,
+) {
   const [details] = await getDb()
     .select({
       caseId: documentReviewDetails.caseId,
@@ -455,7 +465,7 @@ export type MidCreationCredentials = {
   internalBranchCode: string
   merchantRole: MerchantPortalRole
   paymentMethods: PaymentMethodSettings
-  payoutMethods: PaymentMethodSettings
+  payoutMethods: PayoutMethodSettings
 }
 
 export const DEFAULT_MERCHANT_PORTAL_ROLE: MerchantPortalRole = 'merchant_admin'
@@ -508,7 +518,7 @@ export async function getMidCreationCredentials(
   const parsedPaymentMethods = paymentMethodSettingsSchema.safeParse(
     details.paymentMethods,
   )
-  const parsedPayoutMethods = paymentMethodSettingsSchema.safeParse(
+  const parsedPayoutMethods = payoutMethodSettingsSchema.safeParse(
     details.payoutMethods,
   )
 
@@ -555,7 +565,9 @@ export async function getPortalMidLimitApplication(portalMid: number) {
   return entry ?? null
 }
 
-export async function getTestingLimitsAppliedEntryForMerchant(merchantId: string) {
+export async function getTestingLimitsAppliedEntryForMerchant(
+  merchantId: string,
+) {
   const credentials = await getMidCreationCredentials(merchantId)
   if (!credentials) return null
 
@@ -624,7 +636,9 @@ export async function assertTestingLimitsAppliedForCredentials(
   }
 }
 
-export function isMerchantPortalRole(value: unknown): value is MerchantPortalRole {
+export function isMerchantPortalRole(
+  value: unknown,
+): value is MerchantPortalRole {
   return value === 'merchant_admin' || value === 'international_merchant_admin'
 }
 
@@ -651,7 +665,9 @@ export function tokenMatchesGoLiveAvailability(
   return Math.abs(delayMs - expectedDelayMs) <= toleranceMs
 }
 
-export async function getPayoutMethodsForMerchantRole(role: MerchantPortalRole) {
+export async function getPayoutMethodsForMerchantRole(
+  role: MerchantPortalRole,
+) {
   const expectedLabel = ROLE_PAYOUT_METHOD_LABELS[role]
   const normalizedExpectedLabel = normalizeMethodLabel(expectedLabel)
   const methods = await getPayoutMethodSettings()
@@ -671,26 +687,72 @@ export async function getPayoutMethodsForMerchantRole(role: MerchantPortalRole) 
 
 export function parseLegacyMethodSettings(
   value: unknown,
+  mode: 'collection',
+): PaymentMethodSettings | null
+export function parseLegacyMethodSettings(
+  value: unknown,
+  mode: 'disbursement',
+): PayoutMethodSettings | null
+export function parseLegacyMethodSettings(
+  value: unknown,
   mode: 'collection' | 'disbursement',
-) {
+): PaymentMethodSettings | PayoutMethodSettings | null {
   const legacyMethods = Array.isArray(value) ? value : []
   const migrated = legacyMethods.flatMap((method) => {
     if (!method || typeof method !== 'object') return []
     const record = method as Record<string, unknown>
     const label = typeof record.label === 'string' ? record.label.trim() : ''
     const id =
-      typeof record.key === 'string' && record.key.trim()
-        ? record.key.trim()
-        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : typeof record.key === 'string' && record.key.trim()
+          ? record.key.trim()
+          : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
     const enabled =
       mode === 'collection'
         ? record.collectionEnabled !== false
         : record.disbursementEnabled !== false
 
-    return label && id && enabled ? [{ id, label }] : []
+    if (!label || !id || !enabled) return []
+    return mode === 'collection'
+      ? [
+          {
+            id,
+            label,
+            testing: readLegacyMethodRange(record.testing, {
+              min: 10,
+              max: 100,
+            }),
+            live: readLegacyMethodRange(record.live, {
+              min: 100,
+              max: 50000,
+            }),
+            commissionRate:
+              typeof record.commissionRate === 'number'
+                ? record.commissionRate
+                : /card/i.test(label)
+                  ? 3
+                  : 2.5,
+          },
+        ]
+      : [{ id, label }]
   })
-  const parsed = paymentMethodSettingsSchema.safeParse(migrated)
+  const parsed =
+    mode === 'collection'
+      ? paymentMethodSettingsSchema.safeParse(migrated)
+      : payoutMethodSettingsSchema.safeParse(migrated)
   return parsed.success ? parsed.data : null
+}
+
+function readLegacyMethodRange(
+  value: unknown,
+  fallback: { min: number; max: number },
+) {
+  if (!value || typeof value !== 'object') return fallback
+  const range = value as Record<string, unknown>
+  return typeof range.min === 'number' && typeof range.max === 'number'
+    ? { min: range.min, max: range.max }
+    : fallback
 }
 
 export function getCaseDetailMerchant(input: {

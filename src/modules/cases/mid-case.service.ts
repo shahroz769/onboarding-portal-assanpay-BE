@@ -121,11 +121,11 @@ import type {
 } from './cases.schemas'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -211,6 +211,7 @@ import {
   formatExpiryDate,
   formatExpiryLine,
   getRejectionLabel,
+  resolveCustomWebsiteServerIntegration,
   resolveMerchantEmailRecipient,
   uploadEmailProofFile,
 } from './case-communication-helpers'
@@ -418,15 +419,15 @@ export async function sendMidCreationCredentialsEmail(
   }
 
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${token}`
-  const isShopify = caseRow.websiteCms === 'shopify'
-  const cardRate = isShopify
-    ? `${limitsAndMdr.rates.cardShopify}%`
-    : `${limitsAndMdr.rates.cardDefault}%`
   const portalPassword = buildPortalPassword(
     credentials.email,
     caseRow.merchantNumber,
   )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
+  const serverIntegration = resolveCustomWebsiteServerIntegration(
+    caseRow.websiteCms,
+    merchantPortal,
+  )
 
   const emailResult = await sendEmail({
     to: recipient.email,
@@ -440,12 +441,10 @@ export async function sendMidCreationCredentialsEmail(
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+      serverIntegration,
+      paymentMethods: credentials.paymentMethods,
       testingLimits: limitsAndMdr.testing,
       rates: {
-        eWallets: limitsAndMdr.rates.eWallets,
-        card: isShopify
-          ? limitsAndMdr.rates.cardShopify
-          : limitsAndMdr.rates.cardDefault,
         payout: limitsAndMdr.rates.payout,
         payoutLabel: payoutRateLabel,
       },
@@ -461,10 +460,11 @@ export async function sendMidCreationCredentialsEmail(
       portalEmail: credentials.email,
       portalMid: credentials.portalMid,
       websiteCms: caseRow.websiteCms,
-      cardRate,
+      paymentMethods: credentials.paymentMethods,
       limitsAndMdr,
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
       merchantPortalUrl: merchantPortal.loginUrl,
+      serverIntegration,
     },
   })
 

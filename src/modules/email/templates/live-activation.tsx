@@ -14,6 +14,11 @@ import {
 export type LiveActivationEmailProps = {
   merchantName: string
   merchantPortalUrl: string
+  paymentMethods?: Array<{
+    id: string
+    label: string
+    live: { min: number; max: number }
+  }>
   liveLimits: {
     collectionMin: number
     collectionMax: number
@@ -25,6 +30,7 @@ export type LiveActivationEmailProps = {
 export function LiveActivationEmail({
   merchantName,
   merchantPortalUrl,
+  paymentMethods = [],
   liveLimits,
 }: LiveActivationEmailProps) {
   return (
@@ -36,10 +42,13 @@ export function LiveActivationEmail({
     >
       <Panel tone="cream">
         <SectionLabel>Live limits - per transaction</SectionLabel>
-        <KeyRow
-          label="Collection"
-          value={`${liveLimits.collectionMin.toLocaleString()} - ${liveLimits.collectionMax.toLocaleString()}`}
-        />
+        {paymentMethods.map((method) => (
+          <KeyRow
+            key={method.id}
+            label={`${method.label} collection`}
+            value={`${method.live.min.toLocaleString()} - ${method.live.max.toLocaleString()}`}
+          />
+        ))}
         <KeyRow
           label="Disbursement"
           value={`${liveLimits.disbursementMin.toLocaleString()} - ${liveLimits.disbursementMax.toLocaleString()}`}

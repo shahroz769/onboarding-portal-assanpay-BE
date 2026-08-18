@@ -32,6 +32,7 @@ import {
   linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
   paymentMethodSettingsSchema,
+  payoutMethodSettingsSchema,
 } from './configuration.schemas'
 import type {
   EmailSendingModeSettings,
@@ -39,6 +40,7 @@ import type {
   LinkDeadlineSettings,
   MerchantPortalSettings,
   PaymentMethodSettings,
+  PayoutMethodSettings,
   UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
@@ -156,9 +158,9 @@ configurationRoutes.put(
 
 configurationRoutes.put(
   '/payout-methods',
-  zodValidator('json', paymentMethodSettingsSchema),
+  zodValidator('json', payoutMethodSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as PaymentMethodSettings
+    const input = c.req.valid('json' as never) as PayoutMethodSettings
     return c.json(await updatePayoutMethodSettings(input))
   },
 )

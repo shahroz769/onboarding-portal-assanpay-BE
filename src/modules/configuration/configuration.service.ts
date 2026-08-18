@@ -25,6 +25,7 @@ import {
   linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
   paymentMethodSettingsSchema,
+  payoutMethodSettingsSchema,
   updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
 import type {
@@ -34,6 +35,7 @@ import type {
   LinkDeadlineSettings,
   MerchantPortalSettings,
   PaymentMethodSettings,
+  PayoutMethodSettings,
   UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
@@ -103,13 +105,15 @@ export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
 
 export const defaultMerchantPortalSettings: MerchantPortalSettings = {
   loginUrl: 'https://merchant.assanpay.com/login',
+  serverBaseUrl: '',
+  serverCallbackIp: '',
   officeAddress: '',
   whatsappSupportNumber: '',
   supportEmail: '',
 }
 
 export const defaultPaymentMethodSettings: PaymentMethodSettings = []
-export const defaultPayoutMethodSettings: PaymentMethodSettings = []
+export const defaultPayoutMethodSettings: PayoutMethodSettings = []
 
 async function readSetting<T>(
   key: string,
@@ -167,8 +171,15 @@ async function readPaymentMethodSetting(
       : defaultPayoutMethodSettings
   }
 
-  const parsed = paymentMethodSettingsSchema.safeParse(row.value)
+  const parser =
+    legacyMode === 'collection'
+      ? paymentMethodSettingsSchema
+      : payoutMethodSettingsSchema
+  const parsed = parser.safeParse(row.value)
   if (parsed.success) return parsed.data
+
+  const configuredLimits =
+    legacyMode === 'collection' ? await getLimitsAndMdrSettings() : null
 
   const legacyMethods = Array.isArray(row.value) ? row.value : []
   const migrated = legacyMethods.flatMap((method) => {
@@ -176,19 +187,53 @@ async function readPaymentMethodSetting(
     const record = method as Record<string, unknown>
     const label = typeof record.label === 'string' ? record.label.trim() : ''
     const id =
-      typeof record.key === 'string' && record.key.trim()
-        ? record.key.trim()
-        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : typeof record.key === 'string' && record.key.trim()
+          ? record.key.trim()
+          : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
     const enabled =
       legacyMode === 'collection'
         ? record.collectionEnabled !== false
         : record.disbursementEnabled !== false
 
-    return label && id && enabled ? [{ id, label }] : []
+    if (!label || !id || !enabled) return []
+    if (!configuredLimits) return [{ id, label }]
+    return [
+      {
+        id,
+        label,
+        testing: readLegacyCollectionRange(record.testing, {
+          min: configuredLimits.testing.collectionMin,
+          max: configuredLimits.testing.collectionMax,
+        }),
+        live: readLegacyCollectionRange(record.live, {
+          min: configuredLimits.live.collectionMin,
+          max: configuredLimits.live.collectionMax,
+        }),
+        commissionRate:
+          typeof record.commissionRate === 'number'
+            ? record.commissionRate
+            : /card/i.test(label)
+              ? configuredLimits.rates.cardDefault
+              : configuredLimits.rates.eWallets,
+      },
+    ]
   })
 
-  const migratedParsed = paymentMethodSettingsSchema.safeParse(migrated)
+  const migratedParsed = parser.safeParse(migrated)
   return migratedParsed.success ? migratedParsed.data : []
+}
+
+function readLegacyCollectionRange(
+  value: unknown,
+  fallback: { min: number; max: number },
+) {
+  if (!value || typeof value !== 'object') return fallback
+  const range = value as Record<string, unknown>
+  return typeof range.min === 'number' && typeof range.max === 'number'
+    ? { min: range.min, max: range.max }
+    : fallback
 }
 
 export function getLimitsAndMdrSettings() {
@@ -235,12 +280,27 @@ export async function updateEmailSendingModeSettings(
   return value
 }
 
-export function getMerchantPortalSettings() {
-  return readSetting(
-    MERCHANT_PORTAL_KEY,
-    defaultMerchantPortalSettings,
-    merchantPortalSettingsSchema,
-  )
+export async function getMerchantPortalSettings() {
+  const row = await getDb().query.configurationSettings.findFirst({
+    where: eq(configurationSettings.key, MERCHANT_PORTAL_KEY),
+  })
+  const parsed = merchantPortalSettingsSchema.safeParse(row?.value)
+  const value = parsed.success ? parsed.data : defaultMerchantPortalSettings
+  const storedValue =
+    row?.value && typeof row.value === 'object' && !Array.isArray(row.value)
+      ? (row.value as Record<string, unknown>)
+      : null
+  const isCompleteStoredValue =
+    storedValue !== null &&
+    Object.entries(value).every(
+      ([key, fieldValue]) => storedValue[key] === fieldValue,
+    )
+
+  if (!isCompleteStoredValue) {
+    await writeSetting(MERCHANT_PORTAL_KEY, value)
+  }
+
+  return value
 }
 
 export async function updateMerchantPortalSettings(
@@ -267,8 +327,8 @@ export function getPayoutMethodSettings() {
   return readPaymentMethodSetting(PAYOUT_METHODS_KEY, 'disbursement')
 }
 
-export async function updatePayoutMethodSettings(input: PaymentMethodSettings) {
-  const value = paymentMethodSettingsSchema.parse(input)
+export async function updatePayoutMethodSettings(input: PayoutMethodSettings) {
+  const value = payoutMethodSettingsSchema.parse(input)
   await writeSetting(PAYOUT_METHODS_KEY, value)
   return value
 }
@@ -744,10 +804,7 @@ async function syncCreationRequirements(
   for (const rule of rules) {
     if (rule.id) {
       if (!existingIds.has(rule.id)) {
-        throw new AppError(
-          400,
-          `Unknown creation requirement id: ${rule.id}`,
-        )
+        throw new AppError(400, `Unknown creation requirement id: ${rule.id}`)
       }
       keepIds.add(rule.id)
       await tx
@@ -825,14 +882,19 @@ async function assertActiveFlowGraphValid(
   queueById: Map<string, QueueRef>,
 ) {
   const activeStartRules = input.startRules.filter((rule) => rule.isActive)
-  const activeCloseTriggers = input.closeTriggers.filter((rule) => rule.isActive)
-  const activeCloseBlockers = input.closeBlockers.filter((rule) => rule.isActive)
+  const activeCloseTriggers = input.closeTriggers.filter(
+    (rule) => rule.isActive,
+  )
+  const activeCloseBlockers = input.closeBlockers.filter(
+    (rule) => rule.isActive,
+  )
   const activeCreationRequirements = input.creationRequirements.filter(
     (rule) => rule.isActive,
   )
 
   const referencedQueueIds = new Set<string>()
-  for (const rule of activeStartRules) referencedQueueIds.add(rule.targetQueueId)
+  for (const rule of activeStartRules)
+    referencedQueueIds.add(rule.targetQueueId)
   for (const rule of activeCloseTriggers) {
     referencedQueueIds.add(rule.sourceQueueId)
     referencedQueueIds.add(rule.targetQueueId)
@@ -1059,9 +1121,7 @@ function throwGraphCycleError(
   cycle: string[],
   queueById: Map<string, QueueRef>,
 ): never {
-  const names = cycle.map(
-    (queueId) => queueById.get(queueId)?.name ?? queueId,
-  )
+  const names = cycle.map((queueId) => queueById.get(queueId)?.name ?? queueId)
   throw new AppError(400, `${prefix}: ${names.join(' → ')}.`, {
     cycle: cycle,
     cyclePath: names,
@@ -1071,9 +1131,7 @@ function throwGraphCycleError(
 }
 
 function formatQueueList(queuesToFormat: QueueRef[]) {
-  return queuesToFormat
-    .map((queue) => `${queue.name} (${queue.id})`)
-    .join(', ')
+  return queuesToFormat.map((queue) => `${queue.name} (${queue.id})`).join(', ')
 }
 
 async function uploadConfigurationDraft(input: {

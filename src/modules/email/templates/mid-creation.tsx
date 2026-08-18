@@ -20,6 +20,16 @@ export type MidCreationEmailProps = {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours?: number | null
+  serverIntegration?: {
+    baseUrl: string
+    callbackIp: string
+  } | null
+  paymentMethods?: Array<{
+    id: string
+    label: string
+    testing: { min: number; max: number }
+    commissionRate: number
+  }>
   testingLimits?: {
     collectionMin: number
     collectionMax: number
@@ -27,8 +37,6 @@ export type MidCreationEmailProps = {
     disbursementMax: number
   }
   rates?: {
-    eWallets: number
-    card: number
     payout: number
     payoutLabel?: string
   }
@@ -42,6 +50,8 @@ export function MidCreationEmail({
   goLiveUrl,
   availableAt,
   goLiveAvailabilityHours = 72,
+  serverIntegration = null,
+  paymentMethods = [],
   testingLimits = {
     collectionMin: 10,
     collectionMax: 100,
@@ -49,8 +59,6 @@ export function MidCreationEmail({
     disbursementMax: 50000,
   },
   rates = {
-    eWallets: 2.5,
-    card: 3,
     payout: 0,
     payoutLabel: 'Bank Settlement',
   },
@@ -72,6 +80,18 @@ export function MidCreationEmail({
         login.
       </Paragraph>
 
+      {serverIntegration ? (
+        <Panel tone="plain">
+          <SectionLabel>Custom website server integration</SectionLabel>
+          <KeyRow label="Server base URL" value={serverIntegration.baseUrl} />
+          <KeyRow
+            label="Server callback IP"
+            value={serverIntegration.callbackIp}
+            mono
+          />
+        </Panel>
+      ) : null}
+
       <ButtonRow>
         <CTAButton href={merchantPortalUrl}>Open merchant portal</CTAButton>
       </ButtonRow>
@@ -80,10 +100,13 @@ export function MidCreationEmail({
 
       <Panel tone="plain">
         <SectionLabel>Testing limits · per transaction</SectionLabel>
-        <KeyRow
-          label="Collection"
-          value={`${testingLimits.collectionMin.toLocaleString()} – ${testingLimits.collectionMax.toLocaleString()}`}
-        />
+        {paymentMethods.map((method) => (
+          <KeyRow
+            key={method.id}
+            label={`${method.label} collection`}
+            value={`${method.testing.min.toLocaleString()} – ${method.testing.max.toLocaleString()}`}
+          />
+        ))}
         <KeyRow
           label="Disbursement"
           value={`${testingLimits.disbursementMin.toLocaleString()} – ${testingLimits.disbursementMax.toLocaleString()}`}
@@ -92,9 +115,17 @@ export function MidCreationEmail({
 
       <Panel tone="plain">
         <SectionLabel>Applicable rates</SectionLabel>
-        <KeyRow label="E-wallets & QR" value={`${rates.eWallets}% + tax`} />
-        <KeyRow label="Card" value={`${rates.card}% + tax`} />
-        <KeyRow label={rates.payoutLabel ?? 'Payout'} value={`${rates.payout}%`} />
+        {paymentMethods.map((method) => (
+          <KeyRow
+            key={method.id}
+            label={method.label}
+            value={`${method.commissionRate}%`}
+          />
+        ))}
+        <KeyRow
+          label={rates.payoutLabel ?? 'Payout'}
+          value={`${rates.payout}%`}
+        />
       </Panel>
 
       <Divider />

@@ -39,7 +39,10 @@ import {
   getPaymentMethodSettings,
   getPayoutMethodSettings,
 } from '../configuration/configuration.service'
-import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
+import {
+  paymentMethodSettingsSchema,
+  payoutMethodSettingsSchema,
+} from '../configuration/configuration.schemas'
 import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
 import type {
   BusinessScopeValue,
@@ -1064,7 +1067,7 @@ async function getLatestMidCreationMethods(merchantId: string) {
   const paymentMethods = paymentMethodSettingsSchema.safeParse(
     details?.paymentMethods,
   )
-  const payoutMethods = paymentMethodSettingsSchema.safeParse(
+  const payoutMethods = payoutMethodSettingsSchema.safeParse(
     details?.payoutMethods,
   )
 
@@ -1088,18 +1091,57 @@ function parseLegacyMethodSettings(
     const record = method as Record<string, unknown>
     const label = typeof record.label === 'string' ? record.label.trim() : ''
     const id =
-      typeof record.key === 'string' && record.key.trim()
-        ? record.key.trim()
-        : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : typeof record.key === 'string' && record.key.trim()
+          ? record.key.trim()
+          : label.toLowerCase().replace(/[^a-z0-9]+/g, '-')
     const enabled =
       mode === 'collection'
         ? record.collectionEnabled !== false
         : record.disbursementEnabled !== false
 
-    return label && id && enabled ? [{ id, label }] : []
+    if (!label || !id || !enabled) return []
+    return mode === 'collection'
+      ? [
+          {
+            id,
+            label,
+            testing: readLegacyMethodRange(record.testing, {
+              min: 10,
+              max: 100,
+            }),
+            live: readLegacyMethodRange(record.live, {
+              min: 100,
+              max: 50000,
+            }),
+            commissionRate:
+              typeof record.commissionRate === 'number'
+                ? record.commissionRate
+                : /card/i.test(label)
+                  ? 3
+                  : 2.5,
+          },
+        ]
+      : [{ id, label }]
   })
-  const parsed = paymentMethodSettingsSchema.safeParse(migrated)
+  const parser =
+    mode === 'collection'
+      ? paymentMethodSettingsSchema
+      : payoutMethodSettingsSchema
+  const parsed = parser.safeParse(migrated)
   return parsed.success ? parsed.data : null
+}
+
+function readLegacyMethodRange(
+  value: unknown,
+  fallback: { min: number; max: number },
+) {
+  if (!value || typeof value !== 'object') return fallback
+  const range = value as Record<string, unknown>
+  return typeof range.min === 'number' && typeof range.max === 'number'
+    ? { min: range.min, max: range.max }
+    : fallback
 }
 
 export async function getMerchantDetail(merchantId: string) {

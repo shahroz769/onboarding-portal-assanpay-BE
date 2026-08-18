@@ -121,11 +121,11 @@ import type {
 } from './cases.schemas'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -211,6 +211,7 @@ import {
   formatExpiryDate,
   formatExpiryLine,
   getRejectionLabel,
+  resolveCustomWebsiteServerIntegration,
   resolveMerchantEmailRecipient,
   uploadEmailProofFile,
 } from './case-communication-helpers'
@@ -560,9 +561,7 @@ export async function confirmResubmissionEmailManual(
         rejectedFieldLabels,
         rejectedFieldDetails,
         recipient:
-          channel === 'whatsapp'
-            ? row.merchantWhatsappNumber
-            : recipient.email,
+          channel === 'whatsapp' ? row.merchantWhatsappNumber : recipient.email,
         emailRecipient: recipient.email,
         recipientEmailType: recipient.recipientEmailType,
         whatsappRecipient: row.merchantWhatsappNumber,
@@ -878,13 +877,16 @@ export async function getMidCreationEmailPreview(
   }
 
   const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
-  const isShopify = caseRow.websiteCms === 'shopify'
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
   const portalPassword = buildPortalPassword(
     credentials.email,
     caseRow.merchantNumber,
   )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
+  const serverIntegration = resolveCustomWebsiteServerIntegration(
+    caseRow.websiteCms,
+    merchantPortal,
+  )
   const body = buildMidCreationMessageBody({
     merchantName: caseRow.merchantName,
     portalEmail: credentials.email,
@@ -893,11 +895,9 @@ export async function getMidCreationEmailPreview(
     goLiveUrl,
     availableAt: formatEmailDateTime(resolvedAvailableAt),
     goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+    serverIntegration,
+    paymentMethods: credentials.paymentMethods,
     testingLimits: limitsAndMdr.testing,
-    cardRate: isShopify
-      ? `${limitsAndMdr.rates.cardShopify}%`
-      : `${limitsAndMdr.rates.cardDefault}%`,
-    eWalletsRate: `${limitsAndMdr.rates.eWallets}%`,
     payoutRate: `${limitsAndMdr.rates.payout}%`,
     payoutRateLabel,
   })
@@ -1011,6 +1011,7 @@ export async function getLiveActivationEmailPreview(
 ): Promise<LiveActivationEmailPreviewResult> {
   await assertManualEmailEnabled()
   const caseRow = await loadLiveCase(caseId, userId)
+  const credentials = await getMidCreationCredentials(caseRow.merchantId)
   const [limitsAndMdr, merchantPortal] = await Promise.all([
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
@@ -1030,6 +1031,7 @@ export async function getLiveActivationEmailPreview(
     body: buildLiveActivationEmailBody({
       merchantName: caseRow.merchantName,
       merchantPortalUrl: merchantPortal.loginUrl,
+      paymentMethods: credentials?.paymentMethods ?? [],
       liveLimits: limitsAndMdr.live,
     }),
     tokenId: caseId,

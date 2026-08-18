@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
-import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
+import {
+  paymentMethodSettingsSchema,
+  payoutMethodSettingsSchema,
+} from '../configuration/configuration.schemas'
 
 export const caseStatusValues = [
   'new',
@@ -20,9 +23,7 @@ export const caseListStatusFilterValues = [
 export type CaseListStatusFilterValue =
   (typeof caseListStatusFilterValues)[number]
 
-const caseListStatusFilterValueSet = new Set<string>(
-  caseListStatusFilterValues,
-)
+const caseListStatusFilterValueSet = new Set<string>(caseListStatusFilterValues)
 
 // Ordered index for transition validation
 const statusOrder: Record<CaseStatusValue, number> = {
@@ -325,7 +326,9 @@ export type SaveMidCreationDetailsInput = z.infer<
 
 export const sendMidCreationEmailSchema = emailRecipientSelectionSchema.strict()
 
-export type SendMidCreationEmailInput = z.infer<typeof sendMidCreationEmailSchema>
+export type SendMidCreationEmailInput = z.infer<
+  typeof sendMidCreationEmailSchema
+>
 
 export const sendLiveEmailSchema = z
   .object({

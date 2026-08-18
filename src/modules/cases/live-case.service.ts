@@ -121,11 +121,11 @@ import type {
 } from './cases.schemas'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -362,6 +362,7 @@ export async function sendLiveActivationEmail(
   await assertAutoEmailEnabled()
   const db = getDb()
   const caseRow = await loadLiveCase(caseId, userId)
+  const credentials = await getMidCreationCredentials(caseRow.merchantId)
   const [limitsAndMdr, merchantPortal] = await Promise.all([
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
@@ -381,6 +382,7 @@ export async function sendLiveActivationEmail(
     react: LiveActivationEmail({
       merchantName: caseRow.merchantName,
       merchantPortalUrl: merchantPortal.loginUrl,
+      paymentMethods: credentials?.paymentMethods ?? [],
       liveLimits: limitsAndMdr.live,
     }),
     caseId,

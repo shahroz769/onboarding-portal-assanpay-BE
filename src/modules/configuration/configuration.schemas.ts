@@ -31,6 +31,26 @@ export const emailSendingModeSettingsSchema = z
 export const merchantPortalSettingsSchema = z
   .object({
     loginUrl: z.string().trim().url().max(2048),
+    serverBaseUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((value) => value === '' || z.url().safeParse(value).success, {
+        message: 'Enter a valid server base URL.',
+      })
+      .default(''),
+    serverCallbackIp: z
+      .string()
+      .trim()
+      .max(45)
+      .refine(
+        (value) =>
+          value === '' ||
+          z.ipv4().safeParse(value).success ||
+          z.ipv6().safeParse(value).success,
+        { message: 'Enter a valid IPv4 or IPv6 address.' },
+      )
+      .default(''),
     officeAddress: z.string().trim().max(1000).default(''),
     whatsappSupportNumber: z
       .string()
@@ -52,31 +72,57 @@ export const merchantPortalSettingsSchema = z
   })
   .strict()
 
-export const paymentMethodSettingsSchema = z
-  .array(
-    z
-      .object({
-        id: z.string().trim().min(1).max(80),
-        label: z.string().trim().min(1).max(80),
-      })
-      .strict(),
-  )
-  .max(50)
-  .superRefine((methods, ctx) => {
-    const seen = new Set<string>()
-
-    for (const method of methods) {
-      const key = method.label.trim().toLowerCase()
-      if (seen.has(key)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Method names must be unique.',
-          path: ['paymentMethods'],
-        })
-      }
-      seen.add(key)
-    }
+const methodIdentitySchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(1).max(80),
   })
+  .strict()
+
+const collectionMethodLimitSchema = z
+  .object({
+    min: z.coerce.number().min(0),
+    max: z.coerce.number().min(0),
+  })
+  .strict()
+  .refine((value) => value.max >= value.min, {
+    message: 'Maximum must be greater than or equal to minimum.',
+    path: ['max'],
+  })
+
+function uniqueMethodSettingsSchema<T extends z.ZodType<{ label: string }>>(
+  methodSchema: T,
+) {
+  return z
+    .array(methodSchema)
+    .max(50)
+    .superRefine((methods, ctx) => {
+      const seen = new Set<string>()
+
+      for (const method of methods) {
+        const key = method.label.trim().toLowerCase()
+        if (seen.has(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Method names must be unique.',
+            path: ['paymentMethods'],
+          })
+        }
+        seen.add(key)
+      }
+    })
+}
+
+export const paymentMethodSettingsSchema = uniqueMethodSettingsSchema(
+  methodIdentitySchema.extend({
+    testing: collectionMethodLimitSchema,
+    live: collectionMethodLimitSchema,
+    commissionRate: z.coerce.number().min(0).max(100),
+  }),
+)
+
+export const payoutMethodSettingsSchema =
+  uniqueMethodSettingsSchema(methodIdentitySchema)
 
 export const limitsAndMdrSettingsSchema = z
   .object({
@@ -293,6 +339,7 @@ export type MerchantPortalSettings = z.infer<
   typeof merchantPortalSettingsSchema
 >
 export type PaymentMethodSettings = z.infer<typeof paymentMethodSettingsSchema>
+export type PayoutMethodSettings = z.infer<typeof payoutMethodSettingsSchema>
 export type BusinessType = z.infer<typeof businessTypeSchema>
 export type UpdateCaseFlowConfigurationInput = z.infer<
   typeof updateCaseFlowConfigurationSchema
