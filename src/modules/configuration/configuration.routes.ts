@@ -6,6 +6,12 @@ import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
 import {
   getConfigurationOverview,
+  getEmailSendingModeSettings,
+  getLimitsAndMdrSettings,
+  getLinkDeadlineSettings,
+  getMerchantPortalSettings,
+  getPaymentMethodSettings,
+  getPayoutMethodSettings,
   updateEmailSendingModeSettings,
   updateLimitsAndMdrSettings,
   updateLinkDeadlineSettings,
@@ -15,6 +21,7 @@ import {
   uploadAgreementDraft,
   createSubMerchantDraft,
   getCaseFlowConfiguration,
+  listAgreementDrafts,
   listSubMerchantDrafts,
   updateCaseFlowConfiguration,
 } from './configuration.service'
@@ -53,6 +60,38 @@ configurationRoutes.use('*', requireRoles('super_admin', 'admin'))
 
 configurationRoutes.get('/', async (c) => {
   return c.json(await getConfigurationOverview())
+})
+
+configurationRoutes.get('/limits-and-mdr', async (c) => {
+  return c.json(await getLimitsAndMdrSettings())
+})
+
+configurationRoutes.get('/payment-methods', async (c) => {
+  return c.json(await getPaymentMethodSettings())
+})
+
+configurationRoutes.get('/payout-methods', async (c) => {
+  return c.json(await getPayoutMethodSettings())
+})
+
+configurationRoutes.get('/agreements', async (c) => {
+  return c.json(await listAgreementDrafts())
+})
+
+configurationRoutes.get('/sub-merchants/drafts', async (c) => {
+  return c.json(await listSubMerchantDrafts())
+})
+
+configurationRoutes.get('/merchant-portal', async (c) => {
+  return c.json(await getMerchantPortalSettings())
+})
+
+configurationRoutes.get('/link-deadlines', async (c) => {
+  return c.json(await getLinkDeadlineSettings())
+})
+
+configurationRoutes.get('/email-sending-mode', async (c) => {
+  return c.json(await getEmailSendingModeSettings())
 })
 
 configurationRoutes.get('/case-flow', async (c) => {
