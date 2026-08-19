@@ -313,6 +313,7 @@ export const saveMidCreationDetailsSchema = z
       1,
       'Select at least one payment method.',
     ),
+    payoutMethods: payoutMethodSettingsSchema.min(1, 'Select a payout method.'),
   })
   .strict()
   .transform((input) => ({

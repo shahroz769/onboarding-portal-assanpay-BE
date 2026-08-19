@@ -333,6 +333,11 @@ export function buildMidCreationMessageBody(params: {
     testing: { min: number; max: number }
     commissionRate: number
   }>
+  payoutMethods: Array<{
+    label: string
+    testing: { min: number; max: number }
+    commissionRate: number
+  }>
   payoutRate: string
   payoutRateLabel: string
 }): string {
@@ -360,11 +365,11 @@ For your security, update this temporary password after your first login.
 
 Testing Limits:
 ${params.paymentMethods.map((method) => `- ${method.label} collection: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n')}
-- Disbursement: PKR ${params.testingLimits.disbursementMin.toLocaleString()}-${params.testingLimits.disbursementMax.toLocaleString()}
+${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label} payout: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n') : `- Disbursement: PKR ${params.testingLimits.disbursementMin.toLocaleString()}-${params.testingLimits.disbursementMax.toLocaleString()}`}
 
 Rates:
 ${params.paymentMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n')}
-- ${params.payoutRateLabel}: ${params.payoutRate}
+${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n') : `- ${params.payoutRateLabel}: ${params.payoutRate}`}
 
 Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${params.goLiveUrl}
@@ -390,6 +395,12 @@ export function buildLiveActivationEmailBody(params: {
   paymentMethods: Array<{
     label: string
     live: { min: number; max: number }
+    commissionRate: number
+  }>
+  payoutMethods: Array<{
+    label: string
+    live: { min: number; max: number }
+    commissionRate: number
   }>
 }) {
   const { merchantName, merchantPortalUrl, liveLimits } = params
@@ -401,7 +412,10 @@ Merchant Portal Link: ${merchantPortalUrl}
 
 Live Limits Per Transaction
 ${params.paymentMethods.map((method) => `- ${method.label} collection: PKR ${method.live.min.toLocaleString()}-${method.live.max.toLocaleString()}`).join('\n')}
-- Disbursement: PKR ${liveLimits.disbursementMin.toLocaleString()}-${liveLimits.disbursementMax.toLocaleString()}
+${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label} payout: PKR ${method.live.min.toLocaleString()}-${method.live.max.toLocaleString()}`).join('\n') : `- Disbursement: PKR ${liveLimits.disbursementMin.toLocaleString()}-${liveLimits.disbursementMax.toLocaleString()}`}
+
+Applicable Commission
+${[...params.paymentMethods, ...params.payoutMethods].map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n')}
 
 You can use the merchant portal to monitor live activity and manage your AssanPay merchant account.
 

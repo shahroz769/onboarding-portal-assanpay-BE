@@ -383,6 +383,7 @@ export async function sendLiveActivationEmail(
       merchantName: caseRow.merchantName,
       merchantPortalUrl: merchantPortal.loginUrl,
       paymentMethods: credentials?.paymentMethods ?? [],
+      payoutMethods: credentials?.payoutMethods ?? [],
       liveLimits: limitsAndMdr.live,
     }),
     caseId,
@@ -393,6 +394,8 @@ export async function sendLiveActivationEmail(
       recipientEmailType: recipient.recipientEmailType,
       merchantPortalUrl: merchantPortal.loginUrl,
       liveLimits: limitsAndMdr.live,
+      paymentMethods: credentials?.paymentMethods ?? [],
+      payoutMethods: credentials?.payoutMethods ?? [],
     },
   })
 

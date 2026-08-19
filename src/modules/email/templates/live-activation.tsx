@@ -18,6 +18,13 @@ export type LiveActivationEmailProps = {
     id: string
     label: string
     live: { min: number; max: number }
+    commissionRate: number
+  }>
+  payoutMethods?: Array<{
+    id: string
+    label: string
+    live: { min: number; max: number }
+    commissionRate: number
   }>
   liveLimits: {
     collectionMin: number
@@ -31,6 +38,7 @@ export function LiveActivationEmail({
   merchantName,
   merchantPortalUrl,
   paymentMethods = [],
+  payoutMethods = [],
   liveLimits,
 }: LiveActivationEmailProps) {
   return (
@@ -49,11 +57,34 @@ export function LiveActivationEmail({
             value={`${method.live.min.toLocaleString()} - ${method.live.max.toLocaleString()}`}
           />
         ))}
-        <KeyRow
-          label="Disbursement"
-          value={`${liveLimits.disbursementMin.toLocaleString()} - ${liveLimits.disbursementMax.toLocaleString()}`}
-        />
+        {payoutMethods.length > 0 ? (
+          payoutMethods.map((method) => (
+            <KeyRow
+              key={method.id}
+              label={`${method.label} payout`}
+              value={`${method.live.min.toLocaleString()} - ${method.live.max.toLocaleString()}`}
+            />
+          ))
+        ) : (
+          <KeyRow
+            label="Disbursement"
+            value={`${liveLimits.disbursementMin.toLocaleString()} - ${liveLimits.disbursementMax.toLocaleString()}`}
+          />
+        )}
       </Panel>
+
+      {paymentMethods.length > 0 || payoutMethods.length > 0 ? (
+        <Panel tone="plain">
+          <SectionLabel>Applicable commission</SectionLabel>
+          {[...paymentMethods, ...payoutMethods].map((method) => (
+            <KeyRow
+              key={method.id}
+              label={method.label}
+              value={`${method.commissionRate}%`}
+            />
+          ))}
+        </Panel>
+      ) : null}
 
       <Paragraph>
         Please use the merchant portal to monitor live activity and manage your

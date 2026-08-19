@@ -280,9 +280,17 @@ export async function saveMidCreationDetails(
     throw new AppError(400, 'MID details can only be saved in working.')
   }
 
-  const payoutMethods = await getPayoutMethodsForMerchantRole(
+  const configuredPayoutMethods = await getPayoutMethodsForMerchantRole(
     input.merchantRole,
   )
+  const payoutMethods = configuredPayoutMethods.map((method) => {
+    const submittedMethod = input.payoutMethods.find(
+      (submitted) => submitted.id === method.id,
+    )
+    return submittedMethod
+      ? { ...method, commissionRate: submittedMethod.commissionRate }
+      : method
+  })
   const savedAt = new Date()
   await db.insert(caseHistory).values({
     caseId,
@@ -443,6 +451,7 @@ export async function sendMidCreationCredentialsEmail(
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
       serverIntegration,
       paymentMethods: credentials.paymentMethods,
+      payoutMethods: credentials.payoutMethods,
       testingLimits: limitsAndMdr.testing,
       rates: {
         payout: limitsAndMdr.rates.payout,
@@ -461,6 +470,7 @@ export async function sendMidCreationCredentialsEmail(
       portalMid: credentials.portalMid,
       websiteCms: caseRow.websiteCms,
       paymentMethods: credentials.paymentMethods,
+      payoutMethods: credentials.payoutMethods,
       limitsAndMdr,
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
       merchantPortalUrl: merchantPortal.loginUrl,

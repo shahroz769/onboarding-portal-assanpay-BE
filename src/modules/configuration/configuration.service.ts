@@ -155,6 +155,7 @@ async function readPaymentMethodSetting(
   key: string,
   legacyMode: 'collection' | 'disbursement',
 ) {
+  let isLegacyCombinedFallback = false
   let row = await getDb().query.configurationSettings.findFirst({
     where: eq(configurationSettings.key, key),
   })
@@ -163,12 +164,28 @@ async function readPaymentMethodSetting(
     row = await getDb().query.configurationSettings.findFirst({
       where: eq(configurationSettings.key, PAYMENT_METHODS_KEY),
     })
+    isLegacyCombinedFallback = Boolean(row)
   }
 
   if (!row) {
     return legacyMode === 'collection'
       ? defaultPaymentMethodSettings
       : defaultPayoutMethodSettings
+  }
+
+  if (
+    isLegacyCombinedFallback &&
+    (!Array.isArray(row.value) ||
+      !row.value.some(
+        (method) =>
+          method != null &&
+          typeof method === 'object' &&
+          ('collectionEnabled' in method ||
+            'disbursementEnabled' in method ||
+            'key' in method),
+      ))
+  ) {
+    return defaultPayoutMethodSettings
   }
 
   const parser =
@@ -178,8 +195,7 @@ async function readPaymentMethodSetting(
   const parsed = parser.safeParse(row.value)
   if (parsed.success) return parsed.data
 
-  const configuredLimits =
-    legacyMode === 'collection' ? await getLimitsAndMdrSettings() : null
+  const configuredLimits = await getLimitsAndMdrSettings()
 
   const legacyMethods = Array.isArray(row.value) ? row.value : []
   const migrated = legacyMethods.flatMap((method) => {
@@ -198,25 +214,40 @@ async function readPaymentMethodSetting(
         : record.disbursementEnabled !== false
 
     if (!label || !id || !enabled) return []
-    if (!configuredLimits) return [{ id, label }]
+    const testingFallback =
+      legacyMode === 'collection'
+        ? {
+            min: configuredLimits.testing.collectionMin,
+            max: configuredLimits.testing.collectionMax,
+          }
+        : {
+            min: configuredLimits.testing.disbursementMin,
+            max: configuredLimits.testing.disbursementMax,
+          }
+    const liveFallback =
+      legacyMode === 'collection'
+        ? {
+            min: configuredLimits.live.collectionMin,
+            max: configuredLimits.live.collectionMax,
+          }
+        : {
+            min: configuredLimits.live.disbursementMin,
+            max: configuredLimits.live.disbursementMax,
+          }
     return [
       {
         id,
         label,
-        testing: readLegacyCollectionRange(record.testing, {
-          min: configuredLimits.testing.collectionMin,
-          max: configuredLimits.testing.collectionMax,
-        }),
-        live: readLegacyCollectionRange(record.live, {
-          min: configuredLimits.live.collectionMin,
-          max: configuredLimits.live.collectionMax,
-        }),
+        testing: readLegacyCollectionRange(record.testing, testingFallback),
+        live: readLegacyCollectionRange(record.live, liveFallback),
         commissionRate:
           typeof record.commissionRate === 'number'
             ? record.commissionRate
-            : /card/i.test(label)
-              ? configuredLimits.rates.cardDefault
-              : configuredLimits.rates.eWallets,
+            : legacyMode === 'disbursement'
+              ? configuredLimits.rates.payout
+              : /card/i.test(label)
+                ? configuredLimits.rates.cardDefault
+                : configuredLimits.rates.eWallets,
       },
     ]
   })

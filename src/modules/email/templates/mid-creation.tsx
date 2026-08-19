@@ -30,6 +30,12 @@ export type MidCreationEmailProps = {
     testing: { min: number; max: number }
     commissionRate: number
   }>
+  payoutMethods?: Array<{
+    id: string
+    label: string
+    testing: { min: number; max: number }
+    commissionRate: number
+  }>
   testingLimits?: {
     collectionMin: number
     collectionMax: number
@@ -52,6 +58,7 @@ export function MidCreationEmail({
   goLiveAvailabilityHours = 72,
   serverIntegration = null,
   paymentMethods = [],
+  payoutMethods = [],
   testingLimits = {
     collectionMin: 10,
     collectionMax: 100,
@@ -107,10 +114,20 @@ export function MidCreationEmail({
             value={`${method.testing.min.toLocaleString()} – ${method.testing.max.toLocaleString()}`}
           />
         ))}
-        <KeyRow
-          label="Disbursement"
-          value={`${testingLimits.disbursementMin.toLocaleString()} – ${testingLimits.disbursementMax.toLocaleString()}`}
-        />
+        {payoutMethods.length > 0 ? (
+          payoutMethods.map((method) => (
+            <KeyRow
+              key={method.id}
+              label={`${method.label} payout`}
+              value={`${method.testing.min.toLocaleString()} – ${method.testing.max.toLocaleString()}`}
+            />
+          ))
+        ) : (
+          <KeyRow
+            label="Disbursement"
+            value={`${testingLimits.disbursementMin.toLocaleString()} – ${testingLimits.disbursementMax.toLocaleString()}`}
+          />
+        )}
       </Panel>
 
       <Panel tone="plain">
@@ -122,10 +139,20 @@ export function MidCreationEmail({
             value={`${method.commissionRate}%`}
           />
         ))}
-        <KeyRow
-          label={rates.payoutLabel ?? 'Payout'}
-          value={`${rates.payout}%`}
-        />
+        {payoutMethods.length > 0 ? (
+          payoutMethods.map((method) => (
+            <KeyRow
+              key={method.id}
+              label={method.label}
+              value={`${method.commissionRate}%`}
+            />
+          ))
+        ) : (
+          <KeyRow
+            label={rates.payoutLabel ?? 'Payout'}
+            value={`${rates.payout}%`}
+          />
+        )}
       </Panel>
 
       <Divider />

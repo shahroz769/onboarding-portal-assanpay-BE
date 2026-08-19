@@ -1077,7 +1077,10 @@ async function getLatestMidCreationMethods(merchantId: string) {
       : parseLegacyMethodSettings(details?.paymentMethods, 'collection'),
     payoutMethods: payoutMethods.success
       ? payoutMethods.data
-      : parseLegacyMethodSettings(details?.paymentMethods, 'disbursement'),
+      : parseLegacyMethodSettings(
+          details?.payoutMethods ?? details?.paymentMethods,
+          'disbursement',
+        ),
   }
 }
 
@@ -1123,7 +1126,24 @@ function parseLegacyMethodSettings(
                   : 2.5,
           },
         ]
-      : [{ id, label }]
+      : [
+          {
+            id,
+            label,
+            testing: readLegacyMethodRange(record.testing, {
+              min: 1000,
+              max: 50000,
+            }),
+            live: readLegacyMethodRange(record.live, {
+              min: 1000,
+              max: 50000,
+            }),
+            commissionRate:
+              typeof record.commissionRate === 'number'
+                ? record.commissionRate
+                : 0,
+          },
+        ]
   })
   const parser =
     mode === 'collection'
