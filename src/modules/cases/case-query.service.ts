@@ -1020,12 +1020,16 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       merchantRole: isQueueWorkflowType(queue, 'mid')
         ? (midCreationCredentials?.merchantRole ?? null)
         : null,
-      paymentMethods: isQueueWorkflowType(queue, 'mid')
-        ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
-        : null,
-      payoutMethods: isQueueWorkflowType(queue, 'mid')
-        ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
-        : null,
+      paymentMethods:
+        isQueueWorkflowType(queue, 'mid') ||
+        isQueueWorkflowType(queue, 'testing')
+          ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
+          : null,
+      payoutMethods:
+        isQueueWorkflowType(queue, 'mid') ||
+        isQueueWorkflowType(queue, 'testing')
+          ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
+          : null,
     },
     midConfiguration: isQueueWorkflowType(queue, 'mid')
       ? {
