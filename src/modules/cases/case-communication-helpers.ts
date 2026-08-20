@@ -75,6 +75,18 @@ export function resolveCustomWebsiteServerIntegration(
   }
 }
 
+export function getMerchantIntegrationGuideLabel(websiteCms: string) {
+  switch (websiteCms) {
+    case 'wordpress':
+      return 'WordPress'
+    case 'shopify':
+      return 'Shopify'
+    case 'custom_website':
+    default:
+      return 'Custom Website'
+  }
+}
+
 // ─── Email mode guards ────────────────────────────────────────────────────────
 
 export async function assertAutoEmailEnabled(): Promise<void> {
@@ -338,6 +350,7 @@ export function buildMidCreationMessageBody(params: {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours: number | null
+  integrationGuideLabel: string
   serverIntegration?: ServerIntegrationDetails | null
   testingLimits: {
     collectionMin: number
@@ -380,6 +393,9 @@ Custom Website Server Integration:
 
 For your security, update this temporary password after your first login.
 
+Integration Documentation:
+The ${params.integrationGuideLabel} integration guide is available in the Documentation section of the merchant portal.
+
 Testing Limits:
 ${params.paymentMethods.map((method) => `- ${method.label} collection: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n')}
 ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label} payout: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n') : `- Disbursement: PKR ${params.testingLimits.disbursementMin.toLocaleString()}-${params.testingLimits.disbursementMax.toLocaleString()}`}
@@ -387,6 +403,11 @@ ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${me
 Rates:
 ${params.paymentMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n')}
 ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n') : `- ${params.payoutRateLabel}: ${params.payoutRate}`}
+
+Testing Instructions:
+- Perform low-amount tests only across every enabled collection and disbursement method.
+- After testing, withdraw your balance.
+- Settlement is T+2 and is processed at 12:00 AM after each 48-hour period.
 
 Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${params.goLiveUrl}

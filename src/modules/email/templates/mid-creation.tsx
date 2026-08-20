@@ -20,6 +20,7 @@ export type MidCreationEmailProps = {
   goLiveUrl: string
   availableAt: string
   goLiveAvailabilityHours?: number | null
+  integrationGuideLabel: string
   serverIntegration?: {
     baseUrl: string
     callbackIp: string
@@ -56,6 +57,7 @@ export function MidCreationEmail({
   goLiveUrl,
   availableAt,
   goLiveAvailabilityHours = 72,
+  integrationGuideLabel,
   serverIntegration = null,
   paymentMethods = [],
   payoutMethods = [],
@@ -74,7 +76,6 @@ export function MidCreationEmail({
     <EmailShell
       preview={`Your AssanPay merchant portal is ready — ${merchantName}`}
       eyebrow="Merchant portal access"
-      title="Your testing environment is live"
       intro={`Welcome aboard, ${merchantName}. Your AssanPay merchant testing environment has been provisioned — sign in to start running test transactions.`}
     >
       <Panel tone="cream">
@@ -99,9 +100,20 @@ export function MidCreationEmail({
         </Panel>
       ) : null}
 
+      <Panel tone="plain">
+        <SectionLabel>Merchant portal</SectionLabel>
+        <KeyRow label="Login URL" value={merchantPortalUrl} />
+      </Panel>
+
       <ButtonRow>
         <CTAButton href={merchantPortalUrl}>Open merchant portal</CTAButton>
       </ButtonRow>
+
+      <Paragraph>
+        The <strong>{integrationGuideLabel}</strong> integration guide is
+        available in the <strong>Documentation</strong> section of the merchant
+        portal.
+      </Paragraph>
 
       <Divider />
 
@@ -129,6 +141,12 @@ export function MidCreationEmail({
           />
         )}
       </Panel>
+
+      <Paragraph>
+        Perform low-amount tests only across every enabled collection and
+        disbursement method. After testing, withdraw your balance. Settlement is
+        T+2 and is processed at 12:00 AM after each 48-hour period.
+      </Paragraph>
 
       <Panel tone="plain">
         <SectionLabel>Applicable rates</SectionLabel>
@@ -195,6 +213,7 @@ MidCreationEmail.PreviewProps = {
   goLiveUrl: 'https://app.example.com/onboarding-form/go-live/abc123',
   availableAt: 'May 8, 2026, 12:00 PM',
   goLiveAvailabilityHours: 72,
+  integrationGuideLabel: 'Custom Website',
 } satisfies MidCreationEmailProps
 
 export default MidCreationEmail

@@ -28,7 +28,7 @@ export const kinRelations = [
   'father',
   'brother',
   'sister',
-  'wife',
+  'spouse',
   'son',
   'daughter',
 ] as const

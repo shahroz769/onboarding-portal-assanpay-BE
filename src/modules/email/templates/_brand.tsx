@@ -59,7 +59,7 @@ const GOOGLE_FONTS_HREF =
 export type EmailShellProps = {
   preview: string
   eyebrow: string
-  title: string
+  title?: string
   intro?: string
   children: ReactNode
 }
@@ -144,20 +144,22 @@ export function EmailShell({
             >
               {eyebrow}
             </Text>
-            <Text
-              style={{
-                margin: 0,
-                fontFamily: fontStack.display,
-                fontWeight: 800,
-                fontOpticalSizing: 'auto',
-                fontSize: '32px',
-                lineHeight: 1.1,
-                letterSpacing: '-0.02em',
-                color: brand.ink,
-              }}
-            >
-              {title}
-            </Text>
+            {title ? (
+              <Text
+                style={{
+                  margin: 0,
+                  fontFamily: fontStack.display,
+                  fontWeight: 800,
+                  fontOpticalSizing: 'auto',
+                  fontSize: '32px',
+                  lineHeight: 1.1,
+                  letterSpacing: '-0.02em',
+                  color: brand.ink,
+                }}
+              >
+                {title}
+              </Text>
+            ) : null}
             {intro ? (
               <Text
                 style={{

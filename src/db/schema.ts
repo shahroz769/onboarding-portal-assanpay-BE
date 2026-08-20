@@ -70,7 +70,7 @@ export const kinRelationEnum = pgEnum('kin_relation', [
   'father',
   'brother',
   'sister',
-  'wife',
+  'spouse',
   'son',
   'daughter',
 ])

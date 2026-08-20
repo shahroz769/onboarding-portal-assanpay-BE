@@ -210,6 +210,7 @@ import {
   formatEmailDateTime,
   formatExpiryDate,
   formatExpiryLine,
+  getMerchantIntegrationGuideLabel,
   getRejectionLabel,
   resolveCustomWebsiteServerIntegration,
   resolveMerchantEmailRecipient,
@@ -448,6 +449,9 @@ export async function sendMidCreationCredentialsEmail(
       goLiveUrl,
       availableAt: formatEmailDateTime(availableAt),
       goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
+      integrationGuideLabel: getMerchantIntegrationGuideLabel(
+        caseRow.websiteCms,
+      ),
       serverIntegration,
       paymentMethods: credentials.paymentMethods,
       payoutMethods: credentials.payoutMethods,
@@ -526,6 +530,38 @@ export type MidGoLiveContext = {
   availableAt: string
   availableInHours: number
   liveCaseNumber: string | null
+  testingMethods: MidGoLiveTestingMethod[]
+}
+
+export type MidGoLiveTestingMethod = {
+  key: string
+  label: string
+  type: 'collection' | 'disbursement'
+}
+
+function getMidGoLiveTestingMethods(
+  credentials: MidCreationCredentials,
+): MidGoLiveTestingMethod[] {
+  return [
+    ...credentials.paymentMethods.map((method) => ({
+      key: `collection:${method.id}`,
+      label: method.label,
+      type: 'collection' as const,
+    })),
+    ...(credentials.payoutMethods.length > 0
+      ? credentials.payoutMethods.map((method) => ({
+          key: `disbursement:${method.id}`,
+          label: method.label,
+          type: 'disbursement' as const,
+        }))
+      : [
+          {
+            key: 'disbursement:default',
+            label: 'Disbursement',
+            type: 'disbursement' as const,
+          },
+        ]),
+  ]
 }
 
 export async function getMidGoLiveContext(
@@ -542,6 +578,7 @@ export async function getMidGoLiveContext(
       createdAt: midGoLiveTokens.createdAt,
       midCaseNumber: cases.caseNumber,
       merchantName: merchants.businessName,
+      merchantId: merchants.id,
     })
     .from(midGoLiveTokens)
     .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
@@ -572,6 +609,11 @@ export async function getMidGoLiveContext(
         columns: { caseNumber: true },
       })
     : null
+  const credentials = await getMidCreationCredentials(row.merchantId)
+
+  if (!credentials) {
+    throw new AppError(409, 'Merchant testing methods are not configured.')
+  }
 
   return {
     status: isStarted ? 'started' : isReady ? 'ready' : 'not_ready',
@@ -580,10 +622,14 @@ export async function getMidGoLiveContext(
     availableAt: row.availableAt.toISOString(),
     availableInHours,
     liveCaseNumber: liveCase?.caseNumber ?? null,
+    testingMethods: getMidGoLiveTestingMethods(credentials),
   }
 }
 
-export async function activateMidGoLive(token: string) {
+export async function activateMidGoLive(
+  token: string,
+  input: { testedMethodKeys: string[] },
+) {
   const db = getDb()
   const tokenHash = await hashToken(token)
 
@@ -644,6 +690,29 @@ export async function activateMidGoLive(token: string) {
       throw new AppError(
         425,
         `This Go-Live link works after ${formatEmailDateTime(tokenRow.availableAt)}.`,
+      )
+    }
+
+    const credentials = await getMidCreationCredentials(tokenRow.merchantId)
+    if (!credentials) {
+      throw new AppError(409, 'Merchant testing methods are not configured.')
+    }
+
+    const testingMethods = getMidGoLiveTestingMethods(credentials)
+    const expectedMethodKeys = new Set(
+      testingMethods.map((method) => method.key),
+    )
+    const testedMethodKeys = new Set(input.testedMethodKeys)
+    const allMethodsTested =
+      expectedMethodKeys.size > 0 &&
+      testedMethodKeys.size === input.testedMethodKeys.length &&
+      testedMethodKeys.size === expectedMethodKeys.size &&
+      [...expectedMethodKeys].every((key) => testedMethodKeys.has(key))
+
+    if (!allMethodsTested) {
+      throw new AppError(
+        400,
+        'Confirm that every enabled collection and disbursement method was tested before going live.',
       )
     }
 
@@ -771,6 +840,7 @@ export async function activateMidGoLive(token: string) {
         tokenId: tokenRow.id,
         liveCaseId,
         liveCaseNumber,
+        testedMethods: testingMethods,
       },
     })
 
