@@ -230,7 +230,6 @@ import {
   validateWordpressScreenshotFile,
 } from './case-upload-validation'
 import { generateCaseNumber } from './case-number'
-import { ensurePhysicalAgreementCaseForMerchant } from './physical-agreement-case.service'
 
 export async function saveMidCreationDetails(
   caseId: string,
@@ -483,16 +482,6 @@ export async function sendMidCreationCredentialsEmail(
       .update(midGoLiveTokens)
       .set({ consumedAt: new Date() })
       .where(eq(midGoLiveTokens.id, tokenRow.id))
-  }
-
-  if (emailResult.status === 'sent') {
-    await db.transaction((tx) =>
-      ensurePhysicalAgreementCaseForMerchant(tx, {
-        merchantId: caseRow.merchantId,
-        parentCaseId: caseId,
-        sourceQueueId: caseRow.queueId,
-      }),
-    )
   }
 
   await db.insert(caseHistory).values({

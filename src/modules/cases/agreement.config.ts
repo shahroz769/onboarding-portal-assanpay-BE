@@ -1,6 +1,7 @@
 export const AGREEMENT_QUEUE_SLUG = 'agreement'
 export const AGREEMENT_FINAL_FILE_KIND = 'agreement_final'
-export const AGREEMENT_CLIENT_FILE_KIND = 'agreement_client_submission'
+export const AGREEMENT_RECEIVED_FILE_KIND = 'agreement_received_scan'
+export const AGREEMENT_CLIENT_FILE_KIND = AGREEMENT_RECEIVED_FILE_KIND
 
 export const AGREEMENT_DRAFTS = {
   company: {

@@ -126,12 +126,12 @@ import type {
   UpdateCaseStatusInput,
 } from './cases.schemas'
 import {
-  AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_RECEIVED_FILE_KIND,
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -256,10 +256,7 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       )
     }
 
-    const selectedSubMerchant = isQueueWorkflowType(
-      queue,
-      'sub_merchant_form',
-    )
+    const selectedSubMerchant = isQueueWorkflowType(queue, 'sub_merchant_form')
       ? input.subMerchantId
         ? await tx.query.subMerchantDraftTemplates.findFirst({
             where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
@@ -703,6 +700,8 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             emailSentAt: agreementCaseDetails.emailSentAt,
             emailRecipient: agreementCaseDetails.emailRecipient,
             lastRejectionRemarks: agreementCaseDetails.lastRejectionRemarks,
+            receivedAgreementFileId:
+              agreementCaseDetails.receivedAgreementFileId,
             finalAgreementId: caseFiles.id,
             finalAgreementOriginalName: caseFiles.originalName,
             finalAgreementMimeType: caseFiles.mimeType,
@@ -746,15 +745,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     needsMidCredentials
       ? getMidCreationCredentials(caseData.merchantId)
       : Promise.resolve(null),
-    workflowType === 'mid'
-      ? getLimitsAndMdrSettings()
-      : Promise.resolve(null),
-    workflowType === 'mid'
-      ? getPaymentMethodSettings()
-      : Promise.resolve([]),
-    workflowType === 'mid'
-      ? getPayoutMethodSettings()
-      : Promise.resolve([]),
+    workflowType === 'mid' ? getLimitsAndMdrSettings() : Promise.resolve(null),
+    workflowType === 'mid' ? getPaymentMethodSettings() : Promise.resolve([]),
+    workflowType === 'mid' ? getPayoutMethodSettings() : Promise.resolve([]),
   ])
 
   if (!merchantRow) {
@@ -831,57 +824,46 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     }
 
     agreementRecord = {
-          businessType: createdAgreement.businessType,
-          draftKey: createdAgreement.draftKey,
-          draftLabel: createdAgreement.draftLabel,
-          draftUrl: createdAgreement.draftUrl,
-          emailStatus: createdAgreement.emailStatus,
-          emailLogId: createdAgreement.emailLogId,
-          emailSentAt: createdAgreement.emailSentAt,
-          emailRecipient: createdAgreement.emailRecipient,
-          lastRejectionRemarks: createdAgreement.lastRejectionRemarks,
-          finalAgreementId: null,
-          finalAgreementOriginalName: null,
-          finalAgreementMimeType: null,
-          finalAgreementSizeBytes: null,
-          finalAgreementGoogleDriveWebViewLink: null,
-          finalAgreementGoogleDriveDownloadLink: null,
-          finalAgreementCreatedAt: null,
-        }
+      businessType: createdAgreement.businessType,
+      draftKey: createdAgreement.draftKey,
+      draftLabel: createdAgreement.draftLabel,
+      draftUrl: createdAgreement.draftUrl,
+      emailStatus: createdAgreement.emailStatus,
+      emailLogId: createdAgreement.emailLogId,
+      emailSentAt: createdAgreement.emailSentAt,
+      emailRecipient: createdAgreement.emailRecipient,
+      lastRejectionRemarks: createdAgreement.lastRejectionRemarks,
+      receivedAgreementFileId: null,
+      finalAgreementId: null,
+      finalAgreementOriginalName: null,
+      finalAgreementMimeType: null,
+      finalAgreementSizeBytes: null,
+      finalAgreementGoogleDriveWebViewLink: null,
+      finalAgreementGoogleDriveDownloadLink: null,
+      finalAgreementCreatedAt: null,
+    }
   }
 
-  const clientAgreement = agreementRecord
+  const receivedAgreement = agreementRecord?.receivedAgreementFileId
     ? await db.query.caseFiles.findFirst({
-        where: and(
-          eq(caseFiles.caseId, caseId),
-          eq(caseFiles.fileKind, AGREEMENT_CLIENT_FILE_KIND),
-        ),
+        where: eq(caseFiles.id, agreementRecord.receivedAgreementFileId),
       })
     : null
-  const physicalAgreement =
-    isQueueWorkflowType(queue, 'physical_agreement')
-      ? await db.query.caseFiles.findFirst({
-          where: and(
-            eq(caseFiles.caseId, caseId),
-            eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
-          ),
-        })
-      : null
-  const documentReviewDetail =
-    isQueueWorkflowType(queue, 'wordpress')
-      ? merchantDocumentReviewDetail
-      : caseDocumentReviewDetail
-  const resolvedWordpressWebsiteDetails =
-    isQueueWorkflowType(queue, 'sub_merchant_form')
-      ? (merchantWordpressWebsiteDetails ?? wordpressWebsiteDetails)
-      : wordpressWebsiteDetails
-  const subMerchantFormRecord =
-    isQueueWorkflowType(queue, 'sub_merchant_form')
-      ? await ensureInheritedSubMerchantFormDetails({
-          caseId,
-          merchantId: caseData.merchantId,
-        })
-      : subMerchantForm
+  const documentReviewDetail = isQueueWorkflowType(queue, 'wordpress')
+    ? merchantDocumentReviewDetail
+    : caseDocumentReviewDetail
+  const resolvedWordpressWebsiteDetails = isQueueWorkflowType(
+    queue,
+    'sub_merchant_form',
+  )
+    ? (merchantWordpressWebsiteDetails ?? wordpressWebsiteDetails)
+    : wordpressWebsiteDetails
+  const subMerchantFormRecord = isQueueWorkflowType(queue, 'sub_merchant_form')
+    ? await ensureInheritedSubMerchantFormDetails({
+        caseId,
+        merchantId: caseData.merchantId,
+      })
+    : subMerchantForm
 
   return {
     case: {
@@ -972,29 +954,19 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
                 createdAt: agreementRecord.finalAgreementCreatedAt,
               }
             : null,
-          clientAgreement: clientAgreement
+          receivedAgreement: receivedAgreement
             ? {
-                id: clientAgreement.id,
-                originalName: clientAgreement.originalName,
-                mimeType: clientAgreement.mimeType,
-                sizeBytes: clientAgreement.sizeBytes,
-                googleDriveWebViewLink: clientAgreement.googleDriveWebViewLink,
+                id: receivedAgreement.id,
+                originalName: receivedAgreement.originalName,
+                mimeType: receivedAgreement.mimeType,
+                sizeBytes: receivedAgreement.sizeBytes,
+                googleDriveWebViewLink:
+                  receivedAgreement.googleDriveWebViewLink,
                 googleDriveDownloadLink:
-                  clientAgreement.googleDriveDownloadLink,
-                createdAt: clientAgreement.createdAt,
+                  receivedAgreement.googleDriveDownloadLink,
+                createdAt: receivedAgreement.createdAt,
               }
             : null,
-        }
-      : null,
-    physicalAgreement: physicalAgreement
-      ? {
-          id: physicalAgreement.id,
-          originalName: physicalAgreement.originalName,
-          mimeType: physicalAgreement.mimeType,
-          sizeBytes: physicalAgreement.sizeBytes,
-          googleDriveWebViewLink: physicalAgreement.googleDriveWebViewLink,
-          googleDriveDownloadLink: physicalAgreement.googleDriveDownloadLink,
-          createdAt: physicalAgreement.createdAt,
         }
       : null,
     latestResubmissionRequestedAt:
@@ -1011,36 +983,32 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       credentialsReady: isQueueWorkflowType(queue, 'mid')
         ? Boolean(
             midCreationCredentials?.branchCode.trim() &&
-              midCreationCredentials.internalEmail.trim() &&
-              midCreationCredentials.internalBranchCode.trim(),
+            midCreationCredentials.internalEmail.trim() &&
+            midCreationCredentials.internalBranchCode.trim(),
           )
         : Boolean(midCreationCredentials),
-      portalMid:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.portalMid ?? null)
-          : null,
+      portalMid: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.portalMid ?? null)
+        : null,
       internalPortalMid:
         isQueueWorkflowType(queue, 'mid') ||
         isQueueWorkflowType(queue, 'wordpress')
           ? (midCreationCredentials?.internalPortalMid ?? null)
           : null,
-      email:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.email ?? null)
-          : null,
-      branchCode:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.branchCode ?? null)
-          : null,
+      email: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.email ?? null)
+        : null,
+      branchCode: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.branchCode ?? null)
+        : null,
       internalEmail:
         isQueueWorkflowType(queue, 'mid') ||
         isQueueWorkflowType(queue, 'wordpress')
           ? (midCreationCredentials?.internalEmail ?? null)
           : null,
-      internalBranchCode:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.internalBranchCode ?? null)
-          : null,
+      internalBranchCode: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.internalBranchCode ?? null)
+        : null,
       internalLimitsAppliedAt:
         internalPortalMidLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
       internalLimitsAppliedBy: internalPortalMidLimitsAppliedEntry?.actorId
@@ -1049,18 +1017,15 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             name: internalPortalMidLimitsAppliedEntry.actorName ?? 'Unknown',
           }
         : null,
-      merchantRole:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.merchantRole ?? null)
-          : null,
-      paymentMethods:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
-          : null,
-      payoutMethods:
-        isQueueWorkflowType(queue, 'mid')
-          ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
-          : null,
+      merchantRole: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.merchantRole ?? null)
+        : null,
+      paymentMethods: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
+        : null,
+      payoutMethods: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
+        : null,
     },
     midConfiguration: isQueueWorkflowType(queue, 'mid')
       ? {

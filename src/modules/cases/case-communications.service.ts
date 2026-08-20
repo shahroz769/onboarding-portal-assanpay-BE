@@ -232,7 +232,6 @@ import { loadAgreementCase } from './agreement-case.service'
 import { generatePublicTokenString } from './case-public-token'
 import { loadLiveCase } from './live-case.service'
 import { loadMidCreationCase } from './mid-case.service'
-import { ensurePhysicalAgreementCaseForMerchant } from './physical-agreement-case.service'
 
 export type ResubmissionEmailPreviewResult = {
   recipient: string
@@ -582,8 +581,6 @@ export type AgreementEmailPreviewResult = {
   recipient: string
   subject: string
   body: string
-  tokenId: string
-  tokenExpiresAt: string
 }
 
 export async function getAgreementEmailPreview(
@@ -596,9 +593,7 @@ export async function getAgreementEmailPreview(
 ): Promise<AgreementEmailPreviewResult> {
   await assertManualEmailEnabled()
   const db = getDb()
-  const caseRow = await loadAgreementCase(caseId, userId, {
-    allowAwaitingClient: true,
-  })
+  const caseRow = await loadAgreementCase(caseId, userId)
 
   const recipient = resolveMerchantEmailRecipient(
     {
@@ -615,40 +610,36 @@ export async function getAgreementEmailPreview(
     throw new AppError(400, 'Upload the Final Agreement before sending mail.')
   }
 
-  const remarks = input.remarks?.trim() || null
-  if (details.clientAgreementFileId && !remarks) {
+  const finalAgreement = await db.query.caseFiles.findFirst({
+    where: eq(caseFiles.id, details.finalAgreementFileId),
+  })
+  if (!finalAgreement) {
+    throw new AppError(400, 'The Final Agreement file could not be found.')
+  }
+  const merchantPortal = await getMerchantPortalSettings()
+  const officeAddress = merchantPortal.officeAddress.trim()
+  const legalEmail = merchantPortal.legalEmail.trim()
+  if (!officeAddress) {
     throw new AppError(
       400,
-      'Remarks are required when asking the client to resubmit the agreement.',
+      'Configure the office address before sending the Agreement email.',
+    )
+  }
+  if (!legalEmail) {
+    throw new AppError(
+      400,
+      'Configure the legal email before sending the Agreement email.',
     )
   }
 
-  const linkDeadlines = await getLinkDeadlineSettings()
-  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
-  const existingToken = await db.query.caseResubmissionTokens.findFirst({
-    where: and(
-      eq(caseResubmissionTokens.caseId, caseId),
-      isNull(caseResubmissionTokens.consumedAt),
-      gt(caseResubmissionTokens.expiresAt, minExpiry),
-    ),
-    orderBy: [desc(caseResubmissionTokens.createdAt)],
-  })
-
-  const issued = existingToken?.token
-    ? {
-        token: existingToken.token,
-        tokenId: existingToken.id,
-        expiresAt: existingToken.expiresAt,
-      }
-    : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
-
-  const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
-  const subject = `Agreement for ${caseRow.merchantName}`
+  const remarks = input.remarks?.trim() || null
+  const subject = `AssanPay Agreement for ${caseRow.merchantName}`
   const body = buildAgreementEmailBody({
     merchantName: caseRow.merchantName,
     ownerName: caseRow.merchantOwnerName,
-    agreementUrl,
-    expiresAt: formatExpiryDate(issued.expiresAt),
+    agreementUrl: finalAgreement.googleDriveWebViewLink,
+    officeAddress,
+    legalEmail,
     remarks,
   })
 
@@ -656,8 +647,6 @@ export async function getAgreementEmailPreview(
     recipient: recipient.email,
     subject,
     body,
-    tokenId: issued.tokenId,
-    tokenExpiresAt: issued.expiresAt.toISOString(),
   }
 }
 
@@ -665,7 +654,6 @@ export async function confirmAgreementEmailManual(
   caseId: string,
   userId: string,
   input: {
-    tokenId: string
     remarks?: string | null
     file: File
     channel?: ManualCommunicationChannel
@@ -677,9 +665,7 @@ export async function confirmAgreementEmailManual(
   await validateEmailProofFile(input.file)
   const channel = input.channel ?? 'email'
 
-  const caseRow = await loadAgreementCase(caseId, userId, {
-    allowAwaitingClient: channel === 'whatsapp',
-  })
+  const caseRow = await loadAgreementCase(caseId, userId)
   const recipient = resolveMerchantEmailRecipient(
     {
       submitterEmail: caseRow.merchantSubmitterEmail,
@@ -695,15 +681,6 @@ export async function confirmAgreementEmailManual(
     throw new AppError(400, 'Upload the Final Agreement before confirming.')
   }
 
-  const tokenRow = await db.query.caseResubmissionTokens.findFirst({
-    where: and(
-      eq(caseResubmissionTokens.id, input.tokenId),
-      eq(caseResubmissionTokens.caseId, caseId),
-      isNull(caseResubmissionTokens.consumedAt),
-    ),
-  })
-  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
-
   const awaitingStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseRow.queueId),
@@ -713,21 +690,17 @@ export async function confirmAgreementEmailManual(
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_client stage configured.')
 
-  if (caseRow.status === 'working') {
-    const [reservedCase] = await db
-      .update(cases)
-      .set({
-        status: 'awaiting_client',
-        currentStageId: awaitingStage.id,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-      .returning({ id: cases.id })
-    if (!reservedCase)
-      throw new AppError(409, 'This case has already been sent to the client.')
-  } else if (channel !== 'whatsapp' || caseRow.status !== 'awaiting_client') {
-    throw new AppError(400, 'The case must be in the working stage.')
-  }
+  const [reservedCase] = await db
+    .update(cases)
+    .set({
+      status: 'awaiting_client',
+      currentStageId: awaitingStage.id,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
+    .returning({ id: cases.id })
+  if (!reservedCase)
+    throw new AppError(409, 'This case has already been sent to the client.')
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
@@ -764,8 +737,6 @@ export async function confirmAgreementEmailManual(
           ? 'agreement_whatsapp_sent_manual'
           : 'agreement_email_sent_manual',
       details: {
-        tokenId: input.tokenId,
-        expiresAt: tokenRow.expiresAt.toISOString(),
         recipient: recipient.email,
         recipientEmailType: recipient.recipientEmailType,
         remarks,
@@ -985,14 +956,6 @@ export async function confirmMidCreationEmailManual(
     },
     createdAt: now,
   })
-
-  await db.transaction((tx) =>
-    ensurePhysicalAgreementCaseForMerchant(tx, {
-      merchantId: caseRow.merchantId,
-      parentCaseId: caseId,
-      sourceQueueId: caseRow.queueId,
-    }),
-  )
 
   return { status: 'sent', fileId: savedFile.id }
 }

@@ -43,7 +43,7 @@ import {
   paymentMethodSettingsSchema,
   payoutMethodSettingsSchema,
 } from '../configuration/configuration.schemas'
-import { AGREEMENT_CLIENT_FILE_KIND } from '../cases/agreement.config'
+import { AGREEMENT_RECEIVED_FILE_KIND } from '../cases/agreement.config'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
@@ -85,8 +85,6 @@ type UploadedDocumentRecord = {
   googleDriveDownloadLink: string | null
   googleDriveFolderId: string
 }
-
-const PHYSICAL_AGREEMENT_FILE_KIND = 'physical_agreement_scanned_copy'
 
 const priorityValueSet = new Set<string>(priorityValues)
 const businessScopeValueSet = new Set<string>(businessScopeValues)
@@ -1177,123 +1175,95 @@ export async function getMerchantDetail(merchantId: string) {
 
   const owner = aliasedTable(users, 'history_actor')
 
-  const [
-    documents,
-    merchantCases,
-    timeline,
-    clientAgreement,
-    physicalAgreement,
-  ] = await Promise.all([
-    db
-      .select({
-        id: merchantDocuments.id,
-        documentType: merchantDocuments.documentType,
-        originalName: merchantDocuments.originalName,
-        mimeType: merchantDocuments.mimeType,
-        sizeBytes: merchantDocuments.sizeBytes,
-        status: merchantDocuments.status,
-        googleDriveWebViewLink: merchantDocuments.googleDriveWebViewLink,
-        googleDriveDownloadLink: merchantDocuments.googleDriveDownloadLink,
-        createdAt: merchantDocuments.createdAt,
-      })
-      .from(merchantDocuments)
-      .where(eq(merchantDocuments.merchantId, merchantId))
-      .orderBy(asc(merchantDocuments.createdAt)),
-    db
-      .select({
-        id: cases.id,
-        caseNumber: cases.caseNumber,
-        queueId: cases.queueId,
-        queueName: queues.name,
-        queueSlaHours: queues.slaHours,
-        stageName: queueStages.name,
-        stageCategory: queueStages.category,
-        status: cases.status,
-        priority: cases.priority,
-        closeOutcome: cases.closeOutcome,
-        closeReason: cases.closeReason,
-        slaBreached: cases.slaBreached,
-        ownerId: cases.ownerId,
-        ownerName: users.name,
-        closedAt: cases.closedAt,
-        createdAt: cases.createdAt,
-        updatedAt: cases.updatedAt,
-      })
-      .from(cases)
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
-      .leftJoin(users, eq(cases.ownerId, users.id))
-      .where(eq(cases.merchantId, merchantId))
-      .orderBy(desc(cases.createdAt)),
-    db
-      .select({
-        id: caseHistory.id,
-        caseId: caseHistory.caseId,
-        caseNumber: cases.caseNumber,
-        queueName: queues.name,
-        action: caseHistory.action,
-        details: caseHistory.details,
-        actorId: caseHistory.actorId,
-        actorName: owner.name,
-        createdAt: caseHistory.createdAt,
-      })
-      .from(caseHistory)
-      .innerJoin(cases, eq(caseHistory.caseId, cases.id))
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .leftJoin(owner, eq(caseHistory.actorId, owner.id))
-      .where(eq(cases.merchantId, merchantId))
-      .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id)),
-    db
-      .select({
-        id: caseFiles.id,
-        caseId: caseFiles.caseId,
-        caseNumber: cases.caseNumber,
-        originalName: caseFiles.originalName,
-        mimeType: caseFiles.mimeType,
-        sizeBytes: caseFiles.sizeBytes,
-        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-        createdAt: caseFiles.createdAt,
-      })
-      .from(agreementCaseDetails)
-      .innerJoin(cases, eq(agreementCaseDetails.caseId, cases.id))
-      .innerJoin(
-        caseFiles,
-        eq(agreementCaseDetails.clientAgreementFileId, caseFiles.id),
-      )
-      .where(
-        and(
-          eq(cases.merchantId, merchantId),
-          eq(caseFiles.fileKind, AGREEMENT_CLIENT_FILE_KIND),
-        ),
-      )
-      .orderBy(desc(caseFiles.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null),
-    db
-      .select({
-        id: caseFiles.id,
-        caseId: caseFiles.caseId,
-        caseNumber: cases.caseNumber,
-        originalName: caseFiles.originalName,
-        mimeType: caseFiles.mimeType,
-        sizeBytes: caseFiles.sizeBytes,
-        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-        createdAt: caseFiles.createdAt,
-      })
-      .from(caseFiles)
-      .innerJoin(cases, eq(caseFiles.caseId, cases.id))
-      .where(
-        and(
-          eq(cases.merchantId, merchantId),
-          eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
-        ),
-      )
-      .orderBy(desc(caseFiles.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null),
-  ])
+  const [documents, merchantCases, timeline, receivedAgreement] =
+    await Promise.all([
+      db
+        .select({
+          id: merchantDocuments.id,
+          documentType: merchantDocuments.documentType,
+          originalName: merchantDocuments.originalName,
+          mimeType: merchantDocuments.mimeType,
+          sizeBytes: merchantDocuments.sizeBytes,
+          status: merchantDocuments.status,
+          googleDriveWebViewLink: merchantDocuments.googleDriveWebViewLink,
+          googleDriveDownloadLink: merchantDocuments.googleDriveDownloadLink,
+          createdAt: merchantDocuments.createdAt,
+        })
+        .from(merchantDocuments)
+        .where(eq(merchantDocuments.merchantId, merchantId))
+        .orderBy(asc(merchantDocuments.createdAt)),
+      db
+        .select({
+          id: cases.id,
+          caseNumber: cases.caseNumber,
+          queueId: cases.queueId,
+          queueName: queues.name,
+          queueSlaHours: queues.slaHours,
+          stageName: queueStages.name,
+          stageCategory: queueStages.category,
+          status: cases.status,
+          priority: cases.priority,
+          closeOutcome: cases.closeOutcome,
+          closeReason: cases.closeReason,
+          slaBreached: cases.slaBreached,
+          ownerId: cases.ownerId,
+          ownerName: users.name,
+          closedAt: cases.closedAt,
+          createdAt: cases.createdAt,
+          updatedAt: cases.updatedAt,
+        })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
+        .leftJoin(users, eq(cases.ownerId, users.id))
+        .where(eq(cases.merchantId, merchantId))
+        .orderBy(desc(cases.createdAt)),
+      db
+        .select({
+          id: caseHistory.id,
+          caseId: caseHistory.caseId,
+          caseNumber: cases.caseNumber,
+          queueName: queues.name,
+          action: caseHistory.action,
+          details: caseHistory.details,
+          actorId: caseHistory.actorId,
+          actorName: owner.name,
+          createdAt: caseHistory.createdAt,
+        })
+        .from(caseHistory)
+        .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .leftJoin(owner, eq(caseHistory.actorId, owner.id))
+        .where(eq(cases.merchantId, merchantId))
+        .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id)),
+      db
+        .select({
+          id: caseFiles.id,
+          caseId: caseFiles.caseId,
+          caseNumber: cases.caseNumber,
+          originalName: caseFiles.originalName,
+          mimeType: caseFiles.mimeType,
+          sizeBytes: caseFiles.sizeBytes,
+          googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+          googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+          createdAt: caseFiles.createdAt,
+        })
+        .from(agreementCaseDetails)
+        .innerJoin(cases, eq(agreementCaseDetails.caseId, cases.id))
+        .innerJoin(
+          caseFiles,
+          eq(agreementCaseDetails.receivedAgreementFileId, caseFiles.id),
+        )
+        .where(
+          and(
+            eq(cases.merchantId, merchantId),
+            eq(caseFiles.fileKind, AGREEMENT_RECEIVED_FILE_KIND),
+          ),
+        )
+        .orderBy(desc(caseFiles.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+    ])
 
   const now = new Date()
   const casesWithSla = merchantCases.map((caseRow) => {
@@ -1335,8 +1305,7 @@ export async function getMerchantDetail(merchantId: string) {
     },
     documents,
     agreements: {
-      clientSignedAgreement: clientAgreement,
-      physicalAgreement,
+      receivedSignedAgreement: receivedAgreement,
     },
     cases: casesWithSla,
     timeline,

@@ -69,6 +69,17 @@ export const merchantPortalSettingsSchema = z
         },
       )
       .default(''),
+    legalEmail: z
+      .string()
+      .trim()
+      .max(320)
+      .refine(
+        (value) => value === '' || emailAddressSchema.safeParse(value).success,
+        {
+          message: 'Enter a valid legal email.',
+        },
+      )
+      .default(''),
   })
   .strict()
 

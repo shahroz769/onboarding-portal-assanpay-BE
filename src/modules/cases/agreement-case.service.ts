@@ -120,12 +120,12 @@ import type {
   UpdateCaseStatusInput,
 } from './cases.schemas'
 import {
-  AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_RECEIVED_FILE_KIND,
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -220,6 +220,7 @@ import {
   validateAgreementFile,
   validateEmailProofFile,
   validatePhysicalAgreementFile,
+  validateReceivedAgreementFile,
   validateSubMerchantFinalFormFile,
   validateWordpressScreenshotFile,
 } from './case-upload-validation'
@@ -233,7 +234,6 @@ import { generateCaseNumber } from './case-number'
 export type AgreementEmailResult = {
   status: 'sent' | 'failed'
   emailLogId: string
-  tokenExpiresAt: string | null
   error?: string
 }
 
@@ -398,6 +398,7 @@ export async function uploadAgreementFinalAgreement(
       .update(agreementCaseDetails)
       .set({
         finalAgreementFileId: caseFile.id,
+        receivedAgreementFileId: null,
         emailStatus: 'not_sent',
         emailLogId: null,
         emailSentAt: null,
@@ -423,7 +424,7 @@ export async function uploadAgreementFinalAgreement(
   return savedFile
 }
 
-export async function sendAgreementForClientUpload(
+export async function sendAgreementToClient(
   caseId: string,
   userId: string,
   input: SendAgreementEmailInput = {},
@@ -447,13 +448,30 @@ export async function sendAgreementForClientUpload(
     throw new AppError(400, 'Upload the Final Agreement before sending mail.')
   }
 
-  const remarks = input.remarks?.trim() || null
-  if (details.clientAgreementFileId && !remarks) {
+  const finalAgreement = await db.query.caseFiles.findFirst({
+    where: eq(caseFiles.id, details.finalAgreementFileId),
+  })
+  if (!finalAgreement) {
+    throw new AppError(400, 'The Final Agreement file could not be found.')
+  }
+
+  const merchantPortal = await getMerchantPortalSettings()
+  const officeAddress = merchantPortal.officeAddress.trim()
+  const legalEmail = merchantPortal.legalEmail.trim()
+  if (!officeAddress) {
     throw new AppError(
       400,
-      'Remarks are required when asking the client to resubmit the agreement.',
+      'Configure the office address before sending the Agreement email.',
     )
   }
+  if (!legalEmail) {
+    throw new AppError(
+      400,
+      'Configure the legal email before sending the Agreement email.',
+    )
+  }
+
+  const remarks = input.remarks?.trim() || null
 
   const awaitingStage = await db.query.queueStages.findFirst({
     where: and(
@@ -481,41 +499,25 @@ export async function sendAgreementForClientUpload(
     throw new AppError(409, 'This case has already been sent to the client.')
   }
 
-  const linkDeadlines = await getLinkDeadlineSettings()
-  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
-  const existingToken = await db.query.caseResubmissionTokens.findFirst({
-    where: and(
-      eq(caseResubmissionTokens.caseId, caseId),
-      isNull(caseResubmissionTokens.consumedAt),
-      gt(caseResubmissionTokens.expiresAt, minExpiry),
-    ),
-    orderBy: [desc(caseResubmissionTokens.createdAt)],
-  })
-  const issued = existingToken?.token
-    ? {
-        token: existingToken.token,
-        tokenId: existingToken.id,
-        expiresAt: existingToken.expiresAt,
-      }
-    : await issueToken(caseId, userId, linkDeadlines.agreementLinkHours)
-  const agreementUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/agreement/${issued.token}`
   const emailResult = await sendEmail({
     to: recipient.email,
-    subject: `Agreement for ${caseRow.merchantName}`,
+    subject: `AssanPay Agreement for ${caseRow.merchantName}`,
     template: 'agreement',
     react: AgreementEmail({
       merchantName: caseRow.merchantName,
       ownerName: caseRow.merchantOwnerName,
-      agreementUrl,
-      expiresAt: formatExpiryDate(issued.expiresAt),
+      agreementUrl: finalAgreement.googleDriveWebViewLink,
+      officeAddress,
+      legalEmail,
       remarks,
     }),
     caseId,
     merchantId: caseRow.merchantId,
-    idempotencyKey: `agreement/${caseId}/${issued.tokenId}`,
+    idempotencyKey: `agreement/${caseId}/${details.updatedAt.getTime()}`,
     metadata: {
-      tokenId: issued.tokenId,
       finalAgreementFileId: details.finalAgreementFileId,
+      officeAddress,
+      legalEmail,
       remarks,
       recipientEmailType: recipient.recipientEmailType,
     },
@@ -523,10 +525,6 @@ export async function sendAgreementForClientUpload(
 
   const now = new Date()
   if (emailResult.status === 'failed') {
-    await db
-      .update(caseResubmissionTokens)
-      .set({ consumedAt: now })
-      .where(eq(caseResubmissionTokens.id, issued.tokenId))
     await db
       .update(cases)
       .set({
@@ -558,9 +556,6 @@ export async function sendAgreementForClientUpload(
           ? 'agreement_email_sent'
           : 'agreement_email_failed',
       details: {
-        tokenId: issued.tokenId,
-        expiresAt:
-          emailResult.status === 'sent' ? issued.expiresAt.toISOString() : null,
         emailLogId: emailResult.emailLogId,
         recipient: recipient.email,
         recipientEmailType: recipient.recipientEmailType,
@@ -574,7 +569,6 @@ export async function sendAgreementForClientUpload(
     return {
       status: 'failed',
       emailLogId: emailResult.emailLogId,
-      tokenExpiresAt: null,
       error: emailResult.error,
     }
   }
@@ -582,52 +576,136 @@ export async function sendAgreementForClientUpload(
   return {
     status: 'sent',
     emailLogId: emailResult.emailLogId,
-    tokenExpiresAt: issued.expiresAt.toISOString(),
   }
 }
 
-export type AgreementUploadContext = {
-  caseId: string
-  caseNumber: string
-  expiresAt: string
-  merchantName: string
-  ownerName: string
-  finalAgreementName: string
-  finalAgreementUrl: string
-  remarks: string | null
-}
-
-export async function getAgreementUploadContext(
+export async function uploadReceivedAgreement(
   caseId: string,
-  expiresAt: Date,
-): Promise<AgreementUploadContext> {
+  userId: string,
+  input: { file: File },
+) {
   const db = getDb()
-  const [row] = await db
-    .select({
-      caseId: cases.id,
-      caseNumber: cases.caseNumber,
-      merchantName: merchants.businessName,
-      ownerName: merchants.ownerFullName,
-      finalAgreementName: caseFiles.originalName,
-      finalAgreementUrl: caseFiles.googleDriveWebViewLink,
-      remarks: agreementCaseDetails.lastRejectionRemarks,
-    })
-    .from(cases)
-    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-    .innerJoin(agreementCaseDetails, eq(agreementCaseDetails.caseId, cases.id))
-    .innerJoin(
-      caseFiles,
-      eq(agreementCaseDetails.finalAgreementFileId, caseFiles.id),
+  const caseRow = await loadAgreementCase(caseId, userId, {
+    allowAwaitingClient: true,
+  })
+  if (caseRow.status !== 'awaiting_client') {
+    throw new AppError(
+      400,
+      'The case must be awaiting the signed physical agreement.',
     )
-    .where(eq(cases.id, caseId))
-    .limit(1)
-
-  if (!row) {
-    throw new AppError(404, 'Agreement upload context not found.')
   }
 
-  return {
-    ...row,
-    expiresAt: expiresAt.toISOString(),
+  const details = await db.query.agreementCaseDetails.findFirst({
+    where: eq(agreementCaseDetails.caseId, caseId),
+  })
+  if (!details?.finalAgreementFileId || details.emailStatus !== 'sent') {
+    throw new AppError(
+      400,
+      'Send the Agreement email before uploading the received copy.',
+    )
   }
+
+  const file = input.file
+  await validateReceivedAgreementFile(file)
+
+  const existingFile = details.receivedAgreementFileId
+    ? await db.query.caseFiles.findFirst({
+        where: eq(caseFiles.id, details.receivedAgreementFileId),
+      })
+    : null
+  const storage = getCaseFileStorage()
+  const folder = await ensurePrivateInternalCaseFolder({
+    merchantId: caseRow.merchantId,
+    merchantName: caseRow.merchantName,
+    caseNumber: caseRow.caseNumber,
+    queueName: caseRow.queueName,
+    section: 'Received Agreement',
+    storage,
+  })
+  const uploaded = await storage.uploadFile(folder.folderId, {
+    fileName: file.name,
+    mimeType: file.type,
+    file,
+  })
+
+  const workingStage = await db.query.queueStages.findFirst({
+    where: and(
+      eq(queueStages.queueId, caseRow.queueId),
+      eq(queueStages.slug, 'working'),
+    ),
+  })
+  if (!workingStage) {
+    throw new AppError(500, 'No working stage configured for this queue.')
+  }
+
+  const now = new Date()
+  const [savedFile] = await db.transaction(async (tx) => {
+    const [caseFile] = await tx
+      .insert(caseFiles)
+      .values({
+        caseId,
+        fileKind: AGREEMENT_RECEIVED_FILE_KIND,
+        originalName: file.name,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        uploadedBy: userId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [caseFiles.caseId, caseFiles.fileKind],
+        set: {
+          originalName: file.name,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    if (!caseFile) {
+      throw new AppError(500, 'Failed to save the received Agreement.')
+    }
+
+    await tx
+      .update(agreementCaseDetails)
+      .set({ receivedAgreementFileId: caseFile.id, updatedAt: now })
+      .where(eq(agreementCaseDetails.caseId, caseId))
+
+    await tx
+      .update(cases)
+      .set({
+        status: 'working',
+        currentStageId: workingStage.id,
+        updatedAt: now,
+      })
+      .where(and(eq(cases.id, caseId), eq(cases.status, 'awaiting_client')))
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'agreement_received_uploaded',
+      details: {
+        fileName: file.name,
+        fileUrl: uploaded.webViewLink,
+        sizeBytes: uploaded.sizeBytes,
+      },
+    })
+
+    return [caseFile]
+  })
+
+  if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
+    await supersedeStorageObjects([existingFile.googleDriveFileId])
+  }
+
+  return savedFile
 }

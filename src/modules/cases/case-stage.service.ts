@@ -121,11 +121,11 @@ import type {
 } from './cases.schemas'
 import {
   AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND
+  AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND
+  SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
 import {
@@ -224,7 +224,10 @@ export async function updateCaseStatus(
   }
 
   if (existing.ownerId !== userId) {
-    throw new AppError(403, 'Only the current case owner can work on this case.')
+    throw new AppError(
+      403,
+      'Only the current case owner can work on this case.',
+    )
   }
 
   const currentStatus = existing.status as CaseStatusValue
@@ -317,7 +320,12 @@ export async function advanceStage(caseId: string, userId: string) {
     loadQueueStageForCase(db, currentStageId, caseData.queueId),
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
-      columns: { qcEnabled: true, slug: true, workflowType: true, slaHours: true },
+      columns: {
+        qcEnabled: true,
+        slug: true,
+        workflowType: true,
+        slaHours: true,
+      },
     }),
   ])
 
@@ -438,10 +446,10 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
-    if (!details.clientAgreementFileId) {
+    if (!details.receivedAgreementFileId) {
       throw new AppError(
         400,
-        'Client must submit the agreement before closing this case.',
+        'Upload the signed physical agreement received by the office before closing this case.',
       )
     }
 
@@ -506,37 +514,6 @@ export async function advanceStage(caseId: string, userId: string) {
       throw new AppError(
         400,
         'Send merchant portal credentials by auto Resend, manual Gmail, or WhatsApp before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && isQueueWorkflowType(queue, 'physical_agreement')) {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'Physical Agreement cases can only be closed successfully from working.',
-      )
-    }
-
-    const physicalAgreement = await db.query.caseFiles.findFirst({
-      where: and(
-        eq(caseFiles.caseId, caseId),
-        eq(caseFiles.fileKind, PHYSICAL_AGREEMENT_FILE_KIND),
-      ),
-    })
-    if (!physicalAgreement) {
-      throw new AppError(
-        400,
-        'Upload the physical signed agreement copy before closing this case.',
       )
     }
 
@@ -795,7 +772,9 @@ export async function closeUnsuccessful(
       inArray(queueStages.category, ['closed', 'error']),
     ),
   })
-  const closedStage = terminalStages.find((stage) => stage.category === 'closed')
+  const closedStage = terminalStages.find(
+    (stage) => stage.category === 'closed',
+  )
   const errorStage = terminalStages.find((stage) => stage.category === 'error')
   const prefersClosedStage =
     queue != null &&

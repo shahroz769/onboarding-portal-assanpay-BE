@@ -3,7 +3,6 @@ import {
   ButtonRow,
   CTAButton,
   EmailShell,
-  ExpiryNote,
   LinkFallback,
   Panel,
   Paragraph,
@@ -17,7 +16,8 @@ export type AgreementEmailProps = {
   merchantName: string
   ownerName: string
   agreementUrl: string
-  expiresAt: string
+  officeAddress: string
+  legalEmail: string
   remarks?: string | null
 }
 
@@ -25,26 +25,54 @@ export function AgreementEmail({
   merchantName,
   ownerName,
   agreementUrl,
-  expiresAt,
+  officeAddress,
+  legalEmail,
   remarks,
 }: AgreementEmailProps) {
   return (
     <EmailShell
       preview={`Your AssanPay merchant agreement is ready - ${merchantName}`}
       eyebrow="Agreement ready"
-      title="Review and sign your agreement"
-      intro={`We've prepared the AssanPay merchant agreement for ${merchantName}. Open it, review the terms, and upload the signed copy.`}
+      title="Agreement for review and execution"
     >
       <Paragraph>Hi {ownerName},</Paragraph>
       <Paragraph>
-        The link below is unique to your onboarding case. Please review the
-        agreement carefully and upload the fully signed copy, including every
-        page, so we can move to the next step.
+        Please find the agreement for your review and execution.
+      </Paragraph>
+      <Paragraph>Kindly follow the instructions below:</Paragraph>
+      <Paragraph>
+        1. Please print the agreement on Rs. 200 stamp paper.
+        <br />
+        2. Please sign each page of the agreement.
+        <br />
+        3. If your company/brand has an official stamp, please affix the stamp
+        on each page as well.
+        <br />
+        4. Once signed and stamped, kindly courier the original agreement to the
+        address mentioned in the agreement, which is the address of Devtects.
+      </Paragraph>
+      <Panel tone="plain">
+        <SectionLabel>Devtects delivery address</SectionLabel>
+        <Text
+          style={{
+            margin: 0,
+            whiteSpace: 'pre-line',
+            fontFamily: fontStack.body,
+            fontSize: '14px',
+            lineHeight: 1.65,
+            color: brand.ink,
+          }}
+        >
+          {officeAddress}
+        </Text>
+      </Panel>
+      <Paragraph>
+        Please let us know once the courier has been dispatched and share the
+        tracking details for our record.
       </Paragraph>
       <Paragraph>
-        Before Go-Live can proceed, send the signed physical agreement to
-        AssanPay Head Office. This physical agreement copy is required for live
-        activation.
+        If you need any clarification, please feel free to contact us at{' '}
+        <a href={`mailto:${legalEmail}`}>{legalEmail}</a>.
       </Paragraph>
 
       {remarks ? (
@@ -68,7 +96,6 @@ export function AgreementEmail({
         <CTAButton href={agreementUrl}>Open agreement</CTAButton>
       </ButtonRow>
 
-      <ExpiryNote expiresAt={expiresAt} />
       <LinkFallback href={agreementUrl} />
     </EmailShell>
   )
@@ -77,9 +104,10 @@ export function AgreementEmail({
 AgreementEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   ownerName: 'Jane Owner',
-  agreementUrl: 'https://app.example.com/onboarding-form/agreement/abc123',
-  expiresAt: 'on May 12, 2026',
-  remarks: 'Please upload the signed copy with all pages included.',
+  agreementUrl: 'https://drive.google.com/file/d/example/view',
+  officeAddress: 'AssanPay Head Office\nKarachi, Pakistan',
+  legalEmail: 'legal@example.com',
+  remarks: 'Please include every page of the agreement.',
 } satisfies AgreementEmailProps
 
 export default AgreementEmail

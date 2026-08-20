@@ -268,6 +268,10 @@ export async function getQueueDetail(id: string) {
 }
 
 export async function createQueue(input: CreateQueueInput) {
+  if (input.workflowType === 'physical_agreement') {
+    throw new AppError(400, 'The Physical Agreement workflow has been retired.')
+  }
+
   const db = getDb()
   const stageDefinitions = resolveStageDefinitionsForCreate({
     workflowType: input.workflowType,
@@ -325,6 +329,10 @@ export async function createQueue(input: CreateQueueInput) {
 }
 
 export async function updateQueue(id: string, input: UpdateQueueInput) {
+  if (input.workflowType === 'physical_agreement') {
+    throw new AppError(400, 'The Physical Agreement workflow has been retired.')
+  }
+
   const db = getDb()
 
   return db.transaction(async (tx) => {
@@ -872,7 +880,6 @@ export function listStageTemplates() {
       'testing',
       'wordpress',
       'card',
-      'physical_agreement',
       'live',
       'sub_merchant_form',
     ] as const

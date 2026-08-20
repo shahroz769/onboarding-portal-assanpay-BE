@@ -737,8 +737,9 @@ export const caseFieldReviews = pgTable(
     fieldName: varchar('field_name', { length: 120 }).notNull(),
     status: fieldReviewStatusEnum('status').default('pending').notNull(),
     remarks: text('remarks'),
-    reviewedBy: uuid('reviewed_by')
-      .references(() => users.id, { onDelete: 'set null' }),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -798,8 +799,9 @@ export const caseComments = pgTable(
     caseId: uuid('case_id')
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
-    authorId: uuid('author_id')
-      .references(() => users.id, { onDelete: 'set null' }),
+    authorId: uuid('author_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     content: text('content').notNull(),
     parentId: uuid('parent_id').references((): AnyPgColumn => caseComments.id, {
       onDelete: 'set null',
@@ -852,9 +854,7 @@ export const caseHistory = pgTable(
       table.createdAt,
       table.id,
     ),
-    caseHistoryActorIdx: index('case_history_actor_idx').on(
-      table.actorId,
-    ),
+    caseHistoryActorIdx: index('case_history_actor_idx').on(table.actorId),
   }),
 )
 
@@ -1383,7 +1383,9 @@ export const storageObjects = pgTable(
   'storage_objects',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    provider: varchar('provider', { length: 40 }).default('google_drive').notNull(),
+    provider: varchar('provider', { length: 40 })
+      .default('google_drive')
+      .notNull(),
     providerObjectId: varchar('provider_object_id', { length: 255 }).notNull(),
     objectKind: storageObjectKindEnum('object_kind').notNull(),
     merchantId: uuid('merchant_id').references(() => merchants.id, {
@@ -1448,7 +1450,7 @@ export const agreementCaseDetails = pgTable(
         onDelete: 'set null',
       },
     ),
-    clientAgreementFileId: uuid('client_agreement_file_id').references(
+    receivedAgreementFileId: uuid('received_agreement_file_id').references(
       () => caseFiles.id,
       {
         onDelete: 'set null',
@@ -1474,9 +1476,9 @@ export const agreementCaseDetails = pgTable(
     agreementCaseDetailsFinalFileIdx: index(
       'agreement_case_details_final_file_idx',
     ).on(table.finalAgreementFileId),
-    agreementCaseDetailsClientFileIdx: index(
-      'agreement_case_details_client_file_idx',
-    ).on(table.clientAgreementFileId),
+    agreementCaseDetailsReceivedFileIdx: index(
+      'agreement_case_details_received_file_idx',
+    ).on(table.receivedAgreementFileId),
     agreementCaseDetailsEmailLogIdx: index(
       'agreement_case_details_email_log_idx',
     ).on(table.emailLogId),

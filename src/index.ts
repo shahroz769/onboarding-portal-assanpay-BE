@@ -9,7 +9,6 @@ import { closeQueryClient, getDb } from './db/client'
 import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
 import { getClientIp } from './lib/client-ip'
-import { MAX_FILE_SIZE_BYTES } from './lib/storage/file-limits'
 import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
 import {
@@ -20,7 +19,6 @@ import { configurationRoutes } from './modules/configuration/configuration.route
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
-import { agreementUploadRoutes } from './modules/merchants/public-agreement.routes'
 import { midGoLiveRoutes } from './modules/merchants/public-mid-go-live.routes'
 import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
 import { notificationRoutes } from './modules/notifications/notifications.routes'
@@ -49,11 +47,6 @@ const publicMultipartLimit = bodyLimit({
   onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
 })
 
-const agreementMultipartLimit = bodyLimit({
-  maxSize: MAX_FILE_SIZE_BYTES + 1024 * 1024,
-  onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
-})
-
 app.use(
   '*',
   cors({
@@ -71,7 +64,6 @@ app.onError(errorHandler)
 app.use('/api/public/*', publicRateLimiter)
 app.use('/api/public/merchant-form', publicMultipartLimit)
 app.use('/api/public/resubmission/*', publicMultipartLimit)
-app.use('/api/public/agreement/*', agreementMultipartLimit)
 
 app.get('/', (c) => {
   return c.json({
@@ -102,7 +94,6 @@ app.get('/health/db', async (c) => {
 app.route('/api/auth', authRoutes)
 app.route('/api/public', merchantFormRoutes)
 app.route('/api/public/resubmission', resubmissionRoutes)
-app.route('/api/public/agreement', agreementUploadRoutes)
 app.route('/api/public/mid-go-live', midGoLiveRoutes)
 app.route('/api/merchants', merchantRoutes)
 app.route('/api/users', userRoutes)

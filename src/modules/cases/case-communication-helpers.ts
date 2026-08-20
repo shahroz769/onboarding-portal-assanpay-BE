@@ -216,21 +216,40 @@ export function buildAgreementEmailBody(params: {
   merchantName: string
   ownerName: string
   agreementUrl: string
-  expiresAt: string
+  officeAddress: string
+  legalEmail: string
   remarks: string | null
 }): string {
-  const { merchantName, ownerName, agreementUrl, expiresAt, remarks } = params
+  const {
+    ownerName,
+    agreementUrl,
+    officeAddress,
+    legalEmail,
+    remarks,
+  } = params
   let body = `Hi ${ownerName},
 
-The link below is unique to your onboarding case. Please review the agreement for ${merchantName} carefully and upload the fully signed copy, including every page, so we can move to the next step.
+Please find the agreement for your review and execution.
 
-Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.`
+Kindly follow the instructions below:
+
+1. Please print the agreement on Rs. 200 stamp paper.
+2. Please sign each page of the agreement.
+3. If your company/brand has an official stamp, please affix the stamp on each page as well.
+4. Once signed and stamped, kindly courier the original agreement to the address mentioned in the agreement, which is the address of Devtects.
+
+Devtects delivery address:
+${officeAddress}
+
+Please let us know once the courier has been dispatched and share the tracking details for our record.
+
+If you need any clarification, please feel free to contact us at ${legalEmail}.`
 
   if (remarks) {
     body += `\n\nAdditional notes from our team:\n${remarks}`
   }
 
-  body += `\n\nAgreement link:\n${agreementUrl}${formatExpiryLine(expiresAt)}
+  body += `\n\nAgreement link:\n${agreementUrl}
 
 If you have any questions, please reply to this email.
 
@@ -305,8 +324,6 @@ Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${goLiveUrl}
 Available at: ${availableAt}
 
-Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.
-
 Please keep your credentials secure and do not share them with anyone.
 
 Best regards,
@@ -374,8 +391,6 @@ ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${me
 Go-Live Link (available ${goLiveAvailabilityLabel}):
 ${params.goLiveUrl}
 Available at: ${params.availableAt}
-
-Before Go-Live can proceed, send the signed physical agreement to AssanPay Head Office. This physical agreement copy is required for live activation.
 
 Please keep your credentials secure and do not share them with anyone.
 

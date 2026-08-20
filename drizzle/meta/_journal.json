@@ -393,6 +393,13 @@
       "when": 1786924800000,
       "tag": "0056_backfill_merchant_root_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1787184000000,
+      "tag": "0057_merge_physical_agreement_workflow",
+      "breakpoints": true
     }
   ]
 }

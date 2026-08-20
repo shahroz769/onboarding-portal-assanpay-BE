@@ -101,10 +101,10 @@ import {
   uploadSubMerchantFinalForm,
 } from './sub-merchant-form-case.service'
 import {
-  sendAgreementForClientUpload,
+  sendAgreementToClient,
   uploadAgreementFinalAgreement,
+  uploadReceivedAgreement,
 } from './agreement-case.service'
-import { uploadPhysicalAgreementCopy } from './physical-agreement-case.service'
 import {
   listFailedCaseFlowCloseJobs,
   retryFailedCaseFlowCloseJob,
@@ -565,8 +565,8 @@ caseRoutes.post('/:id/agreement/final-agreement', async (c) => {
   return c.json(result)
 })
 
-// POST /api/cases/:id/physical-agreement/scanned-copy - Upload physical signed agreement copy
-caseRoutes.post('/:id/physical-agreement/scanned-copy', async (c) => {
+// POST /api/cases/:id/agreement/received-copy - Upload the signed physical agreement received by the office
+caseRoutes.post('/:id/agreement/received-copy', async (c) => {
   const contentType = c.req.header('content-type') ?? ''
 
   if (!contentType.toLowerCase().includes('multipart/form-data')) {
@@ -579,16 +579,16 @@ caseRoutes.post('/:id/physical-agreement/scanned-copy', async (c) => {
   const file = formData.get('file')
 
   if (!(file instanceof File)) {
-    throw new AppError(400, 'Physical agreement copy is required.')
+    throw new AppError(400, 'Received Agreement copy is required.')
   }
 
   const auth = c.get('auth')
   const id = c.req.param('id')
-  const result = await uploadPhysicalAgreementCopy(id, auth.userId, { file })
+  const result = await uploadReceivedAgreement(id, auth.userId, { file })
   return c.json(result)
 })
 
-// POST /api/cases/:id/agreement/send-mail - Send agreement upload link
+// POST /api/cases/:id/agreement/send-mail - Send the Final Agreement Drive link
 caseRoutes.post(
   '/:id/agreement/send-mail',
   zodValidator('json', sendAgreementEmailSchema),
@@ -596,7 +596,7 @@ caseRoutes.post(
     const auth = c.get('auth')
     const id = c.req.param('id')
     const input = c.req.valid('json' as never) as SendAgreementEmailInput
-    const result = await sendAgreementForClientUpload(id, auth.userId, input)
+    const result = await sendAgreementToClient(id, auth.userId, input)
     return c.json(result)
   },
 )
@@ -683,7 +683,6 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
     throw new AppError(400, 'Invalid multipart form payload.')
   })
   const file = formData.get('file')
-  const tokenId = formData.get('tokenId')
   const remarks = formData.get('remarks')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
   const recipientEmailType = parseEmailRecipientType(
@@ -691,12 +690,9 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
   )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
-  if (typeof tokenId !== 'string' || !tokenId)
-    throw new AppError(400, 'tokenId is required.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmAgreementEmailManual(id, auth.userId, {
-    tokenId,
     remarks: typeof remarks === 'string' ? remarks : null,
     file,
     channel,

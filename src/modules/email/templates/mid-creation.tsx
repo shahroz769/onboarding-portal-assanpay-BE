@@ -171,9 +171,6 @@ export function MidCreationEmail({
             these same instructions.
           </>
         )}{' '}
-        Before Go-Live can proceed, send the signed physical agreement to
-        AssanPay Head Office. This physical agreement copy is required for live
-        activation.
       </Paragraph>
 
       <ButtonRow>

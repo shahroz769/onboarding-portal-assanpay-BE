@@ -18,7 +18,7 @@ All routes require authentication. Mutations require `super_admin`.
 
 - **Slug**: URL/business identifier only. Not used for behavior dispatch.
 - **workflowType**: Stable behavior key (`generic`, `document_review`, `agreement`,
-  `mid`, `testing`, `wordpress`, `card`, `physical_agreement`, `live`,
+  `mid`, `testing`, `wordpress`, `card`, `live`,
   `sub_merchant_form`).
 - **lifecycle**: `draft` | `active` | `inactive`. API boundary uses lifecycle;
   DB `is_active` remains synced (`active` ↔ true).

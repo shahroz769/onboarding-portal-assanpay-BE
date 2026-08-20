@@ -110,6 +110,7 @@ export const defaultMerchantPortalSettings: MerchantPortalSettings = {
   officeAddress: '',
   whatsappSupportNumber: '',
   supportEmail: '',
+  legalEmail: '',
 }
 
 export const defaultPaymentMethodSettings: PaymentMethodSettings = []
