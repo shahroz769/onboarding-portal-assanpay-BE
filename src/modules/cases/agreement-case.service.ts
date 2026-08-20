@@ -336,6 +336,12 @@ export async function uploadAgreementFinalAgreement(
   const existingDetails = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
   })
+  if (existingDetails?.emailStatus === 'sent') {
+    throw new AppError(
+      400,
+      'The Final Agreement cannot be replaced after the email has been sent.',
+    )
+  }
   const existingFile = existingDetails?.finalAgreementFileId
     ? await db.query.caseFiles.findFirst({
         where: eq(caseFiles.id, existingDetails.finalAgreementFileId),
