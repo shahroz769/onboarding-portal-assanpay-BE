@@ -59,7 +59,7 @@ const envSchema = z.object({
     .int()
     .min(250)
     .max(60_000)
-    .default(10_000),
+    .default(60_000),
   CASE_FLOW_WORKER_BATCH_SIZE: z.coerce
     .number()
     .int()

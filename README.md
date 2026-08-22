@@ -18,8 +18,9 @@ Copy `.env.example` to `.env` and replace placeholders:
 - `DATABASE_CONNECT_TIMEOUT_SECONDS`: connection establishment timeout (default `10`).
 - `DATABASE_IDLE_TIMEOUT_SECONDS`: close unused client connections after this interval (default `20`).
 - `CASE_FLOW_WORKER_*`: polling, batch, and bounded exponential retry controls
-  for durable follow-up case creation. The defaults poll every second, process
-  five jobs per cycle, and stop retrying after eight failed attempts.
+  for durable follow-up case creation. The defaults poll every second while
+  active, back off to one minute while idle, process five jobs per cycle, and
+  stop retrying after eight failed attempts.
 - JWT secrets: distinct random values of at least 32 characters.
 - CORS, cookie, and `PUBLIC_APP_URL`: configure for the separately hosted frontend/backend.
 - `TRUST_PROXY_HEADERS`: enable only behind a proxy that overwrites forwarding headers.
