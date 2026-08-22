@@ -22,6 +22,7 @@ const client = postgres(directDatabaseUrl, {
 
 const expectedIndexes = [
   'cases_merchant_queue_idx',
+  'cases_merchant_created_idx',
   'cases_open_merchant_idx',
   'cases_successful_flow_idx',
   'case_flow_close_jobs_pending_idx',

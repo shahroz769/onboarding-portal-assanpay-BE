@@ -25,6 +25,7 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   })
 
   const user = await getDb().query.users.findFirst({
+    columns: { id: true },
     where: and(
       eq(users.id, session.userId),
       eq(users.status, 'active'),

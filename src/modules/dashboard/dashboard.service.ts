@@ -215,12 +215,74 @@ async function listPendingPortalMidLimitRows(
       : sql``
 
   const rows = await db.execute(sql<PendingPortalMidLimitRow>`
-    with latest_review_case as (
+    with latest_mid as (
+      select distinct on (${cases.merchantId})
+        ${cases.merchantId} as "merchantId",
+        ${merchants.businessName} as "merchantName",
+        ${cases.id} as "caseId",
+        ${cases.caseNumber} as "caseNumber",
+        ${caseHistory.details} as "details",
+        ${caseHistory.createdAt} as "savedAt"
+      from ${caseHistory}
+      inner join ${cases} on ${caseHistory.caseId} = ${cases.id}
+      inner join ${queues} on ${cases.queueId} = ${queues.id}
+      inner join ${merchants} on ${cases.merchantId} = ${merchants.id}
+      where ${caseHistory.action} = 'mid_creation_saved'
+        and ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
+        and ${cases.status} = 'closed'
+        and ${cases.closeOutcome} = 'successful'
+        and ${merchants.deletedAt} is null
+        and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
+      order by ${cases.merchantId}, ${caseHistory.createdAt} desc
+    ),
+    candidate_mid as (
+      select
+        latest_mid."merchantId",
+        latest_mid."merchantName",
+        latest_mid."caseId",
+        latest_mid."caseNumber",
+        (latest_mid.details ->> 'portalMid')::int as "portalMid",
+        'portal'::text as "midKind",
+        latest_mid."savedAt"
+      from latest_mid
+      union all
+      select
+        latest_mid."merchantId",
+        latest_mid."merchantName",
+        latest_mid."caseId",
+        latest_mid."caseNumber",
+        (latest_mid.details ->> 'internalPortalMid')::int as "portalMid",
+        'internal'::text as "midKind",
+        latest_mid."savedAt"
+      from latest_mid
+      where (latest_mid.details ->> 'internalPortalMid') ~ '^[0-9]+$'
+        and (latest_mid.details ->> 'internalPortalMid')::int <> (latest_mid.details ->> 'portalMid')::int
+    ),
+    pending as (
+      select
+        latest_mid."merchantId",
+        latest_mid."merchantName",
+        latest_mid."caseId",
+        latest_mid."caseNumber",
+        candidate_mid."portalMid",
+        candidate_mid."midKind",
+        latest_mid."savedAt"
+      from candidate_mid
+      inner join latest_mid
+        on latest_mid."caseId" = candidate_mid."caseId"
+      left join ${portalMidLimitApplications}
+        on ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
+      where ${portalMidLimitApplications.portalMid} is null
+        ${portalMidFilter}
+    ),
+    latest_review_case as (
       select distinct on (${cases.merchantId})
         ${cases.merchantId} as "merchantId",
         ${cases.id} as "caseId"
-      from ${documentReviewDetails}
+      from pending
       inner join ${cases}
+        on ${cases.merchantId} = pending."merchantId"
+      inner join ${documentReviewDetails}
         on ${documentReviewDetails.caseId} = ${cases.id}
       order by ${cases.merchantId}, ${documentReviewDetails.updatedAt} desc
     ),
@@ -232,71 +294,19 @@ async function listPendingPortalMidLimitRows(
       inner join ${documentReviewDetails}
         on ${documentReviewDetails.caseId} = latest_review_case."caseId"
       group by latest_review_case."merchantId"
-    ),
-    latest_mid as (
-      select distinct on (${cases.merchantId})
-        ${cases.merchantId} as "merchantId",
-        ${merchants.businessName} as "merchantName",
-        latest_submerchant."subMerchantName" as "subMerchantName",
-        ${cases.id} as "caseId",
-        ${cases.caseNumber} as "caseNumber",
-        ${caseHistory.details} as "details",
-        ${caseHistory.createdAt} as "savedAt"
-      from ${caseHistory}
-      inner join ${cases} on ${caseHistory.caseId} = ${cases.id}
-      inner join ${queues} on ${cases.queueId} = ${queues.id}
-      inner join ${merchants} on ${cases.merchantId} = ${merchants.id}
-      left join latest_submerchant
-        on latest_submerchant."merchantId" = ${cases.merchantId}
-      where ${caseHistory.action} = 'mid_creation_saved'
-        and ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
-        and ${cases.status} = 'closed'
-        and ${cases.closeOutcome} = 'successful'
-        and ${merchants.deletedAt} is null
-        and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
-      order by ${cases.merchantId}, ${caseHistory.createdAt} desc
-    )
-    , candidate_mid as (
-      select
-        latest_mid."merchantId",
-        latest_mid."merchantName",
-        latest_mid."subMerchantName",
-        latest_mid."caseId",
-        latest_mid."caseNumber",
-        (latest_mid.details ->> 'portalMid')::int as "portalMid",
-        'portal'::text as "midKind",
-        latest_mid."savedAt"
-      from latest_mid
-      union all
-      select
-        latest_mid."merchantId",
-        latest_mid."merchantName",
-        latest_mid."subMerchantName",
-        latest_mid."caseId",
-        latest_mid."caseNumber",
-        (latest_mid.details ->> 'internalPortalMid')::int as "portalMid",
-        'internal'::text as "midKind",
-        latest_mid."savedAt"
-      from latest_mid
-      where (latest_mid.details ->> 'internalPortalMid') ~ '^[0-9]+$'
-        and (latest_mid.details ->> 'internalPortalMid')::int <> (latest_mid.details ->> 'portalMid')::int
     )
     select
-      latest_mid."merchantId",
-      latest_mid."merchantName",
-      latest_mid."subMerchantName",
-      latest_mid."caseId",
-      latest_mid."caseNumber",
-      candidate_mid."portalMid",
-      candidate_mid."midKind" as "midKind",
-      latest_mid."savedAt"
-    from candidate_mid
-    inner join latest_mid
-      on latest_mid."caseId" = candidate_mid."caseId"
-    left join ${portalMidLimitApplications}
-      on ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
-    where ${portalMidLimitApplications.portalMid} is null
-      ${portalMidFilter}
+      pending."merchantId",
+      pending."merchantName",
+      latest_submerchant."subMerchantName",
+      pending."caseId",
+      pending."caseNumber",
+      pending."portalMid",
+      pending."midKind" as "midKind",
+      pending."savedAt"
+    from pending
+    left join latest_submerchant
+      on latest_submerchant."merchantId" = pending."merchantId"
     order by "portalMid" asc
   `)
 
@@ -324,7 +334,7 @@ async function listAppliedPortalMidLimitRows(): Promise<
         and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
       order by ${cases.merchantId}, ${caseHistory.createdAt} desc
     ),
-    classified_mid as (
+    classified_mid as materialized (
       select
         latest_mid."merchantId",
         latest_mid."websiteCms",
@@ -343,35 +353,31 @@ async function listAppliedPortalMidLimitRows(): Promise<
       where (latest_mid."details" ->> 'internalPortalMid') ~ '^[0-9]+$'
         and (latest_mid."details" ->> 'internalPortalMid')::int <> (latest_mid."details" ->> 'portalMid')::int
     )
-    select
+    select distinct on (${portalMidLimitApplications.portalMid})
       ${portalMidLimitApplications.portalMid} as "portalMid",
-      coalesce(${portalMidLimitApplications.merchantId}, matched_mid."merchantId") as "merchantId",
+      coalesce(${portalMidLimitApplications.merchantId}, classified_mid."merchantId") as "merchantId",
       ${users.name} as "appliedByName",
       ${portalMidLimitApplications.appliedAt} as "appliedAt",
       coalesce(
         ${portalMidLimitApplications.category},
         case
-          when matched_mid."midKind" = 'internal' then 'internal'
-          when matched_mid."websiteCms" = 'shopify' then 'shopify'
+          when classified_mid."midKind" = 'internal' then 'internal'
+          when classified_mid."websiteCms" = 'shopify' then 'shopify'
           else 'custom_wordpress'
         end
       ) as "category"
     from ${portalMidLimitApplications}
     left join ${users}
       on ${portalMidLimitApplications.appliedBy} = ${users.id}
-    left join lateral (
-      select classified_mid.*
-      from classified_mid
-      where classified_mid."portalMid" = ${portalMidLimitApplications.portalMid}
-      order by
-        case
-          when classified_mid."merchantId" = ${portalMidLimitApplications.merchantId} then 0
-          else 1
-        end,
-        classified_mid."savedAt" desc
-      limit 1
-    ) matched_mid on true
-    order by ${portalMidLimitApplications.portalMid} asc
+    left join classified_mid
+      on classified_mid."portalMid" = ${portalMidLimitApplications.portalMid}
+    order by
+      ${portalMidLimitApplications.portalMid} asc,
+      case
+        when classified_mid."merchantId" = ${portalMidLimitApplications.merchantId} then 0
+        else 1
+      end,
+      classified_mid."savedAt" desc
   `)
 
   return Array.from(rows) as AppliedPortalMidLimitRow[]

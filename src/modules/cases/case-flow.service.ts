@@ -30,6 +30,7 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
+import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -514,6 +515,7 @@ function formatCaseFlowJobError(error: unknown) {
 
 export async function processCaseFlowCloseJobs(batchSize = 5) {
   const db = getDb()
+  let claimed = 0
   let completed = 0
   let failed = 0
 
@@ -600,11 +602,12 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
     })
 
     if (!result.handled) break
+    claimed += 1
     if (result.completed) completed += 1
     if (result.failed) failed += 1
   }
 
-  return { completed, failed }
+  return { claimed, completed, failed }
 }
 
 export async function getCaseFlowCloseJobHealth() {
@@ -671,5 +674,6 @@ export async function retryFailedCaseFlowCloseJob(jobId: string) {
     throw new AppError(404, 'Failed case-flow job not found.')
   }
 
+  requestCaseFlowCloseJobDrain()
   return retried
 }

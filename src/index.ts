@@ -15,6 +15,7 @@ import {
   getCaseFlowCloseJobHealth,
   processCaseFlowCloseJobs,
 } from './modules/cases/case-flow.service'
+import { setCaseFlowCloseJobDrainHandler } from './modules/cases/case-flow-worker'
 import { configurationRoutes } from './modules/configuration/configuration.routes'
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
@@ -29,9 +30,18 @@ import type { AppEnv } from './types/auth'
 const app = new Hono<AppEnv>()
 
 let caseFlowWorkerPromise: Promise<void> | null = null
+let caseFlowWorkerTimer: ReturnType<typeof setTimeout> | null = null
+let caseFlowWorkerDelayMs = env.CASE_FLOW_WORKER_POLL_MS
+let caseFlowWorkerDrainRequested = false
 let caseFlowWorkerLastCycleAt: Date | null = null
 let caseFlowWorkerLastDurationMs: number | null = null
 let caseFlowWorkerLastError: string | null = null
+let shuttingDown = false
+
+const caseFlowWorkerIdlePollMs = Math.max(
+  env.CASE_FLOW_WORKER_IDLE_POLL_MS,
+  env.CASE_FLOW_WORKER_POLL_MS,
+)
 
 const publicRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -140,18 +150,59 @@ const refreshTokenCleanupInterval = setInterval(
   6 * 60 * 60 * 1000,
 )
 
+function scheduleCaseFlowWorker(delayMs: number) {
+  if (caseFlowWorkerTimer) clearTimeout(caseFlowWorkerTimer)
+  caseFlowWorkerTimer = setTimeout(() => {
+    caseFlowWorkerTimer = null
+    void drainCaseFlowCloseJobs()
+  }, delayMs)
+}
+
+function requestCaseFlowWorkerRun() {
+  if (caseFlowWorkerPromise) {
+    caseFlowWorkerDrainRequested = true
+    return
+  }
+
+  scheduleCaseFlowWorker(0)
+}
+
+function nextCaseFlowWorkerDelay(claimed: number) {
+  if (
+    caseFlowWorkerDrainRequested ||
+    claimed >= env.CASE_FLOW_WORKER_BATCH_SIZE
+  ) {
+    caseFlowWorkerDelayMs = env.CASE_FLOW_WORKER_POLL_MS
+    return 0
+  }
+
+  if (claimed === 0) {
+    caseFlowWorkerDelayMs = Math.min(
+      Math.max(caseFlowWorkerDelayMs, env.CASE_FLOW_WORKER_POLL_MS) * 2,
+      caseFlowWorkerIdlePollMs,
+    )
+    return caseFlowWorkerDelayMs
+  }
+
+  caseFlowWorkerDelayMs = env.CASE_FLOW_WORKER_POLL_MS
+  return caseFlowWorkerDelayMs
+}
+
 function drainCaseFlowCloseJobs() {
   if (caseFlowWorkerPromise) return caseFlowWorkerPromise
 
   const startedAt = performance.now()
   caseFlowWorkerPromise = (async () => {
+    let claimed = 0
+
     try {
       const result = await processCaseFlowCloseJobs(
         env.CASE_FLOW_WORKER_BATCH_SIZE,
       )
+      claimed = result.claimed
       caseFlowWorkerLastError = null
 
-      if (result.completed > 0 || result.failed > 0) {
+      if (result.claimed > 0 || result.completed > 0 || result.failed > 0) {
         console.info(
           JSON.stringify({
             event: 'case_flow_worker_cycle',
@@ -168,19 +219,18 @@ function drainCaseFlowCloseJobs() {
       caseFlowWorkerLastDurationMs =
         Math.round((performance.now() - startedAt) * 100) / 100
       caseFlowWorkerPromise = null
+
+      const delayMs = nextCaseFlowWorkerDelay(claimed)
+      caseFlowWorkerDrainRequested = false
+      if (!shuttingDown) scheduleCaseFlowWorker(delayMs)
     }
   })()
 
   return caseFlowWorkerPromise
 }
 
+setCaseFlowCloseJobDrainHandler(requestCaseFlowWorkerRun)
 void drainCaseFlowCloseJobs()
-const caseFlowWorkerInterval = setInterval(
-  () => void drainCaseFlowCloseJobs(),
-  env.CASE_FLOW_WORKER_POLL_MS,
-)
-
-let shuttingDown = false
 
 async function shutdown(signal: string) {
   if (shuttingDown) return
@@ -188,7 +238,10 @@ async function shutdown(signal: string) {
   console.info(`[shutdown] ${signal} received; draining background work.`)
 
   clearInterval(refreshTokenCleanupInterval)
-  clearInterval(caseFlowWorkerInterval)
+  if (caseFlowWorkerTimer) {
+    clearTimeout(caseFlowWorkerTimer)
+    caseFlowWorkerTimer = null
+  }
 
   const activeWorker = caseFlowWorkerPromise
   if (activeWorker) {

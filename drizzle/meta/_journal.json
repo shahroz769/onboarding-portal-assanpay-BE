@@ -407,6 +407,13 @@
       "when": 1787187600000,
       "tag": "0058_rename_wife_to_spouse",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1787410800000,
+      "tag": "0059_cases_merchant_created_idx",
+      "breakpoints": true
     }
   ]
 }

@@ -80,6 +80,7 @@ import {
   assertCreationRequirementsSatisfied,
   enqueueCasesAfterSuccessfulClose,
 } from './case-flow.service'
+import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -661,7 +662,7 @@ export async function advanceStage(caseId: string, userId: string) {
   const action =
     targetStage.category === 'closed' ? 'closed_successful' : 'stage_advanced'
 
-  return transitionCaseState({
+  const result = await transitionCaseState({
     caseId,
     actorId: userId,
     targetStage,
@@ -712,6 +713,12 @@ export async function advanceStage(caseId: string, userId: string) {
       }
     },
   })
+
+  if (targetStage.category === 'closed') {
+    requestCaseFlowCloseJobDrain()
+  }
+
+  return result
 }
 
 // ─── Save Field Reviews ─────────────────────────────────────────────────────

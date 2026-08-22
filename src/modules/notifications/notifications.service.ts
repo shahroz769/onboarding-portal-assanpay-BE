@@ -118,7 +118,13 @@ export async function getUnreadCount(userId: string): Promise<number> {
     .select({ count: count() })
     .from(notifications)
     .where(
-      and(eq(notifications.userId, userId), eq(notifications.isRead, false)),
+      and(
+        eq(notifications.userId, userId),
+        // BETWEEN keeps is_read in the index condition so Postgres uses
+        // notifications_user_unread_created_id_idx instead of filtering
+        // after notifications_user_created_id_idx.
+        sql`${notifications.isRead} between false and false`,
+      ),
     )
   return Number(row?.count ?? 0)
 }

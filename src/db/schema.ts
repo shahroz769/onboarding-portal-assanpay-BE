@@ -656,6 +656,11 @@ export const cases = pgTable(
       table.merchantId,
       table.queueId,
     ),
+    casesMerchantCreatedIdx: index('cases_merchant_created_idx').on(
+      table.merchantId,
+      table.createdAt,
+      table.id,
+    ),
     casesStatusIdx: index('cases_status_idx').on(table.status),
     casesOwnerIdIdx: index('cases_owner_id_idx').on(table.ownerId),
     casesSubMerchantIdIdx: index('cases_sub_merchant_id_idx').on(
