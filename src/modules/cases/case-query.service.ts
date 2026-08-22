@@ -7,9 +7,7 @@ import {
   gt,
   ilike,
   inArray,
-  isNull,
   lt,
-  ne,
   or,
   sql,
 } from 'drizzle-orm'
@@ -413,19 +411,25 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       (status): status is CaseStatusValue => status !== 'unsuccessful',
     )
 
-    if (statuses.length > 0) {
-      const statusCondition = and(
-        inArray(cases.status, statuses),
-        or(isNull(cases.closeOutcome), ne(cases.closeOutcome, 'unsuccessful')),
-      )
+    const excludeUnsuccessful = sql`${cases.closeOutcome} is distinct from 'unsuccessful'`
+    const selectsEveryStatus =
+      statuses.length === caseStatusValues.length &&
+      caseStatusValues.every((status) => statuses.includes(status))
+
+    if (includeUnsuccessful && (selectsEveryStatus || statuses.length === 0)) {
+      if (!selectsEveryStatus) {
+        conditions.push(eq(cases.closeOutcome, 'unsuccessful'))
+      }
+    } else if (statuses.length > 0) {
+      const statusCondition = selectsEveryStatus
+        ? excludeUnsuccessful
+        : and(inArray(cases.status, statuses), excludeUnsuccessful)
 
       conditions.push(
         includeUnsuccessful
           ? or(statusCondition, eq(cases.closeOutcome, 'unsuccessful'))
           : statusCondition,
       )
-    } else if (includeUnsuccessful) {
-      conditions.push(eq(cases.closeOutcome, 'unsuccessful'))
     }
   }
 
