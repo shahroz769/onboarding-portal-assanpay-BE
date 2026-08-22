@@ -4,7 +4,8 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "types": ["bun", "node"],
+    "rootDir": ".",
+    "types": ["bun", "node", "react"],
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx"
