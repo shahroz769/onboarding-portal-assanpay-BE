@@ -329,7 +329,6 @@ export const queueStages = pgTable(
       .notNull(),
   },
   (table) => ({
-    queueStagesQueueIdIdx: index('queue_stages_queue_id_idx').on(table.queueId),
     queueStagesIdQueueUniq: unique('queue_stages_id_queue_id_uniq').on(
       table.id,
       table.queueId,
@@ -368,9 +367,6 @@ export const userQueueAccess = pgTable(
       columns: [table.userId, table.queueId, table.accessType],
       name: 'user_queue_access_pk',
     }),
-    userQueueAccessQueueIdx: index('user_queue_access_queue_idx').on(
-      table.queueId,
-    ),
   }),
 )
 
@@ -651,7 +647,6 @@ export const cases = pgTable(
       .notNull(),
   },
   (table) => ({
-    casesQueueIdIdx: index('cases_queue_id_idx').on(table.queueId),
     casesMerchantQueueIdx: index('cases_merchant_queue_idx').on(
       table.merchantId,
       table.queueId,
@@ -661,13 +656,8 @@ export const cases = pgTable(
       table.createdAt,
       table.id,
     ),
-    casesStatusIdx: index('cases_status_idx').on(table.status),
-    casesOwnerIdIdx: index('cases_owner_id_idx').on(table.ownerId),
     casesSubMerchantIdIdx: index('cases_sub_merchant_id_idx').on(
       table.subMerchantId,
-    ),
-    casesCurrentStageIdIdx: index('cases_current_stage_id_idx').on(
-      table.currentStageId,
     ),
     casesCurrentStageQueueIdx: index('cases_current_stage_queue_idx').on(
       table.currentStageId,
@@ -923,9 +913,6 @@ export const caseFlowCloseTriggers = pgTable(
     caseFlowCloseTriggersSourceOrderIdx: index(
       'case_flow_close_triggers_source_order_idx',
     ).on(table.sourceQueueId, table.order),
-    caseFlowCloseTriggersTargetIdx: index(
-      'case_flow_close_triggers_target_idx',
-    ).on(table.targetQueueId),
     caseFlowCloseTriggersOrderPositive: check(
       'case_flow_close_triggers_order_positive',
       sql`${table.order} > 0`,
@@ -957,9 +944,6 @@ export const caseFlowCloseBlockers = pgTable(
     )
       .on(table.blockedQueueId, table.prerequisiteQueueId)
       .where(sql`${table.isActive} = true`),
-    caseFlowCloseBlockersPrerequisiteIdx: index(
-      'case_flow_close_blockers_prerequisite_idx',
-    ).on(table.prerequisiteQueueId),
   }),
 )
 
@@ -987,9 +971,6 @@ export const caseFlowCreationRequirements = pgTable(
     )
       .on(table.targetQueueId, table.prerequisiteQueueId)
       .where(sql`${table.isActive} = true`),
-    caseFlowCreationRequirementsPrerequisiteIdx: index(
-      'case_flow_creation_requirements_prerequisite_idx',
-    ).on(table.prerequisiteQueueId),
   }),
 )
 
@@ -1023,12 +1004,6 @@ export const caseLinks = pgTable(
       table.childCaseId,
     ),
     caseLinksMerchantIdx: index('case_links_merchant_idx').on(table.merchantId),
-    caseLinksSourceQueueIdx: index('case_links_source_queue_idx').on(
-      table.sourceQueueId,
-    ),
-    caseLinksTargetQueueIdx: index('case_links_target_queue_idx').on(
-      table.targetQueueId,
-    ),
   }),
 )
 

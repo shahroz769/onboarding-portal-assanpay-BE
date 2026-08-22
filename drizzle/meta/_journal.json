@@ -414,6 +414,83 @@
       "when": 1787410800000,
       "tag": "0059_cases_merchant_created_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1787437200000,
+      "tag": "0060_drop_cases_current_stage_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1787437260000,
+      "tag": "0061_drop_cases_owner_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1787437320000,
+      "tag": "0062_drop_cases_queue_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1787437380000,
+      "tag": "0063_drop_cases_status_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1787437440000,
+      "tag": "0064_drop_queue_stages_queue_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1787437500000,
+      "tag": "0065_drop_case_flow_close_blockers_prerequisite_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1787437560000,
+      "tag": "0066_drop_case_flow_close_triggers_target_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1787437620000,
+      "tag": "0067_drop_case_flow_creation_requirements_prerequisite_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1787437680000,
+      "tag": "0068_drop_case_links_source_queue_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1787437740000,
+      "tag": "0069_drop_case_links_target_queue_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1787437800000,
+      "tag": "0070_drop_user_queue_access_queue_idx",
+      "breakpoints": true
     }
   ]
 }
