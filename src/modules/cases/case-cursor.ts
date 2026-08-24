@@ -106,10 +106,15 @@ export function buildKeysetCondition(input: {
   id: string
 }) {
   const operator = input.sortOrder === 'desc' ? '<' : '>'
+  // Raw SQL parameters do not inherit the timestamp column's Drizzle encoder.
+  // Serialize dates explicitly so postgres.js receives a wire-safe value.
+  const value =
+    input.value instanceof Date ? input.value.toISOString() : input.value
+
   return or(
-    sql`${input.expression} ${sql.raw(operator)} ${input.value}`,
+    sql`${input.expression} ${sql.raw(operator)} ${value}`,
     and(
-      sql`${input.expression} = ${input.value}`,
+      sql`${input.expression} = ${value}`,
       sql`${input.idExpression} ${sql.raw(operator)} ${input.id}`,
     ),
   )!
