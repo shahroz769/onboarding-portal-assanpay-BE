@@ -2,6 +2,11 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 
 import { env } from '../config/env'
+import {
+  parsePostgresTextArray,
+  serializePostgresTextArray,
+  TEXT_ARRAY_OID,
+} from './postgres-text-array'
 import * as schema from './schema'
 
 let client: ReturnType<typeof postgres> | null = null
@@ -16,6 +21,17 @@ export function getQueryClient() {
       // Neon and PlanetScale pooled endpoints use transaction pooling. Avoid
       // session-bound prepared statements because transactions may switch servers.
       prepare: false,
+      // Skip the per-connection pg_catalog.pg_type scan. Register the only
+      // application array type (case_comments.mentions text[]) statically.
+      fetch_types: false,
+      types: {
+        textArray: {
+          to: TEXT_ARRAY_OID,
+          from: [TEXT_ARRAY_OID],
+          parse: parsePostgresTextArray,
+          serialize: serializePostgresTextArray,
+        },
+      },
     })
   }
 
