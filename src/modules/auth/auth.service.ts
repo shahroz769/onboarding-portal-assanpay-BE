@@ -2,7 +2,12 @@ import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
-import { refreshTokens, userPasswordTokens, users } from '../../db/schema'
+import {
+  refreshTokens,
+  userPasswordTokens,
+  userQueueAccess,
+  users,
+} from '../../db/schema'
 import {
   signAccessToken,
   signRefreshToken,
@@ -45,7 +50,10 @@ function generatePublicTokenString(): string {
   return Buffer.from(bytes).toString('base64url')
 }
 
-function sanitizeUser(user: typeof users.$inferSelect) {
+function sanitizeUser(
+  user: typeof users.$inferSelect,
+  workQueueIds: string[] = [],
+) {
   return {
     id: user.id,
     name: user.name,
@@ -55,6 +63,7 @@ function sanitizeUser(user: typeof users.$inferSelect) {
     roleType: user.roleType,
     status: user.status,
     queueViewScope: user.queueViewScope,
+    workQueueIds,
     createdByUserId: user.createdByUserId,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
@@ -109,10 +118,23 @@ async function issueSession(params: {
     sessionVersion: params.user.sessionVersion,
   })
 
+  const workQueueRows = await getDb()
+    .select({ queueId: userQueueAccess.queueId })
+    .from(userQueueAccess)
+    .where(
+      and(
+        eq(userQueueAccess.userId, params.user.id),
+        eq(userQueueAccess.accessType, 'work'),
+      ),
+    )
+
   return {
     accessToken,
     refreshToken,
-    user: sanitizeUser(params.user),
+    user: sanitizeUser(
+      params.user,
+      workQueueRows.map((row) => row.queueId),
+    ),
   }
 }
 
@@ -267,10 +289,23 @@ export async function refreshSession(input: {
       sessionVersion: user.sessionVersion,
     })
 
+    const workQueueRows = await tx
+      .select({ queueId: userQueueAccess.queueId })
+      .from(userQueueAccess)
+      .where(
+        and(
+          eq(userQueueAccess.userId, user.id),
+          eq(userQueueAccess.accessType, 'work'),
+        ),
+      )
+
     return {
       accessToken,
       refreshToken: nextRefreshToken,
-      user: sanitizeUser(user),
+      user: sanitizeUser(
+        user,
+        workQueueRows.map((row) => row.queueId),
+      ),
     }
   })
 }

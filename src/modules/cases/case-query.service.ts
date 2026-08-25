@@ -365,7 +365,13 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
   const access =
     actor?.roleType === 'agent' ? await getAgentQueueAccess(actor.userId) : null
 
-  if (access?.viewScope === 'selected') {
+  if (access && query.queueAccess === 'work') {
+    if (access.workQueueIds.length === 0) {
+      conditions.push(sql`false`)
+    } else {
+      conditions.push(inArray(cases.queueId, access.workQueueIds))
+    }
+  } else if (access?.viewScope === 'selected') {
     if (access.viewQueueIds.length === 0) {
       conditions.push(sql`false`)
     } else {
@@ -381,10 +387,14 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
   }
 
   if (query.queueId) {
-    if (
-      access?.viewScope === 'selected' &&
-      !access.viewQueueIds.includes(query.queueId)
-    ) {
+    const permittedQueueIds =
+      query.queueAccess === 'work'
+        ? access?.workQueueIds
+        : access?.viewScope === 'selected'
+          ? access.viewQueueIds
+          : undefined
+
+    if (permittedQueueIds && !permittedQueueIds.includes(query.queueId)) {
       conditions.push(sql`false`)
     } else {
       conditions.push(eq(cases.queueId, query.queueId))
