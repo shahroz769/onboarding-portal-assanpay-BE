@@ -52,8 +52,10 @@ const publicRateLimiter = rateLimiter({
     c.json({ error: 'Too many public requests. Please try again later.' }, 429),
 })
 
+const publicMultipartMaxSize = 225 * 1024 * 1024
+
 const publicMultipartLimit = bodyLimit({
-  maxSize: 225 * 1024 * 1024,
+  maxSize: publicMultipartMaxSize,
   onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
 })
 
@@ -62,7 +64,7 @@ app.use(
   cors({
     origin: env.CORS_ORIGIN,
     credentials: true,
-    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     exposeHeaders: ['Content-Length'],
     maxAge: 86400,
@@ -265,4 +267,5 @@ process.once('SIGINT', () => void shutdown('SIGINT'))
 export default {
   port: env.APP_PORT,
   fetch: app.fetch,
+  maxRequestBodySize: publicMultipartMaxSize,
 }
