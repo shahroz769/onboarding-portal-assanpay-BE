@@ -106,7 +106,9 @@ import {
   uploadReceivedAgreement,
 } from './agreement-case.service'
 import {
+  enqueueMissingCloseTriggerCases,
   listFailedCaseFlowCloseJobs,
+  previewMissingCloseTriggerCases,
   retryFailedCaseFlowCloseJob,
 } from './case-flow.service'
 
@@ -133,6 +135,7 @@ function parseEmailRecipientType(
 }
 
 const uuidSchema = z.string().uuid()
+const closeTriggerBackfillSchema = z.object({ triggerId: z.string().uuid() })
 
 // All routes require authentication
 caseRoutes.use('*', requireAuth)
@@ -203,6 +206,30 @@ caseRoutes.post(
     const jobId = uuidSchema.safeParse(c.req.param('jobId'))
     if (!jobId.success) throw new AppError(400, 'Invalid case-flow job ID.')
     return c.json(await retryFailedCaseFlowCloseJob(jobId.data))
+  },
+)
+
+caseRoutes.get(
+  '/flow-jobs/backfill/preview',
+  requireRoles('super_admin', 'admin'),
+  zodValidator('query', closeTriggerBackfillSchema),
+  async (c) => {
+    const { triggerId } = c.req.valid('query' as never) as z.infer<
+      typeof closeTriggerBackfillSchema
+    >
+    return c.json(await previewMissingCloseTriggerCases(triggerId))
+  },
+)
+
+caseRoutes.post(
+  '/flow-jobs/backfill',
+  requireRoles('super_admin', 'admin'),
+  zodValidator('json', closeTriggerBackfillSchema),
+  async (c) => {
+    const { triggerId } = c.req.valid('json' as never) as z.infer<
+      typeof closeTriggerBackfillSchema
+    >
+    return c.json(await enqueueMissingCloseTriggerCases(triggerId))
   },
 )
 

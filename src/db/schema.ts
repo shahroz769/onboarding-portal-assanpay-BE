@@ -1024,6 +1024,9 @@ export const caseFlowCloseJobs = pgTable(
       .notNull()
       .references(() => queues.id, { onDelete: 'restrict' }),
     attempts: integer('attempts').default(0).notNull(),
+    onlyIfTargetMissing: boolean('only_if_target_missing')
+      .default(true)
+      .notNull(),
     availableAt: timestamp('available_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1040,7 +1043,7 @@ export const caseFlowCloseJobs = pgTable(
     ).on(table.sourceCaseId, table.targetQueueId),
     caseFlowCloseJobsPendingIdx: index('case_flow_close_jobs_pending_idx')
       .on(table.availableAt, table.createdAt)
-      .where(sql`${table.completedAt} IS NULL AND ${table.failedAt} IS NULL`),
+      .where(sql`${table.completedAt} IS NULL`),
     caseFlowCloseJobsMerchantIdx: index('case_flow_close_jobs_merchant_idx').on(
       table.merchantId,
     ),

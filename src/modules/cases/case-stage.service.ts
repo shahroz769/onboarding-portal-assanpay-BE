@@ -76,11 +76,7 @@ import {
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
-import {
-  assertCreationRequirementsSatisfied,
-  enqueueCasesAfterSuccessfulClose,
-} from './case-flow.service'
-import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
+import { assertCreationRequirementsSatisfied } from './case-flow.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -680,16 +676,10 @@ export async function advanceStage(caseId: string, userId: string) {
       ownerId: userId,
     },
     conflictMessage: 'Case stage was already updated.',
-    afterUpdate: async (tx, locked, _updated, derivedStatus) => {
+    afterUpdate: async (tx, _locked, _updated, derivedStatus) => {
       if (targetStage.category !== 'closed' || derivedStatus !== 'closed') {
         return
       }
-
-      await enqueueCasesAfterSuccessfulClose(tx, {
-        id: caseId,
-        merchantId: locked.merchantId,
-        queueId: locked.queueId,
-      })
 
       if (queue != null && isQueueWorkflowType(queue, 'testing')) {
         await tx
@@ -713,10 +703,6 @@ export async function advanceStage(caseId: string, userId: string) {
       }
     },
   })
-
-  if (targetStage.category === 'closed') {
-    requestCaseFlowCloseJobDrain()
-  }
 
   return result
 }

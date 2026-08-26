@@ -7,7 +7,11 @@ import { AppError } from '../../lib/errors'
 import { getStatusForStage } from '../queues/queue-stage-defaults'
 import type { CaseStatusValue } from './cases.schemas'
 import { assertCanWorkQueue } from './case-access.service'
-import { assertCloseBlockersSatisfied } from './case-flow.service'
+import {
+  assertCloseBlockersSatisfied,
+  enqueueCasesAfterSuccessfulClose,
+} from './case-flow.service'
+import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { isCaseSlaBreached } from './case-sla'
 
 type DbTransaction = Parameters<
@@ -121,9 +125,10 @@ export async function transitionCaseState(
   const db = getDb()
   const startedAt = performance.now()
   let outcome = 'success'
+  let closeJobsEnqueued = false
 
   try {
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const locked = await lockCaseRow(tx, input.caseId)
 
       if (input.requireOwner && locked.ownerId !== input.actorId) {
@@ -174,6 +179,14 @@ export async function transitionCaseState(
         status: derivedStatus,
         updatedAt: now,
         ...input.extraFields,
+      }
+
+      if (
+        derivedStatus === 'closed' &&
+        input.extraFields?.closeOutcome === undefined
+      ) {
+        updateData.closeOutcome = 'successful'
+        updateData.closeReason = null
       }
 
       if (input.applyTerminalTimestamps !== false) {
@@ -293,8 +306,25 @@ export async function transitionCaseState(
         await input.afterUpdate(tx, locked, updatedRow, derivedStatus)
       }
 
+      if (
+        derivedStatus === 'closed' &&
+        updatedRow.closeOutcome === 'successful'
+      ) {
+        await enqueueCasesAfterSuccessfulClose(tx, {
+          id: updatedRow.id,
+          merchantId: updatedRow.merchantId,
+          queueId: updatedRow.queueId,
+        })
+        // The database trigger also captures the jobs. Wake the worker even
+        // when the application insert reports a conflict with those rows.
+        closeJobsEnqueued = true
+      }
+
       return updatedRow
     })
+
+    if (closeJobsEnqueued) requestCaseFlowCloseJobDrain()
+    return result
   } catch (error) {
     outcome = 'error'
     throw error

@@ -7,8 +7,10 @@ import {
   isNotNull,
   isNull,
   lte,
+  notExists,
   sql,
 } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 
 import { getDb } from '../../db/client'
 import { env } from '../../config/env'
@@ -51,6 +53,251 @@ type FlowSubMerchant = {
   id: string
   name: string
   draftUrl: string
+}
+
+const backfillTargetCases = alias(cases, 'backfill_target_cases')
+const backfillSourceQueues = alias(queues, 'backfill_source_queues')
+const backfillTargetQueues = alias(queues, 'backfill_target_queues')
+
+type ActiveCloseTrigger = {
+  id: string
+  sourceQueueId: string
+  sourceQueueName: string
+  targetQueueId: string
+  targetQueueName: string
+}
+
+async function getActiveCloseTrigger(
+  tx: DbTransaction,
+  triggerId: string,
+): Promise<ActiveCloseTrigger> {
+  const [trigger] = await tx
+    .select({
+      id: caseFlowCloseTriggers.id,
+      sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
+      sourceQueueName: backfillSourceQueues.name,
+      targetQueueId: caseFlowCloseTriggers.targetQueueId,
+      targetQueueName: backfillTargetQueues.name,
+      isActive: caseFlowCloseTriggers.isActive,
+    })
+    .from(caseFlowCloseTriggers)
+    .innerJoin(
+      backfillSourceQueues,
+      eq(caseFlowCloseTriggers.sourceQueueId, backfillSourceQueues.id),
+    )
+    .innerJoin(
+      backfillTargetQueues,
+      eq(caseFlowCloseTriggers.targetQueueId, backfillTargetQueues.id),
+    )
+    .where(eq(caseFlowCloseTriggers.id, triggerId))
+    .limit(1)
+
+  if (!trigger) throw new AppError(404, 'Close trigger not found.')
+  if (!trigger.isActive) {
+    throw new AppError(409, 'Activate and save this close trigger first.')
+  }
+
+  return trigger
+}
+
+async function listMissingCloseTriggerCandidates(
+  tx: DbTransaction,
+  trigger: ActiveCloseTrigger,
+) {
+  return tx
+    .selectDistinctOn([cases.merchantId], {
+      sourceCaseId: cases.id,
+      merchantId: cases.merchantId,
+      merchantName: merchants.businessName,
+    })
+    .from(cases)
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(
+      and(
+        eq(cases.queueId, trigger.sourceQueueId),
+        eq(cases.status, 'closed'),
+        eq(cases.closeOutcome, 'successful'),
+        notExists(
+          tx
+            .select({ id: backfillTargetCases.id })
+            .from(backfillTargetCases)
+            .where(
+              and(
+                eq(backfillTargetCases.merchantId, cases.merchantId),
+                eq(backfillTargetCases.queueId, trigger.targetQueueId),
+              ),
+            ),
+        ),
+        // A completed outbox job proves that the target case existed even if
+        // it was later deleted. The recovery action must never recreate it.
+        notExists(
+          tx
+            .select({ id: caseFlowCloseJobs.id })
+            .from(caseFlowCloseJobs)
+            .where(
+              and(
+                eq(caseFlowCloseJobs.merchantId, cases.merchantId),
+                eq(caseFlowCloseJobs.targetQueueId, trigger.targetQueueId),
+                isNotNull(caseFlowCloseJobs.completedAt),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(
+      cases.merchantId,
+      desc(cases.closedAt),
+      desc(cases.createdAt),
+      desc(cases.id),
+    )
+}
+
+async function getCloseTriggerCandidateBreakdown(
+  tx: DbTransaction,
+  candidates: Array<{ merchantId: string }>,
+  targetQueueId: string,
+) {
+  if (candidates.length === 0) {
+    return { neverQueued: 0, pending: 0, failed: 0 }
+  }
+
+  const jobs = await tx
+    .select({
+      merchantId: caseFlowCloseJobs.merchantId,
+      failedAt: caseFlowCloseJobs.failedAt,
+    })
+    .from(caseFlowCloseJobs)
+    .where(
+      and(
+        inArray(
+          caseFlowCloseJobs.merchantId,
+          candidates.map((candidate) => candidate.merchantId),
+        ),
+        eq(caseFlowCloseJobs.targetQueueId, targetQueueId),
+        isNull(caseFlowCloseJobs.completedAt),
+      ),
+    )
+
+  const merchantsWithJobs = new Set<string>()
+  const merchantsWithPendingJobs = new Set<string>()
+  const merchantsWithOnlyFailedJobs = new Set<string>()
+
+  for (const job of jobs) {
+    merchantsWithJobs.add(job.merchantId)
+    if (job.failedAt) {
+      if (!merchantsWithPendingJobs.has(job.merchantId)) {
+        merchantsWithOnlyFailedJobs.add(job.merchantId)
+      }
+    } else {
+      merchantsWithPendingJobs.add(job.merchantId)
+      merchantsWithOnlyFailedJobs.delete(job.merchantId)
+    }
+  }
+
+  return {
+    neverQueued: candidates.length - merchantsWithJobs.size,
+    pending: merchantsWithPendingJobs.size,
+    failed: merchantsWithOnlyFailedJobs.size,
+  }
+}
+
+function closeTriggerSummary(trigger: ActiveCloseTrigger) {
+  return {
+    id: trigger.id,
+    sourceQueueId: trigger.sourceQueueId,
+    sourceQueueName: trigger.sourceQueueName,
+    targetQueueId: trigger.targetQueueId,
+    targetQueueName: trigger.targetQueueName,
+  }
+}
+
+export async function previewMissingCloseTriggerCases(triggerId: string) {
+  return getDb().transaction(async (tx) => {
+    const trigger = await getActiveCloseTrigger(tx, triggerId)
+    const candidates = await listMissingCloseTriggerCandidates(tx, trigger)
+    const jobBreakdown = await getCloseTriggerCandidateBreakdown(
+      tx,
+      candidates,
+      trigger.targetQueueId,
+    )
+
+    return {
+      trigger: closeTriggerSummary(trigger),
+      eligibleMerchantCount: candidates.length,
+      jobBreakdown,
+      sampleMerchants: candidates
+        .slice(0, 10)
+        .map(({ merchantId, merchantName }) => ({ merchantId, merchantName })),
+    }
+  })
+}
+
+export async function enqueueMissingCloseTriggerCases(triggerId: string) {
+  const result = await getDb().transaction(async (tx) => {
+    const trigger = await getActiveCloseTrigger(tx, triggerId)
+    const candidates = await listMissingCloseTriggerCandidates(tx, trigger)
+    const jobBreakdown = await getCloseTriggerCandidateBreakdown(
+      tx,
+      candidates,
+      trigger.targetQueueId,
+    )
+    let newJobCount = 0
+    let revivedJobCount = 0
+    let queuedMerchantCount = 0
+
+    for (const candidate of candidates) {
+      const existingJobs = await tx
+        .update(caseFlowCloseJobs)
+        .set({
+          attempts: 0,
+          onlyIfTargetMissing: true,
+          availableAt: new Date(),
+          lastError: null,
+          failedAt: null,
+        })
+        .where(
+          and(
+            eq(caseFlowCloseJobs.merchantId, candidate.merchantId),
+            eq(caseFlowCloseJobs.targetQueueId, trigger.targetQueueId),
+            isNull(caseFlowCloseJobs.completedAt),
+          ),
+        )
+        .returning({ id: caseFlowCloseJobs.id })
+
+      if (existingJobs.length > 0) {
+        revivedJobCount += existingJobs.length
+        queuedMerchantCount += 1
+        continue
+      }
+
+      const insertedJobs = await tx
+        .insert(caseFlowCloseJobs)
+        .values({
+          sourceCaseId: candidate.sourceCaseId,
+          merchantId: candidate.merchantId,
+          sourceQueueId: trigger.sourceQueueId,
+          targetQueueId: trigger.targetQueueId,
+          onlyIfTargetMissing: true,
+        })
+        .onConflictDoNothing()
+        .returning({ id: caseFlowCloseJobs.id })
+
+      newJobCount += insertedJobs.length
+      if (insertedJobs.length > 0) queuedMerchantCount += 1
+    }
+
+    return {
+      trigger: closeTriggerSummary(trigger),
+      eligibleMerchantCount: candidates.length,
+      queuedMerchantCount,
+      jobBreakdown,
+      newJobCount,
+      revivedJobCount,
+    }
+  })
+
+  if (result.queuedMerchantCount > 0) requestCaseFlowCloseJobDrain()
+  return result
 }
 
 async function generateFlowCaseNumber(
@@ -306,12 +553,31 @@ async function createConfiguredCases(
     parentCaseId: string | null
     sourceQueueId: string | null
     triggerType: TriggerType
+    onlyIfTargetMissing?: boolean
   },
 ) {
   const subMerchants = await getFlowSubMerchants(tx, input)
   const createdCases: CreatedFlowCase[] = []
 
   for (const subMerchant of subMerchants) {
+    if (input.onlyIfTargetMissing) {
+      const [existingTargetCase] = await tx
+        .select({ id: cases.id })
+        .from(cases)
+        .where(
+          and(
+            eq(cases.merchantId, input.merchantId),
+            eq(cases.queueId, input.targetQueueId),
+            subMerchant
+              ? eq(cases.subMerchantId, subMerchant.id)
+              : isNull(cases.subMerchantId),
+          ),
+        )
+        .limit(1)
+
+      if (existingTargetCase) continue
+    }
+
     createdCases.push(await createConfiguredCase(tx, { ...input, subMerchant }))
   }
 
@@ -497,6 +763,7 @@ export async function enqueueCasesAfterSuccessfulClose(
         merchantId: sourceCase.merchantId,
         sourceQueueId: sourceCase.queueId,
         targetQueueId: rule.targetQueueId,
+        onlyIfTargetMissing: true,
       })),
     )
     .onConflictDoNothing()
@@ -529,12 +796,12 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           sourceQueueId: caseFlowCloseJobs.sourceQueueId,
           targetQueueId: caseFlowCloseJobs.targetQueueId,
           attempts: caseFlowCloseJobs.attempts,
+          onlyIfTargetMissing: caseFlowCloseJobs.onlyIfTargetMissing,
         })
         .from(caseFlowCloseJobs)
         .where(
           and(
             isNull(caseFlowCloseJobs.completedAt),
-            isNull(caseFlowCloseJobs.failedAt),
             lte(caseFlowCloseJobs.availableAt, new Date()),
           ),
         )
@@ -552,12 +819,19 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
         // fails, its writes roll back while this outer transaction retains
         // the job lock and safely records retry state.
         await tx.transaction(async (jobTx) => {
+          // Serialize recovery jobs for the same merchant and target queue.
+          // This makes repeated bulk recovery requests safe across workers.
+          await jobTx.execute(
+            sql`select pg_advisory_xact_lock(hashtext(${job.merchantId}), hashtext(${job.targetQueueId}))`,
+          )
+
           await createConfiguredCases(jobTx, {
             merchantId: job.merchantId,
             targetQueueId: job.targetQueueId,
             parentCaseId: job.sourceCaseId,
             sourceQueueId: job.sourceQueueId,
             triggerType: 'case_close',
+            onlyIfTargetMissing: job.onlyIfTargetMissing,
           })
         })
 
@@ -566,12 +840,16 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           .set({
             completedAt: new Date(),
             lastError: null,
+            failedAt: null,
           })
           .where(eq(caseFlowCloseJobs.id, job.id))
 
         return { handled: true, completed: true, failed: false }
       } catch (error) {
-        const nextAttempts = job.attempts + 1
+        const nextAttempts = Math.min(
+          job.attempts + 1,
+          env.CASE_FLOW_WORKER_MAX_ATTEMPTS,
+        )
         const exhausted = nextAttempts >= env.CASE_FLOW_WORKER_MAX_ATTEMPTS
         const retryDelay = Math.min(
           env.CASE_FLOW_WORKER_RETRY_BASE_MS * 2 ** job.attempts,
@@ -582,17 +860,18 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           .update(caseFlowCloseJobs)
           .set({
             attempts: nextAttempts,
-            availableAt: exhausted
-              ? new Date()
-              : new Date(Date.now() + retryDelay),
-            failedAt: exhausted ? new Date() : null,
+            availableAt: new Date(Date.now() + retryDelay),
+            // This is now a degraded-state marker, not a terminal state. The
+            // worker continues retrying at the bounded maximum interval.
+            failedAt: exhausted
+              ? sql`coalesce(${caseFlowCloseJobs.failedAt}, now())`
+              : null,
             lastError: formatCaseFlowJobError(error),
           })
           .where(
             and(
               eq(caseFlowCloseJobs.id, job.id),
               isNull(caseFlowCloseJobs.completedAt),
-              isNull(caseFlowCloseJobs.failedAt),
             ),
           )
 
@@ -618,7 +897,8 @@ export async function getCaseFlowCloseJobHealth() {
           and ${caseFlowCloseJobs.failedAt} is null
       )`,
       failed: sql<number>`count(*) filter (
-        where ${caseFlowCloseJobs.failedAt} is not null
+        where ${caseFlowCloseJobs.completedAt} is null
+          and ${caseFlowCloseJobs.failedAt} is not null
       )`,
       oldestPendingAt: sql<Date | null>`min(${caseFlowCloseJobs.createdAt}) filter (
         where ${caseFlowCloseJobs.completedAt} is null
@@ -647,7 +927,12 @@ export async function listFailedCaseFlowCloseJobs() {
       failedAt: caseFlowCloseJobs.failedAt,
     })
     .from(caseFlowCloseJobs)
-    .where(isNotNull(caseFlowCloseJobs.failedAt))
+    .where(
+      and(
+        isNull(caseFlowCloseJobs.completedAt),
+        isNotNull(caseFlowCloseJobs.failedAt),
+      ),
+    )
     .orderBy(desc(caseFlowCloseJobs.failedAt))
     .limit(100)
 }

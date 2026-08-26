@@ -78,8 +78,9 @@ import { paymentMethodSettingsSchema } from '../configuration/configuration.sche
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
 import {
   assertCreationRequirementsSatisfied,
-  triggerCasesAfterSuccessfulClose,
+  enqueueCasesAfterSuccessfulClose,
 } from './case-flow.service'
+import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -632,8 +633,9 @@ export async function activateMidGoLive(
 ) {
   const db = getDb()
   const tokenHash = await hashToken(token)
+  let closeJobsEnqueued = false
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Serialize retries across all API processes before reading token state.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${token}))`)
 
@@ -830,6 +832,13 @@ export async function activateMidGoLive(
           updatedAt: now,
         })
         .where(eq(cases.id, tokenRow.caseId))
+
+      await enqueueCasesAfterSuccessfulClose(tx, {
+        id: tokenRow.caseId,
+        merchantId: tokenRow.merchantId,
+        queueId: tokenRow.midQueueId,
+      })
+      closeJobsEnqueued = true
     }
 
     await tx.insert(caseHistory).values({
@@ -852,4 +861,7 @@ export async function activateMidGoLive(
       liveCaseNumber,
     }
   })
+
+  if (closeJobsEnqueued) requestCaseFlowCloseJobDrain()
+  return result
 }

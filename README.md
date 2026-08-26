@@ -19,8 +19,9 @@ Copy `.env.example` to `.env` and replace placeholders:
 - `DATABASE_IDLE_TIMEOUT_SECONDS`: close unused client connections after this interval (default `20`).
 - `CASE_FLOW_WORKER_*`: polling, batch, and bounded exponential retry controls
   for durable follow-up case creation. The defaults poll every second while
-  active, back off to one minute while idle, process five jobs per cycle, and
-  stop retrying after eight failed attempts.
+  active, back off to one minute while idle, and process five jobs per cycle.
+  After eight failed attempts a job is reported as degraded, but it continues
+  retrying automatically at the bounded maximum interval until it succeeds.
 - JWT secrets: distinct random values of at least 32 characters.
 - CORS, cookie, and `PUBLIC_APP_URL`: configure for the separately hosted frontend/backend.
 - `TRUST_PROXY_HEADERS`: enable only behind a proxy that overwrites forwarding headers.
@@ -46,9 +47,10 @@ bun run db:generate
 
 The API defaults to `http://localhost:3000`; database and case-flow worker
 readiness are at `/health/db`. The worker health payload reports pending jobs,
-permanently failed jobs, the oldest pending timestamp, and the last cycle.
-Admins can inspect failed jobs at `GET /api/cases/flow-jobs/failed` and requeue
-one after correcting its cause with `POST /api/cases/flow-jobs/:jobId/retry`.
+degraded retrying jobs, the oldest pending timestamp, and the last cycle.
+Admins can inspect degraded jobs at `GET /api/cases/flow-jobs/failed` and request
+an immediate retry with `POST /api/cases/flow-jobs/:jobId/retry`; this is optional
+because retries continue automatically.
 Run `db:audit` only against a migrated development or staging database. It is
 read-only and checks duplicate indexes, foreign-key index coverage, constraint
 validation, and the query-critical indexes introduced by the optimization migration.
