@@ -154,16 +154,20 @@ async function listMissingCloseTriggerCandidates(
 
 async function getCloseTriggerCandidateBreakdown(
   tx: DbTransaction,
-  candidates: Array<{ merchantId: string }>,
+  candidates: Array<{ merchantId: string; merchantName: string }>,
   targetQueueId: string,
 ) {
   if (candidates.length === 0) {
-    return { neverQueued: 0, pending: 0, failed: 0 }
+    return {
+      jobBreakdown: { neverQueued: 0, pending: 0, failed: 0 },
+      retryIssues: [],
+    }
   }
 
   const jobs = await tx
     .select({
       merchantId: caseFlowCloseJobs.merchantId,
+      attempts: caseFlowCloseJobs.attempts,
       failedAt: caseFlowCloseJobs.failedAt,
       lastError: caseFlowCloseJobs.lastError,
     })
@@ -182,12 +186,25 @@ async function getCloseTriggerCandidateBreakdown(
   const merchantsWithJobs = new Set<string>()
   const merchantsWithPendingJobs = new Set<string>()
   const merchantsWithOnlyFailedJobs = new Set<string>()
+  const latestIssueByMerchant = new Map<
+    string,
+    { attempts: number; error: string }
+  >()
 
   for (const job of jobs) {
     merchantsWithJobs.add(job.merchantId)
     if (job.failedAt || job.lastError) {
       if (!merchantsWithPendingJobs.has(job.merchantId)) {
         merchantsWithOnlyFailedJobs.add(job.merchantId)
+      }
+      if (job.lastError) {
+        const current = latestIssueByMerchant.get(job.merchantId)
+        if (!current || job.attempts >= current.attempts) {
+          latestIssueByMerchant.set(job.merchantId, {
+            attempts: job.attempts,
+            error: job.lastError,
+          })
+        }
       }
     } else {
       merchantsWithPendingJobs.add(job.merchantId)
@@ -196,9 +213,15 @@ async function getCloseTriggerCandidateBreakdown(
   }
 
   return {
-    neverQueued: candidates.length - merchantsWithJobs.size,
-    pending: merchantsWithPendingJobs.size,
-    failed: merchantsWithOnlyFailedJobs.size,
+    jobBreakdown: {
+      neverQueued: candidates.length - merchantsWithJobs.size,
+      pending: merchantsWithPendingJobs.size,
+      failed: merchantsWithOnlyFailedJobs.size,
+    },
+    retryIssues: candidates.flatMap((candidate) => {
+      const issue = latestIssueByMerchant.get(candidate.merchantId)
+      return issue ? [{ ...candidate, ...issue }] : []
+    }),
   }
 }
 
@@ -216,16 +239,18 @@ export async function previewMissingCloseTriggerCases(triggerId: string) {
   return getDb().transaction(async (tx) => {
     const trigger = await getActiveCloseTrigger(tx, triggerId)
     const candidates = await listMissingCloseTriggerCandidates(tx, trigger)
-    const jobBreakdown = await getCloseTriggerCandidateBreakdown(
-      tx,
-      candidates,
-      trigger.targetQueueId,
-    )
+    const { jobBreakdown, retryIssues } =
+      await getCloseTriggerCandidateBreakdown(
+        tx,
+        candidates,
+        trigger.targetQueueId,
+      )
 
     return {
       trigger: closeTriggerSummary(trigger),
       eligibleMerchantCount: candidates.length,
       jobBreakdown,
+      retryIssues,
       sampleMerchants: candidates
         .slice(0, 10)
         .map(({ merchantId, merchantName }) => ({ merchantId, merchantName })),
@@ -233,26 +258,91 @@ export async function previewMissingCloseTriggerCases(triggerId: string) {
   })
 }
 
-export async function enqueueMissingCloseTriggerCases(triggerId: string) {
-  const result = await getDb().transaction(async (tx) => {
-    const trigger = await getActiveCloseTrigger(tx, triggerId)
-    const candidates = await listMissingCloseTriggerCandidates(tx, trigger)
-    const jobBreakdown = await getCloseTriggerCandidateBreakdown(
-      tx,
-      candidates,
-      trigger.targetQueueId,
-    )
-    let newJobCount = 0
-    let revivedJobCount = 0
-    let queuedMerchantCount = 0
+export async function createMissingCloseTriggerCases(triggerId: string) {
+  const { trigger, candidates, jobBreakdown } = await getDb().transaction(
+    async (tx) => {
+      const trigger = await getActiveCloseTrigger(tx, triggerId)
+      const candidates = await listMissingCloseTriggerCandidates(tx, trigger)
+      const { jobBreakdown } = await getCloseTriggerCandidateBreakdown(
+        tx,
+        candidates,
+        trigger.targetQueueId,
+      )
 
-    for (const candidate of candidates) {
-      const existingJobs = await tx
+      return {
+        trigger,
+        candidates,
+        jobBreakdown,
+      }
+    },
+  )
+
+  let createdMerchantCount = 0
+  let createdCaseCount = 0
+  let skippedMerchantCount = 0
+  const failures: Array<{
+    merchantId: string
+    merchantName: string
+    error: string
+  }> = []
+
+  for (const candidate of candidates) {
+    let createdCases: CreatedFlowCase[]
+
+    try {
+      createdCases = await getDb().transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${candidate.merchantId}), hashtext(${trigger.targetQueueId}))`,
+        )
+
+        const created = await createConfiguredCases(tx, {
+          merchantId: candidate.merchantId,
+          targetQueueId: trigger.targetQueueId,
+          parentCaseId: candidate.sourceCaseId,
+          sourceQueueId: trigger.sourceQueueId,
+          triggerType: 'case_close',
+          onlyIfTargetMissing: true,
+        })
+
+        return created
+      })
+    } catch (error) {
+      const message = formatCaseFlowJobError(error)
+      failures.push({
+        merchantId: candidate.merchantId,
+        merchantName: candidate.merchantName,
+        error: message,
+      })
+
+      try {
+        await getDb()
+          .update(caseFlowCloseJobs)
+          .set({ lastError: message })
+          .where(
+            and(
+              eq(caseFlowCloseJobs.merchantId, candidate.merchantId),
+              eq(caseFlowCloseJobs.targetQueueId, trigger.targetQueueId),
+              isNull(caseFlowCloseJobs.completedAt),
+            ),
+          )
+      } catch (recordError) {
+        console.error('[case-flow] Failed to record direct creation error:', {
+          merchantId: candidate.merchantId,
+          targetQueueId: trigger.targetQueueId,
+          error: formatCaseFlowJobError(recordError),
+        })
+      }
+      continue
+    }
+
+    // Do not hold the advisory creation lock while waiting for a worker's
+    // job-row lock. The worker uses the opposite order, so separating these
+    // operations prevents a lock-order deadlock.
+    try {
+      await getDb()
         .update(caseFlowCloseJobs)
         .set({
-          attempts: 0,
-          onlyIfTargetMissing: true,
-          availableAt: sql`now()`,
+          completedAt: new Date(),
           lastError: null,
           failedAt: null,
         })
@@ -263,42 +353,34 @@ export async function enqueueMissingCloseTriggerCases(triggerId: string) {
             isNull(caseFlowCloseJobs.completedAt),
           ),
         )
-        .returning({ id: caseFlowCloseJobs.id })
-
-      if (existingJobs.length > 0) {
-        revivedJobCount += existingJobs.length
-        queuedMerchantCount += 1
-        continue
-      }
-
-      const insertedJobs = await tx
-        .insert(caseFlowCloseJobs)
-        .values({
-          sourceCaseId: candidate.sourceCaseId,
-          merchantId: candidate.merchantId,
-          sourceQueueId: trigger.sourceQueueId,
-          targetQueueId: trigger.targetQueueId,
-          onlyIfTargetMissing: true,
-        })
-        .onConflictDoNothing()
-        .returning({ id: caseFlowCloseJobs.id })
-
-      newJobCount += insertedJobs.length
-      if (insertedJobs.length > 0) queuedMerchantCount += 1
+    } catch (error) {
+      // Creation already committed. The worker will observe the target case
+      // and complete its job, so do not report a successful create as failed.
+      console.error('[case-flow] Failed to complete superseded close jobs:', {
+        merchantId: candidate.merchantId,
+        targetQueueId: trigger.targetQueueId,
+        error: formatCaseFlowJobError(error),
+      })
     }
 
-    return {
-      trigger: closeTriggerSummary(trigger),
-      eligibleMerchantCount: candidates.length,
-      queuedMerchantCount,
-      jobBreakdown,
-      newJobCount,
-      revivedJobCount,
+    if (createdCases.length === 0) {
+      skippedMerchantCount += 1
+    } else {
+      createdMerchantCount += 1
+      createdCaseCount += createdCases.length
     }
-  })
+  }
 
-  if (result.queuedMerchantCount > 0) requestCaseFlowCloseJobDrain()
-  return result
+  return {
+    trigger: closeTriggerSummary(trigger),
+    eligibleMerchantCount: candidates.length,
+    createdMerchantCount,
+    createdCaseCount,
+    skippedMerchantCount,
+    failedMerchantCount: failures.length,
+    jobBreakdown,
+    failures,
+  }
 }
 
 async function generateFlowCaseNumber(

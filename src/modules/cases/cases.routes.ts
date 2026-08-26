@@ -106,7 +106,7 @@ import {
   uploadReceivedAgreement,
 } from './agreement-case.service'
 import {
-  enqueueMissingCloseTriggerCases,
+  createMissingCloseTriggerCases,
   listFailedCaseFlowCloseJobs,
   previewMissingCloseTriggerCases,
   retryFailedCaseFlowCloseJob,
@@ -229,7 +229,7 @@ caseRoutes.post(
     const { triggerId } = c.req.valid('json' as never) as z.infer<
       typeof closeTriggerBackfillSchema
     >
-    return c.json(await enqueueMissingCloseTriggerCases(triggerId))
+    return c.json(await createMissingCloseTriggerCases(triggerId))
   },
 )
 
