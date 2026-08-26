@@ -1162,10 +1162,8 @@ function readLegacyMethodRange(
     : fallback
 }
 
-export async function getMerchantDetail(merchantId: string) {
-  const db = getDb()
-
-  const merchant = await db.query.merchants.findFirst({
+async function requireMerchant(merchantId: string) {
+  const merchant = await getDb().query.merchants.findFirst({
     where: and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)),
   })
 
@@ -1173,104 +1171,28 @@ export async function getMerchantDetail(merchantId: string) {
     throw new AppError(404, 'Merchant not found.')
   }
 
-  const owner = aliasedTable(users, 'history_actor')
+  return merchant
+}
 
-  const [documents, merchantCases, timeline, receivedAgreement] =
-    await Promise.all([
-      db
-        .select({
-          id: merchantDocuments.id,
-          documentType: merchantDocuments.documentType,
-          originalName: merchantDocuments.originalName,
-          mimeType: merchantDocuments.mimeType,
-          sizeBytes: merchantDocuments.sizeBytes,
-          status: merchantDocuments.status,
-          googleDriveWebViewLink: merchantDocuments.googleDriveWebViewLink,
-          googleDriveDownloadLink: merchantDocuments.googleDriveDownloadLink,
-          createdAt: merchantDocuments.createdAt,
-        })
-        .from(merchantDocuments)
-        .where(eq(merchantDocuments.merchantId, merchantId))
-        .orderBy(asc(merchantDocuments.createdAt)),
-      db
-        .select({
-          id: cases.id,
-          caseNumber: cases.caseNumber,
-          queueId: cases.queueId,
-          queueName: queues.name,
-          queueSlaHours: queues.slaHours,
-          stageName: queueStages.name,
-          stageCategory: queueStages.category,
-          status: cases.status,
-          priority: cases.priority,
-          closeOutcome: cases.closeOutcome,
-          closeReason: cases.closeReason,
-          slaBreached: cases.slaBreached,
-          ownerId: cases.ownerId,
-          ownerName: users.name,
-          closedAt: cases.closedAt,
-          createdAt: cases.createdAt,
-          updatedAt: cases.updatedAt,
-        })
-        .from(cases)
-        .innerJoin(queues, eq(cases.queueId, queues.id))
-        .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
-        .leftJoin(users, eq(cases.ownerId, users.id))
-        .where(eq(cases.merchantId, merchantId))
-        .orderBy(desc(cases.createdAt)),
-      db
-        .select({
-          id: caseHistory.id,
-          caseId: caseHistory.caseId,
-          caseNumber: cases.caseNumber,
-          queueName: queues.name,
-          action: caseHistory.action,
-          details: caseHistory.details,
-          actorId: caseHistory.actorId,
-          actorName: owner.name,
-          createdAt: caseHistory.createdAt,
-        })
-        .from(caseHistory)
-        .innerJoin(cases, eq(caseHistory.caseId, cases.id))
-        .innerJoin(queues, eq(cases.queueId, queues.id))
-        .leftJoin(owner, eq(caseHistory.actorId, owner.id))
-        .where(eq(cases.merchantId, merchantId))
-        .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id)),
-      db
-        .select({
-          id: caseFiles.id,
-          caseId: caseFiles.caseId,
-          caseNumber: cases.caseNumber,
-          originalName: caseFiles.originalName,
-          mimeType: caseFiles.mimeType,
-          sizeBytes: caseFiles.sizeBytes,
-          googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-          googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-          createdAt: caseFiles.createdAt,
-        })
-        .from(agreementCaseDetails)
-        .innerJoin(cases, eq(agreementCaseDetails.caseId, cases.id))
-        .innerJoin(
-          caseFiles,
-          eq(agreementCaseDetails.receivedAgreementFileId, caseFiles.id),
-        )
-        .where(
-          and(
-            eq(cases.merchantId, merchantId),
-            eq(caseFiles.fileKind, AGREEMENT_RECEIVED_FILE_KIND),
-          ),
-        )
-        .orderBy(desc(caseFiles.createdAt))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-    ])
+function isMerchantCaseOpen(
+  status: string,
+  stageCategory: string | null,
+) {
+  return status !== 'closed' && status !== 'error' && stageCategory !== 'closed'
+}
 
+function withCaseSla<
+  T extends {
+    status: string
+    stageCategory: string | null
+    slaBreached: boolean | null
+    createdAt: Date
+    queueSlaHours: number | null
+  },
+>(rows: T[]) {
   const now = new Date()
-  const casesWithSla = merchantCases.map((caseRow) => {
-    const isOpen =
-      caseRow.status !== 'closed' &&
-      caseRow.status !== 'error' &&
-      caseRow.stageCategory !== 'closed'
+  return rows.map((caseRow) => {
+    const isOpen = isMerchantCaseOpen(caseRow.status, caseRow.stageCategory)
     const slaBreached = isOpen
       ? isCaseSlaBreached({
           createdAt: caseRow.createdAt,
@@ -1280,11 +1202,144 @@ export async function getMerchantDetail(merchantId: string) {
       : (caseRow.slaBreached ?? false)
     return { ...caseRow, slaBreached }
   })
+}
 
-  const testStartedAt =
-    timeline.find((event) => event.action === 'testing_limits_applied')
-      ?.createdAt ?? null
+function merchantMilestones(
+  merchant: {
+    submittedAt: Date
+    liveAt: Date | null
+  },
+  testStartedAt: Date | null,
+) {
+  return {
+    formFilledAt: merchant.submittedAt,
+    testStartedAt,
+    liveAt: merchant.liveAt,
+  }
+}
 
+async function getTestStartedAt(merchantId: string) {
+  const [row] = await getDb()
+    .select({ createdAt: caseHistory.createdAt })
+    .from(caseHistory)
+    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(caseHistory.action, 'testing_limits_applied'),
+      ),
+    )
+    .orderBy(asc(caseHistory.createdAt))
+    .limit(1)
+
+  return row?.createdAt ?? null
+}
+
+async function listMerchantCases(merchantId: string) {
+  return getDb()
+    .select({
+      id: cases.id,
+      caseNumber: cases.caseNumber,
+      queueId: cases.queueId,
+      queueName: queues.name,
+      queueSlaHours: queues.slaHours,
+      stageName: queueStages.name,
+      stageCategory: queueStages.category,
+      status: cases.status,
+      priority: cases.priority,
+      closeOutcome: cases.closeOutcome,
+      closeReason: cases.closeReason,
+      slaBreached: cases.slaBreached,
+      ownerId: cases.ownerId,
+      ownerName: users.name,
+      closedAt: cases.closedAt,
+      createdAt: cases.createdAt,
+      updatedAt: cases.updatedAt,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .leftJoin(queueStages, eq(cases.currentStageId, queueStages.id))
+    .leftJoin(users, eq(cases.ownerId, users.id))
+    .where(eq(cases.merchantId, merchantId))
+    .orderBy(desc(cases.createdAt))
+}
+
+async function listMerchantTimeline(merchantId: string) {
+  const owner = aliasedTable(users, 'history_actor')
+
+  return getDb()
+    .select({
+      id: caseHistory.id,
+      caseId: caseHistory.caseId,
+      caseNumber: cases.caseNumber,
+      queueName: queues.name,
+      action: caseHistory.action,
+      details: caseHistory.details,
+      actorId: caseHistory.actorId,
+      actorName: owner.name,
+      createdAt: caseHistory.createdAt,
+    })
+    .from(caseHistory)
+    .innerJoin(cases, eq(caseHistory.caseId, cases.id))
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .leftJoin(owner, eq(caseHistory.actorId, owner.id))
+    .where(eq(cases.merchantId, merchantId))
+    .orderBy(asc(caseHistory.createdAt), asc(caseHistory.id))
+}
+
+async function getMerchantDocuments(merchantId: string) {
+  return getDb()
+    .select({
+      id: merchantDocuments.id,
+      documentType: merchantDocuments.documentType,
+      originalName: merchantDocuments.originalName,
+      mimeType: merchantDocuments.mimeType,
+      sizeBytes: merchantDocuments.sizeBytes,
+      status: merchantDocuments.status,
+      googleDriveWebViewLink: merchantDocuments.googleDriveWebViewLink,
+      googleDriveDownloadLink: merchantDocuments.googleDriveDownloadLink,
+      createdAt: merchantDocuments.createdAt,
+    })
+    .from(merchantDocuments)
+    .where(eq(merchantDocuments.merchantId, merchantId))
+    .orderBy(asc(merchantDocuments.createdAt))
+}
+
+async function getReceivedAgreement(merchantId: string) {
+  const [row] = await getDb()
+    .select({
+      id: caseFiles.id,
+      caseId: caseFiles.caseId,
+      caseNumber: cases.caseNumber,
+      originalName: caseFiles.originalName,
+      mimeType: caseFiles.mimeType,
+      sizeBytes: caseFiles.sizeBytes,
+      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+      createdAt: caseFiles.createdAt,
+    })
+    .from(agreementCaseDetails)
+    .innerJoin(cases, eq(agreementCaseDetails.caseId, cases.id))
+    .innerJoin(
+      caseFiles,
+      eq(agreementCaseDetails.receivedAgreementFileId, caseFiles.id),
+    )
+    .where(
+      and(
+        eq(cases.merchantId, merchantId),
+        eq(caseFiles.fileKind, AGREEMENT_RECEIVED_FILE_KIND),
+      ),
+    )
+    .orderBy(desc(caseFiles.createdAt))
+    .limit(1)
+
+  return row ?? null
+}
+
+async function getMerchantLimitsBundle(merchant: {
+  id: string
+  limitsMdrOverride: unknown
+}) {
   const [
     globalLimitsAndMdr,
     globalPaymentMethods,
@@ -1294,26 +1349,11 @@ export async function getMerchantDetail(merchantId: string) {
     getLimitsAndMdrSettings(),
     getPaymentMethodSettings(),
     getPayoutMethodSettings(),
-    getLatestMidCreationMethods(merchantId),
+    getLatestMidCreationMethods(merchant.id),
   ])
   const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
 
   return {
-    merchant: {
-      ...merchant,
-      limitsMdrOverride: override,
-    },
-    documents,
-    agreements: {
-      receivedSignedAgreement: receivedAgreement,
-    },
-    cases: casesWithSla,
-    timeline,
-    milestones: {
-      formFilledAt: merchant.submittedAt,
-      testStartedAt,
-      liveAt: merchant.liveAt,
-    },
     limitsAndMdr: {
       effective: override ?? globalLimitsAndMdr,
       override,
@@ -1322,6 +1362,179 @@ export async function getMerchantDetail(merchantId: string) {
     },
     paymentMethods: savedMethods.paymentMethods ?? globalPaymentMethods,
     payoutMethods: savedMethods.payoutMethods ?? globalPayoutMethods,
+  }
+}
+
+function toFormMerchant(merchant: Awaited<ReturnType<typeof requireMerchant>>) {
+  return {
+    id: merchant.id,
+    merchantNumber: merchant.merchantNumber,
+    submitterEmail: merchant.submitterEmail,
+    ownerFullName: merchant.ownerFullName,
+    ownerPhone: merchant.ownerPhone,
+    activeWhatsappNumber: merchant.activeWhatsappNumber,
+    businessName: merchant.businessName,
+    businessPhone: merchant.businessPhone,
+    businessEmail: merchant.businessEmail,
+    businessAddress: merchant.businessAddress,
+    businessWebsite: merchant.businessWebsite,
+    websiteCms: merchant.websiteCms,
+    businessDescription: merchant.businessDescription,
+    businessRegistrationDate: merchant.businessRegistrationDate,
+    businessNature: merchant.businessNature,
+    merchantType: merchant.merchantType,
+    estimatedMonthlyTransactions: merchant.estimatedMonthlyTransactions,
+    estimatedMonthlyVolume: merchant.estimatedMonthlyVolume,
+    accountTitle: merchant.accountTitle,
+    bankName: merchant.bankName,
+    branchName: merchant.branchName,
+    accountNumberIban: merchant.accountNumberIban,
+    swiftCode: merchant.swiftCode,
+    nextOfKinRelation: merchant.nextOfKinRelation,
+    status: merchant.status,
+    priority: merchant.priority,
+    priorityNote: merchant.priorityNote,
+    businessScope: merchant.businessScope,
+    currency: merchant.currency,
+    liveAt: merchant.liveAt,
+    submittedAt: merchant.submittedAt,
+    createdAt: merchant.createdAt,
+    updatedAt: merchant.updatedAt,
+  }
+}
+
+function isDocumentsReviewApproved(
+  rows: Array<{
+    queueName: string
+    status: string
+    closeOutcome: string | null
+  }>,
+) {
+  return rows.some((row) => {
+    const queueName = row.queueName.trim().toLowerCase().replace(/[-_]+/g, ' ')
+    const status = row.status.trim().toLowerCase().replace(/[-_]+/g, ' ')
+    const outcome = (row.closeOutcome ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[-_]+/g, ' ')
+    return (
+      queueName === 'documents review' &&
+      status === 'closed' &&
+      outcome === 'successful'
+    )
+  })
+}
+
+export async function getMerchantHeader(merchantId: string) {
+  const merchant = await requireMerchant(merchantId)
+  return {
+    id: merchant.id,
+    merchantNumber: merchant.merchantNumber,
+    businessName: merchant.businessName,
+    status: merchant.status,
+    priority: merchant.priority,
+    ownerFullName: merchant.ownerFullName,
+    submittedAt: merchant.submittedAt,
+  }
+}
+
+export async function getMerchantOverview(merchantId: string) {
+  const merchant = await requireMerchant(merchantId)
+  const [merchantCases, testStartedAt, limitsBundle] = await Promise.all([
+    listMerchantCases(merchantId),
+    getTestStartedAt(merchantId),
+    getMerchantLimitsBundle(merchant),
+  ])
+  const casesWithSla = withCaseSla(merchantCases)
+  const openCases = casesWithSla.filter((caseRow) =>
+    isMerchantCaseOpen(caseRow.status, caseRow.stageCategory),
+  )
+
+  return {
+    merchant: {
+      id: merchant.id,
+      businessName: merchant.businessName,
+      ownerFullName: merchant.ownerFullName,
+      status: merchant.status,
+      priority: merchant.priority,
+      businessScope: merchant.businessScope,
+      currency: merchant.currency,
+      updatedAt: merchant.updatedAt,
+    },
+    milestones: merchantMilestones(merchant, testStartedAt),
+    caseCounts: {
+      total: casesWithSla.length,
+      open: openCases.length,
+      working: casesWithSla.filter((caseRow) => caseRow.status === 'working')
+        .length,
+      closed: casesWithSla.length - openCases.length,
+      slaBreached: openCases.filter((caseRow) => caseRow.slaBreached).length,
+    },
+    limitsAndMdr: {
+      effective: limitsBundle.limitsAndMdr.effective,
+      isOverridden: limitsBundle.limitsAndMdr.isOverridden,
+    },
+    paymentMethods: limitsBundle.paymentMethods,
+    payoutMethods: limitsBundle.payoutMethods,
+  }
+}
+
+export async function getMerchantForm(merchantId: string) {
+  const merchant = await requireMerchant(merchantId)
+  const [documents, receivedAgreement, caseOutcomes] = await Promise.all([
+    getMerchantDocuments(merchantId),
+    getReceivedAgreement(merchantId),
+    getDb()
+      .select({
+        queueName: queues.name,
+        status: cases.status,
+        closeOutcome: cases.closeOutcome,
+      })
+      .from(cases)
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .where(eq(cases.merchantId, merchantId)),
+  ])
+
+  return {
+    merchant: toFormMerchant(merchant),
+    documents,
+    agreements: {
+      receivedSignedAgreement: receivedAgreement,
+    },
+    documentReviewApproved: isDocumentsReviewApproved(caseOutcomes),
+  }
+}
+
+export async function getMerchantLimits(merchantId: string) {
+  const merchant = await requireMerchant(merchantId)
+  const limitsBundle = await getMerchantLimitsBundle(merchant)
+
+  return {
+    merchant: {
+      id: merchant.id,
+      status: merchant.status,
+    },
+    limitsAndMdr: limitsBundle.limitsAndMdr,
+    paymentMethods: limitsBundle.paymentMethods,
+    payoutMethods: limitsBundle.payoutMethods,
+  }
+}
+
+export async function getMerchantHistory(merchantId: string) {
+  const merchant = await requireMerchant(merchantId)
+  const [merchantCases, timeline, testStartedAt] = await Promise.all([
+    listMerchantCases(merchantId),
+    listMerchantTimeline(merchantId),
+    getTestStartedAt(merchantId),
+  ])
+
+  return {
+    merchant: {
+      submitterEmail: merchant.submitterEmail,
+    },
+    milestones: merchantMilestones(merchant, testStartedAt),
+    cases: withCaseSla(merchantCases),
+    timeline,
   }
 }
 

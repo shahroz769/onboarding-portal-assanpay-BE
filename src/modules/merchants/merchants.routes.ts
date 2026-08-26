@@ -28,7 +28,11 @@ import {
   bulkSoftDeleteMerchants,
   bulkTerminateMerchants,
   bulkUpdatePriority,
-  getMerchantDetail,
+  getMerchantForm,
+  getMerchantHeader,
+  getMerchantHistory,
+  getMerchantLimits,
+  getMerchantOverview,
   listMerchants,
   permanentlyDeleteMerchant,
   resetMerchantLimitsMdr,
@@ -54,10 +58,38 @@ merchantRoutes.get(
   },
 )
 
-// GET /api/merchants/:id — Merchant detail (all roles)
+// GET /api/merchants/:id/overview — Overview tab
+merchantRoutes.get('/:id/overview', async (c) => {
+  const id = c.req.param('id')
+  const result = await getMerchantOverview(id)
+  return c.json(result)
+})
+
+// GET /api/merchants/:id/form — Form and agreement tab
+merchantRoutes.get('/:id/form', async (c) => {
+  const id = c.req.param('id')
+  const result = await getMerchantForm(id)
+  return c.json(result)
+})
+
+// GET /api/merchants/:id/history — History tab
+merchantRoutes.get('/:id/history', async (c) => {
+  const id = c.req.param('id')
+  const result = await getMerchantHistory(id)
+  return c.json(result)
+})
+
+// GET /api/merchants/:id/limits-mdr — Limits & MDR tab
+merchantRoutes.get('/:id/limits-mdr', async (c) => {
+  const id = c.req.param('id')
+  const result = await getMerchantLimits(id)
+  return c.json(result)
+})
+
+// GET /api/merchants/:id — Merchant header (all roles)
 merchantRoutes.get('/:id', async (c) => {
   const id = c.req.param('id')
-  const result = await getMerchantDetail(id)
+  const result = await getMerchantHeader(id)
   return c.json(result)
 })
 
