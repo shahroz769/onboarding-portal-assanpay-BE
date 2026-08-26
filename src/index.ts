@@ -91,7 +91,8 @@ app.get('/health/db', async (c) => {
   ])
 
   return c.json({
-    status: caseFlowJobs.failed > 0 ? 'degraded' : 'ok',
+    status:
+      caseFlowJobs.failed > 0 || caseFlowJobs.retrying > 0 ? 'degraded' : 'ok',
     db: result[0]?.ok === 1,
     caseFlowWorker: {
       running: caseFlowWorkerPromise !== null,

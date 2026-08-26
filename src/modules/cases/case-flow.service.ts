@@ -165,6 +165,7 @@ async function getCloseTriggerCandidateBreakdown(
     .select({
       merchantId: caseFlowCloseJobs.merchantId,
       failedAt: caseFlowCloseJobs.failedAt,
+      lastError: caseFlowCloseJobs.lastError,
     })
     .from(caseFlowCloseJobs)
     .where(
@@ -184,7 +185,7 @@ async function getCloseTriggerCandidateBreakdown(
 
   for (const job of jobs) {
     merchantsWithJobs.add(job.merchantId)
-    if (job.failedAt) {
+    if (job.failedAt || job.lastError) {
       if (!merchantsWithPendingJobs.has(job.merchantId)) {
         merchantsWithOnlyFailedJobs.add(job.merchantId)
       }
@@ -251,7 +252,7 @@ export async function enqueueMissingCloseTriggerCases(triggerId: string) {
         .set({
           attempts: 0,
           onlyIfTargetMissing: true,
-          availableAt: new Date(),
+          availableAt: sql`now()`,
           lastError: null,
           failedAt: null,
         })
@@ -802,7 +803,7 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
         .where(
           and(
             isNull(caseFlowCloseJobs.completedAt),
-            lte(caseFlowCloseJobs.availableAt, new Date()),
+            lte(caseFlowCloseJobs.availableAt, sql`now()`),
           ),
         )
         .orderBy(
@@ -860,7 +861,7 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           .update(caseFlowCloseJobs)
           .set({
             attempts: nextAttempts,
-            availableAt: new Date(Date.now() + retryDelay),
+            availableAt: sql`now() + (${retryDelay} * interval '1 millisecond')`,
             // This is now a degraded-state marker, not a terminal state. The
             // worker continues retrying at the bounded maximum interval.
             failedAt: exhausted
@@ -875,7 +876,14 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
             ),
           )
 
-        console.error('[case-flow] Failed to process close job:', error)
+        console.error('[case-flow] Failed to process close job:', {
+          jobId: job.id,
+          merchantId: job.merchantId,
+          sourceQueueId: job.sourceQueueId,
+          targetQueueId: job.targetQueueId,
+          attempts: nextAttempts,
+          error: formatCaseFlowJobError(error),
+        })
         return { handled: true, completed: false, failed: exhausted }
       }
     })
@@ -894,7 +902,11 @@ export async function getCaseFlowCloseJobHealth() {
     .select({
       pending: sql<number>`count(*) filter (
         where ${caseFlowCloseJobs.completedAt} is null
-          and ${caseFlowCloseJobs.failedAt} is null
+          and ${caseFlowCloseJobs.lastError} is null
+      )`,
+      retrying: sql<number>`count(*) filter (
+        where ${caseFlowCloseJobs.completedAt} is null
+          and ${caseFlowCloseJobs.lastError} is not null
       )`,
       failed: sql<number>`count(*) filter (
         where ${caseFlowCloseJobs.completedAt} is null
@@ -909,6 +921,7 @@ export async function getCaseFlowCloseJobHealth() {
 
   return {
     pending: Number(row?.pending ?? 0),
+    retrying: Number(row?.retrying ?? 0),
     failed: Number(row?.failed ?? 0),
     oldestPendingAt: row?.oldestPendingAt ?? null,
   }
@@ -942,7 +955,7 @@ export async function retryFailedCaseFlowCloseJob(jobId: string) {
     .update(caseFlowCloseJobs)
     .set({
       attempts: 0,
-      availableAt: new Date(),
+      availableAt: sql`now()`,
       lastError: null,
       failedAt: null,
     })
