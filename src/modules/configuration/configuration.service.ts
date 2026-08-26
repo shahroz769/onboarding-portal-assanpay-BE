@@ -1,9 +1,10 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
   agreementDraftTemplates,
   caseFlowCloseBlockers,
+  caseFlowCloseJobs,
   caseFlowCloseTriggers,
   caseFlowCreationRequirements,
   caseFlowStartRules,
@@ -28,6 +29,11 @@ import {
   payoutMethodSettingsSchema,
   updateCaseFlowConfigurationSchema,
 } from './configuration.schemas'
+import {
+  buildCaseFlowDependencyEdges,
+  findDependencyCycle,
+} from './case-flow-graph'
+import { requestCaseFlowCloseJobDrain } from '../cases/case-flow-worker'
 import type {
   BusinessType,
   EmailSendingModeSettings,
@@ -671,7 +677,26 @@ export async function updateCaseFlowConfiguration(
     await syncCreationRequirements(tx, value.creationRequirements, now)
 
     await assertActiveFlowGraphValid(tx, value, queueById)
+
+    // A configuration change can satisfy jobs previously blocked by a
+    // deterministic business rule. Wake those jobs immediately.
+    await tx
+      .update(caseFlowCloseJobs)
+      .set({
+        availableAt: sql`now()`,
+        blockedAt: null,
+        lastError: null,
+        failedAt: null,
+      })
+      .where(
+        and(
+          isNull(caseFlowCloseJobs.completedAt),
+          isNotNull(caseFlowCloseJobs.blockedAt),
+        ),
+      )
   })
+
+  requestCaseFlowCloseJobDrain()
 
   return getCaseFlowConfiguration()
 }
@@ -1049,6 +1074,21 @@ async function assertActiveFlowGraphValid(
     )
   }
 
+  const combinedCycle = findDependencyCycle(
+    buildCaseFlowDependencyEdges({
+      closeTriggers: activeCloseTriggers,
+      creationRequirements: activeCreationRequirements,
+      closeBlockers: activeCloseBlockers,
+    }),
+  )
+  if (combinedCycle) {
+    throwGraphCycleError(
+      'Case flow rules contain a circular dependency',
+      combinedCycle,
+      queueById,
+    )
+  }
+
   const creationRequirementTargets = new Set(
     activeCreationRequirements.map((rule) => rule.targetQueueId),
   )
@@ -1109,43 +1149,6 @@ async function assertActiveFlowGraphValid(
       },
     )
   }
-}
-
-function findDependencyCycle(
-  edges: Array<{ from: string; to: string }>,
-): string[] | null {
-  const adjacency = new Map<string, string[]>()
-  for (const edge of edges) {
-    const list = adjacency.get(edge.from) ?? []
-    list.push(edge.to)
-    adjacency.set(edge.from, list)
-  }
-
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  let cycle: string[] | null = null
-
-  function dfs(node: string, path: string[]): boolean {
-    if (visiting.has(node)) {
-      const start = path.indexOf(node)
-      cycle = [...path.slice(start), node]
-      return true
-    }
-    if (visited.has(node)) return false
-
-    visiting.add(node)
-    for (const next of adjacency.get(node) ?? []) {
-      if (dfs(next, [...path, node])) return true
-    }
-    visiting.delete(node)
-    visited.add(node)
-    return false
-  }
-
-  for (const node of adjacency.keys()) {
-    if (dfs(node, [])) return cycle
-  }
-  return null
 }
 
 function throwGraphCycleError(

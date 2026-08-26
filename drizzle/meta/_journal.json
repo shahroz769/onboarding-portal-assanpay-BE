@@ -498,6 +498,13 @@
       "when": 1787788800000,
       "tag": "0071_case_flow_safe_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1787875200000,
+      "tag": "0072_case_flow_job_classification",
+      "breakpoints": true
     }
   ]
 }

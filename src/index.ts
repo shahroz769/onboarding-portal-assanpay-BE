@@ -90,18 +90,32 @@ app.get('/health/db', async (c) => {
     getCaseFlowCloseJobHealth(),
   ])
 
+  const workerCycleStaleAfterMs = Math.max(caseFlowWorkerIdlePollMs * 3, 30_000)
+  const workerHasRecentCycle =
+    caseFlowWorkerLastCycleAt !== null &&
+    Date.now() - caseFlowWorkerLastCycleAt.getTime() <= workerCycleStaleAfterMs
+  const workerReady =
+    !shuttingDown &&
+    caseFlowWorkerLastError === null &&
+    (caseFlowWorkerPromise !== null ||
+      (caseFlowWorkerTimer !== null && workerHasRecentCycle))
+  const hasProblemJobs =
+    caseFlowJobs.retrying > 0 ||
+    caseFlowJobs.failed > 0 ||
+    caseFlowJobs.blocked > 0
+
   return c.json({
-    status:
-      caseFlowJobs.failed > 0 || caseFlowJobs.retrying > 0 ? 'degraded' : 'ok',
+    status: !workerReady ? 'unhealthy' : hasProblemJobs ? 'degraded' : 'ok',
     db: result[0]?.ok === 1,
     caseFlowWorker: {
+      ready: workerReady,
       running: caseFlowWorkerPromise !== null,
       lastCycleAt: caseFlowWorkerLastCycleAt,
       lastDurationMs: caseFlowWorkerLastDurationMs,
       lastCycleSucceeded: caseFlowWorkerLastError === null,
       ...caseFlowJobs,
     },
-  })
+  }, workerReady ? 200 : 503)
 })
 
 app.route('/api/auth', authRoutes)

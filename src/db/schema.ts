@@ -1031,6 +1031,8 @@ export const caseFlowCloseJobs = pgTable(
       .defaultNow()
       .notNull(),
     lastError: text('last_error'),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+    blockedAt: timestamp('blocked_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     failedAt: timestamp('failed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -1044,6 +1046,11 @@ export const caseFlowCloseJobs = pgTable(
     caseFlowCloseJobsPendingIdx: index('case_flow_close_jobs_pending_idx')
       .on(table.availableAt, table.createdAt)
       .where(sql`${table.completedAt} IS NULL`),
+    caseFlowCloseJobsProblemIdx: index('case_flow_close_jobs_problem_idx')
+      .on(table.lastAttemptAt, table.createdAt)
+      .where(
+        sql`${table.completedAt} IS NULL AND ${table.lastError} IS NOT NULL`,
+      ),
     caseFlowCloseJobsMerchantIdx: index('case_flow_close_jobs_merchant_idx').on(
       table.merchantId,
     ),

@@ -66,12 +66,12 @@ const envSchema = z.object({
     .positive()
     .max(100)
     .default(5),
-  CASE_FLOW_WORKER_MAX_ATTEMPTS: z.coerce
+  CASE_FLOW_WORKER_DEGRADED_AFTER_ATTEMPTS: z.coerce
     .number()
     .int()
     .positive()
     .max(20)
-    .default(8),
+    .default(Number(Bun.env.CASE_FLOW_WORKER_MAX_ATTEMPTS ?? 8)),
   CASE_FLOW_WORKER_RETRY_BASE_MS: z.coerce
     .number()
     .int()
@@ -84,6 +84,18 @@ const envSchema = z.object({
     .min(1_000)
     .max(24 * 60 * 60 * 1_000)
     .default(15 * 60_000),
+  CASE_FLOW_WORKER_BLOCKED_RETRY_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(24 * 60 * 60 * 1_000)
+    .default(6 * 60 * 60 * 1_000),
+  CASE_FLOW_WORKER_RETRY_JITTER_PERCENT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(50)
+    .default(10),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),

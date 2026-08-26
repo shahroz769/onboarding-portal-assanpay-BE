@@ -33,6 +33,10 @@ import {
 import { AppError } from '../../lib/errors'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
 import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
+import {
+  calculateCaseFlowRetryDelay,
+  classifyCaseFlowFailure,
+} from './case-flow-retry'
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -829,11 +833,46 @@ export async function enqueueCasesAfterSuccessfulClose(
       and(
         eq(caseFlowCloseTriggers.sourceQueueId, sourceCase.queueId),
         eq(caseFlowCloseTriggers.isActive, true),
+        // Match the database trigger's once-only invariant. A completed job
+        // is a tombstone proving this target was created in the past.
+        notExists(
+          tx
+            .select({ id: caseFlowCloseJobs.id })
+            .from(caseFlowCloseJobs)
+            .where(
+              and(
+                eq(caseFlowCloseJobs.merchantId, sourceCase.merchantId),
+                eq(
+                  caseFlowCloseJobs.targetQueueId,
+                  caseFlowCloseTriggers.targetQueueId,
+                ),
+                isNotNull(caseFlowCloseJobs.completedAt),
+              ),
+            ),
+        ),
       ),
     )
     .orderBy(
       asc(caseFlowCloseTriggers.order),
       asc(caseFlowCloseTriggers.createdAt),
+    )
+
+  // A newly successful close can satisfy creation requirements that blocked
+  // another target for this merchant. Re-check those jobs immediately.
+  await tx
+    .update(caseFlowCloseJobs)
+    .set({
+      availableAt: sql`now()`,
+      blockedAt: null,
+      lastError: null,
+      failedAt: null,
+    })
+    .where(
+      and(
+        eq(caseFlowCloseJobs.merchantId, sourceCase.merchantId),
+        isNull(caseFlowCloseJobs.completedAt),
+        isNotNull(caseFlowCloseJobs.blockedAt),
+      ),
     )
 
   if (rules.length === 0) return []
@@ -879,6 +918,8 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           sourceQueueId: caseFlowCloseJobs.sourceQueueId,
           targetQueueId: caseFlowCloseJobs.targetQueueId,
           attempts: caseFlowCloseJobs.attempts,
+          blockedAt: caseFlowCloseJobs.blockedAt,
+          lastError: caseFlowCloseJobs.lastError,
           onlyIfTargetMissing: caseFlowCloseJobs.onlyIfTargetMissing,
         })
         .from(caseFlowCloseJobs)
@@ -924,32 +965,41 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
             completedAt: new Date(),
             lastError: null,
             failedAt: null,
+            blockedAt: null,
           })
           .where(eq(caseFlowCloseJobs.id, job.id))
 
         return { handled: true, completed: true, failed: false }
       } catch (error) {
-        const nextAttempts = Math.min(
-          job.attempts + 1,
-          env.CASE_FLOW_WORKER_MAX_ATTEMPTS,
-        )
-        const exhausted = nextAttempts >= env.CASE_FLOW_WORKER_MAX_ATTEMPTS
-        const retryDelay = Math.min(
-          env.CASE_FLOW_WORKER_RETRY_BASE_MS * 2 ** job.attempts,
-          env.CASE_FLOW_WORKER_RETRY_MAX_MS,
-        )
+        const nextAttempts = job.attempts + 1
+        const kind = classifyCaseFlowFailure(error)
+        const degraded =
+          kind === 'transient' &&
+          nextAttempts >= env.CASE_FLOW_WORKER_DEGRADED_AFTER_ATTEMPTS
+        const retryDelay = calculateCaseFlowRetryDelay({
+          previousAttempts: job.attempts,
+          kind,
+          retryBaseMs: env.CASE_FLOW_WORKER_RETRY_BASE_MS,
+          retryMaxMs: env.CASE_FLOW_WORKER_RETRY_MAX_MS,
+          blockedRetryMs: env.CASE_FLOW_WORKER_BLOCKED_RETRY_MS,
+          jitterPercent: env.CASE_FLOW_WORKER_RETRY_JITTER_PERCENT,
+        })
+        const formattedError = formatCaseFlowJobError(error)
 
         await tx
           .update(caseFlowCloseJobs)
           .set({
             attempts: nextAttempts,
             availableAt: sql`now() + (${retryDelay} * interval '1 millisecond')`,
-            // This is now a degraded-state marker, not a terminal state. The
-            // worker continues retrying at the bounded maximum interval.
-            failedAt: exhausted
+            lastAttemptAt: sql`now()`,
+            blockedAt:
+              kind === 'blocked'
+                ? sql`coalesce(${caseFlowCloseJobs.blockedAt}, now())`
+                : null,
+            failedAt: degraded
               ? sql`coalesce(${caseFlowCloseJobs.failedAt}, now())`
               : null,
-            lastError: formatCaseFlowJobError(error),
+            lastError: formattedError,
           })
           .where(
             and(
@@ -958,15 +1008,25 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
             ),
           )
 
-        console.error('[case-flow] Failed to process close job:', {
-          jobId: job.id,
-          merchantId: job.merchantId,
-          sourceQueueId: job.sourceQueueId,
-          targetQueueId: job.targetQueueId,
-          attempts: nextAttempts,
-          error: formatCaseFlowJobError(error),
-        })
-        return { handled: true, completed: false, failed: exhausted }
+        // Log deterministic blockers once (and whenever their reason changes)
+        // instead of generating the same error every retry cycle.
+        if (
+          kind === 'transient' ||
+          job.blockedAt === null ||
+          job.lastError !== formattedError
+        ) {
+          console.error('[case-flow] Failed to process close job:', {
+            jobId: job.id,
+            merchantId: job.merchantId,
+            sourceQueueId: job.sourceQueueId,
+            targetQueueId: job.targetQueueId,
+            attempts: nextAttempts,
+            kind,
+            retryDelayMs: retryDelay,
+            error: formattedError,
+          })
+        }
+        return { handled: true, completed: false, failed: degraded }
       }
     })
 
@@ -987,25 +1047,49 @@ export async function getCaseFlowCloseJobHealth() {
           and ${caseFlowCloseJobs.lastError} is null
       )`,
       retrying: sql<number>`count(*) filter (
-        where ${caseFlowCloseJobs.completedAt} is null
-          and ${caseFlowCloseJobs.lastError} is not null
+        where ${caseFlowCloseJobs.lastError} is not null
+          and ${caseFlowCloseJobs.blockedAt} is null
+          and ${caseFlowCloseJobs.failedAt} is null
       )`,
       failed: sql<number>`count(*) filter (
-        where ${caseFlowCloseJobs.completedAt} is null
-          and ${caseFlowCloseJobs.failedAt} is not null
+        where ${caseFlowCloseJobs.failedAt} is not null
+          and ${caseFlowCloseJobs.blockedAt} is null
+      )`,
+      blocked: sql<number>`count(*) filter (
+        where ${caseFlowCloseJobs.blockedAt} is not null
       )`,
       oldestPendingAt: sql<Date | null>`min(${caseFlowCloseJobs.createdAt}) filter (
-        where ${caseFlowCloseJobs.completedAt} is null
+        where ${caseFlowCloseJobs.lastError} is null
+      )`,
+      oldestRetryingAt: sql<Date | null>`min(${caseFlowCloseJobs.createdAt}) filter (
+        where ${caseFlowCloseJobs.lastError} is not null
+          and ${caseFlowCloseJobs.blockedAt} is null
           and ${caseFlowCloseJobs.failedAt} is null
+      )`,
+      oldestFailedAt: sql<Date | null>`min(${caseFlowCloseJobs.failedAt}) filter (
+        where ${caseFlowCloseJobs.failedAt} is not null
+          and ${caseFlowCloseJobs.blockedAt} is null
+      )`,
+      oldestBlockedAt: sql<Date | null>`min(${caseFlowCloseJobs.blockedAt}) filter (
+        where ${caseFlowCloseJobs.blockedAt} is not null
+      )`,
+      nextRetryAt: sql<Date | null>`min(${caseFlowCloseJobs.availableAt}) filter (
+        where ${caseFlowCloseJobs.lastError} is not null
       )`,
     })
     .from(caseFlowCloseJobs)
+    .where(isNull(caseFlowCloseJobs.completedAt))
 
   return {
     pending: Number(row?.pending ?? 0),
     retrying: Number(row?.retrying ?? 0),
     failed: Number(row?.failed ?? 0),
+    blocked: Number(row?.blocked ?? 0),
     oldestPendingAt: row?.oldestPendingAt ?? null,
+    oldestRetryingAt: row?.oldestRetryingAt ?? null,
+    oldestFailedAt: row?.oldestFailedAt ?? null,
+    oldestBlockedAt: row?.oldestBlockedAt ?? null,
+    nextRetryAt: row?.nextRetryAt ?? null,
   }
 }
 
@@ -1019,16 +1103,19 @@ export async function listFailedCaseFlowCloseJobs() {
       targetQueueId: caseFlowCloseJobs.targetQueueId,
       attempts: caseFlowCloseJobs.attempts,
       lastError: caseFlowCloseJobs.lastError,
+      lastAttemptAt: caseFlowCloseJobs.lastAttemptAt,
+      availableAt: caseFlowCloseJobs.availableAt,
+      blockedAt: caseFlowCloseJobs.blockedAt,
       failedAt: caseFlowCloseJobs.failedAt,
     })
     .from(caseFlowCloseJobs)
     .where(
       and(
         isNull(caseFlowCloseJobs.completedAt),
-        isNotNull(caseFlowCloseJobs.failedAt),
+        isNotNull(caseFlowCloseJobs.lastError),
       ),
     )
-    .orderBy(desc(caseFlowCloseJobs.failedAt))
+    .orderBy(desc(caseFlowCloseJobs.lastAttemptAt), desc(caseFlowCloseJobs.createdAt))
     .limit(100)
 }
 
@@ -1040,18 +1127,19 @@ export async function retryFailedCaseFlowCloseJob(jobId: string) {
       availableAt: sql`now()`,
       lastError: null,
       failedAt: null,
+      blockedAt: null,
     })
     .where(
       and(
         eq(caseFlowCloseJobs.id, jobId),
         isNull(caseFlowCloseJobs.completedAt),
-        isNotNull(caseFlowCloseJobs.failedAt),
+        isNotNull(caseFlowCloseJobs.lastError),
       ),
     )
     .returning({ id: caseFlowCloseJobs.id })
 
   if (!retried) {
-    throw new AppError(404, 'Failed case-flow job not found.')
+    throw new AppError(404, 'Problem case-flow job not found.')
   }
 
   requestCaseFlowCloseJobDrain()
