@@ -58,6 +58,12 @@ configurationRoutes.get('/sub-merchants', async (c) => {
   )
 })
 
+// Operational case workflows need to know which delivery options are enabled.
+// The setting contains booleans only; updates remain restricted to admins below.
+configurationRoutes.get('/email-sending-mode', async (c) => {
+  return c.json(await getEmailSendingModeSettings())
+})
+
 configurationRoutes.use('*', requireRoles('super_admin', 'admin'))
 
 configurationRoutes.get('/', async (c) => {
@@ -90,10 +96,6 @@ configurationRoutes.get('/merchant-portal', async (c) => {
 
 configurationRoutes.get('/link-deadlines', async (c) => {
   return c.json(await getLinkDeadlineSettings())
-})
-
-configurationRoutes.get('/email-sending-mode', async (c) => {
-  return c.json(await getEmailSendingModeSettings())
 })
 
 configurationRoutes.get('/case-flow', async (c) => {
