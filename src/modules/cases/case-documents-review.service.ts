@@ -2,12 +2,9 @@ import {
   and,
   asc,
   count,
-  desc,
   eq,
-  gt,
   ilike,
   inArray,
-  isNull,
   lt,
   or,
   sql,
@@ -731,26 +728,11 @@ export async function sendForResubmission(
 
   // 5. Issue token
   const linkDeadlines = await getLinkDeadlineSettings()
-  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
-  const existingToken = await db.query.caseResubmissionTokens.findFirst({
-    where: and(
-      eq(caseResubmissionTokens.caseId, caseId),
-      isNull(caseResubmissionTokens.consumedAt),
-      gt(caseResubmissionTokens.expiresAt, minExpiry),
-    ),
-    orderBy: [desc(caseResubmissionTokens.createdAt)],
-  })
-  const issued = existingToken
-    ? {
-        token: existingToken.token,
-        tokenId: existingToken.id,
-        expiresAt: existingToken.expiresAt,
-      }
-    : await issueToken(
-        caseId,
-        userId,
-        linkDeadlines.documentsReviewResubmissionHours,
-      )
+  const issued = await issueToken(
+    caseId,
+    userId,
+    linkDeadlines.documentsReviewResubmissionHours,
+  )
 
   const preparedAt = new Date()
 

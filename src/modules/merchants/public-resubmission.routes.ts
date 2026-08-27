@@ -384,25 +384,6 @@ resubmissionRoutes.post('/:token', async (c) => {
     throw new AppError(500, 'No working stage configured for this queue.')
   }
 
-  // Consume the single-use token before any Drive work so concurrent requests
-  // cannot both upload into shared find-or-create folders.
-  await db.transaction(async (tx) => {
-    const [consumedToken] = await tx
-      .update(caseResubmissionTokens)
-      .set({ consumedAt: now })
-      .where(
-        and(
-          eq(caseResubmissionTokens.id, validated.tokenId),
-          isNull(caseResubmissionTokens.consumedAt),
-        ),
-      )
-      .returning({ id: caseResubmissionTokens.id })
-
-    if (!consumedToken) {
-      throw new AppError(410, 'This resubmission link has already been used.')
-    }
-  })
-
   const uploadedByField = new Map<
     string,
     {
@@ -536,6 +517,39 @@ resubmissionRoutes.post('/:token', async (c) => {
     })
 
     await db.transaction(async (tx) => {
+      // Consume the token in the same transaction as the completed
+      // resubmission. If any database write fails, the token remains usable.
+      // Concurrent attempts may upload into isolated attempt folders, but only
+      // the request that atomically consumes the token can commit; the other
+      // request falls through to failed-attempt storage cleanup.
+      const [consumedToken] = await tx
+        .update(caseResubmissionTokens)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(caseResubmissionTokens.id, validated.tokenId),
+            isNull(caseResubmissionTokens.consumedAt),
+          ),
+        )
+        .returning({ id: caseResubmissionTokens.id })
+
+      if (!consumedToken) {
+        throw new AppError(410, 'This resubmission link has already been used.')
+      }
+
+      // Clean up any legacy sibling tokens created before the one-active-token
+      // constraint was deployed. They must not survive into a later rejection
+      // round.
+      await tx
+        .update(caseResubmissionTokens)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(caseResubmissionTokens.caseId, caseRow.id),
+            isNull(caseResubmissionTokens.consumedAt),
+          ),
+        )
+
       await tx
         .update(merchants)
         .set({

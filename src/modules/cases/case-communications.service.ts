@@ -336,29 +336,12 @@ export async function getResubmissionEmailPreview(
     remarks: review.remarks,
   }))
 
-  // Reuse an unconsumed pending token for this case if it exists
   const linkDeadlines = await getLinkDeadlineSettings()
-  const minExpiry = new Date(Date.now() + 60 * 60 * 1000) // must be valid for at least 1h
-  const existingToken = await db.query.caseResubmissionTokens.findFirst({
-    where: and(
-      eq(caseResubmissionTokens.caseId, caseId),
-      isNull(caseResubmissionTokens.consumedAt),
-      gt(caseResubmissionTokens.expiresAt, minExpiry),
-    ),
-    orderBy: [desc(caseResubmissionTokens.createdAt)],
-  })
-
-  const issued = existingToken?.token
-    ? {
-        token: existingToken.token,
-        tokenId: existingToken.id,
-        expiresAt: existingToken.expiresAt,
-      }
-    : await issueToken(
-        caseId,
-        userId,
-        linkDeadlines.documentsReviewResubmissionHours,
-      )
+  const issued = await issueToken(
+    caseId,
+    userId,
+    linkDeadlines.documentsReviewResubmissionHours,
+  )
 
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const subject = 'Action required to update your onboarding submission'

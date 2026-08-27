@@ -1,4 +1,4 @@
-import { eq, or } from 'drizzle-orm'
+import { and, eq, isNull, or } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
@@ -37,22 +37,39 @@ export async function issueToken(
       ? new Date(Date.UTC(9999, 11, 31)) // no expiry
       : new Date(Date.now() + ttlHours * 60 * 60 * 1000)
 
-  const [row] = await db
-    .insert(caseResubmissionTokens)
-    .values({
-      caseId,
-      token: null,
-      tokenHash,
-      expiresAt,
-      createdBy: createdByUserId,
-    })
-    .returning({ id: caseResubmissionTokens.id })
+  const tokenId = await db.transaction(async (tx) => {
+    // A case may have only one usable resubmission link. Superseding older
+    // previews also prevents a link from a previous rejection round from
+    // loading the current round's rejected fields.
+    await tx
+      .update(caseResubmissionTokens)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(caseResubmissionTokens.caseId, caseId),
+          isNull(caseResubmissionTokens.consumedAt),
+        ),
+      )
 
-  if (!row) {
-    throw new AppError(500, 'Failed to issue resubmission token.')
-  }
+    const [row] = await tx
+      .insert(caseResubmissionTokens)
+      .values({
+        caseId,
+        token: null,
+        tokenHash,
+        expiresAt,
+        createdBy: createdByUserId,
+      })
+      .returning({ id: caseResubmissionTokens.id })
 
-  return { token: tokenString, tokenId: row.id, expiresAt }
+    if (!row) {
+      throw new AppError(500, 'Failed to issue resubmission token.')
+    }
+
+    return row.id
+  })
+
+  return { token: tokenString, tokenId, expiresAt }
 }
 
 export async function validateToken(token: string): Promise<ValidatedToken> {

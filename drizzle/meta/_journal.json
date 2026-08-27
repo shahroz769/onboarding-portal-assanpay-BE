@@ -505,6 +505,13 @@
       "when": 1787875200000,
       "tag": "0072_case_flow_job_classification",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1787882400000,
+      "tag": "0073_resubmission_single_active_token",
+      "breakpoints": true
     }
   ]
 }

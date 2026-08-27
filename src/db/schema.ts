@@ -1107,6 +1107,11 @@ export const caseResubmissionTokens = pgTable(
     caseResubmissionTokensCreatedByIdx: index(
       'case_resubmission_tokens_created_by_idx',
     ).on(table.createdBy),
+    caseResubmissionTokensOneActivePerCaseIdx: uniqueIndex(
+      'case_resubmission_tokens_one_active_per_case_idx',
+    )
+      .on(table.caseId)
+      .where(sql`${table.consumedAt} is null`),
   }),
 )
 
