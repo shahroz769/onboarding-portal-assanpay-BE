@@ -120,7 +120,7 @@ merchantRoutes.delete(
 // PATCH /api/merchants/:id/terminate — Terminate merchant and close open cases
 merchantRoutes.patch(
   '/:id/terminate',
-  requireRoles('super_admin'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', terminateMerchantSchema),
   async (c) => {
     const auth = c.get('auth')
@@ -160,7 +160,7 @@ merchantRoutes.patch(
 // POST /api/merchants/bulk-terminate — Bulk terminate merchants and close open cases
 merchantRoutes.post(
   '/bulk-terminate',
-  requireRoles('super_admin'),
+  requireRoles('super_admin', 'admin'),
   zodValidator('json', bulkTerminateMerchantsSchema),
   async (c) => {
     const auth = c.get('auth')
