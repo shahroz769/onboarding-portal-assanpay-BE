@@ -217,7 +217,10 @@ import {
   resolveMerchantEmailRecipient,
   uploadEmailProofFile,
 } from './case-communication-helpers'
-import type { SendForResubmissionResult } from './case-documents-review.types'
+import type {
+  RegeneratedResubmissionLinkResult,
+  SendForResubmissionResult,
+} from './case-documents-review.types'
 
 export async function saveFieldReviews(
   caseId: string,
@@ -837,7 +840,117 @@ export async function sendForResubmission(
   }
 }
 
-// ─── EP Sub-Merchant Form ───────────────────────────────────────────────────
+// ─── Resubmission Links ─────────────────────────────────────────────────────
+
+export async function regenerateResubmissionLink(
+  caseId: string,
+  userId: string,
+): Promise<RegeneratedResubmissionLinkResult> {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: cases.id,
+      ownerId: cases.ownerId,
+      status: cases.status,
+      workflowType: queues.workflowType,
+    })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(eq(cases.id, caseId))
+    .limit(1)
+
+  if (!row) throw new AppError(404, 'Case not found.')
+  if (row.workflowType !== 'document_review') {
+    throw new AppError(
+      400,
+      'Resubmission links are only available for documents-review cases.',
+    )
+  }
+  if (row.ownerId !== userId) {
+    throw new AppError(
+      403,
+      'Only the case owner can regenerate the resubmission link.',
+    )
+  }
+  if (row.status !== 'awaiting_client') {
+    throw new AppError(
+      400,
+      'The case must be awaiting the client to regenerate its resubmission link.',
+    )
+  }
+
+  const rejectedReviews = await db
+    .select({
+      fieldName: caseFieldReviews.fieldName,
+      remarks: caseFieldReviews.remarks,
+    })
+    .from(caseFieldReviews)
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        eq(caseFieldReviews.status, 'rejected'),
+      ),
+    )
+
+  if (rejectedReviews.length === 0) {
+    throw new AppError(400, 'There are no rejected fields to resubmit.')
+  }
+
+  const documentIds = rejectedReviews
+    .map((review) => getDocumentIdFromFieldName(review.fieldName))
+    .filter((id): id is string => id !== null)
+  const documentTypeById = new Map<string, string>()
+  if (documentIds.length > 0) {
+    const documents = await db
+      .select({
+        id: merchantDocuments.id,
+        documentType: merchantDocuments.documentType,
+      })
+      .from(merchantDocuments)
+      .where(inArray(merchantDocuments.id, documentIds))
+    for (const document of documents) {
+      documentTypeById.set(document.id, document.documentType)
+    }
+  }
+
+  const rejectedFieldNames = rejectedReviews.map((review) => review.fieldName)
+  const rejectedFieldLabels = rejectedReviews.map((review) =>
+    getRejectionLabel(review.fieldName, documentTypeById),
+  )
+  const rejectedFieldDetails = rejectedReviews.map((review) => ({
+    fieldName: review.fieldName,
+    label: getRejectionLabel(review.fieldName, documentTypeById),
+    type: isDocumentFieldName(review.fieldName) ? 'document' : 'text',
+    rejectionReason: review.remarks,
+  }))
+
+  const linkDeadlines = await getLinkDeadlineSettings()
+  const issued = await issueToken(
+    caseId,
+    userId,
+    linkDeadlines.documentsReviewResubmissionHours,
+  )
+  const url = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
+
+  await db.insert(caseHistory).values({
+    caseId,
+    actorId: userId,
+    action: 'resubmission_link_regenerated',
+    details: {
+      tokenId: issued.tokenId,
+      expiresAt: issued.expiresAt.toISOString(),
+      rejectedFields: rejectedFieldNames,
+      rejectedFieldLabels,
+      rejectedFieldDetails,
+    },
+  })
+
+  return {
+    url,
+    expiresAt: issued.expiresAt.toISOString(),
+    rejectedFieldCount: rejectedReviews.length,
+  }
+}
 
 export type ResubmissionContext = {
   caseId: string

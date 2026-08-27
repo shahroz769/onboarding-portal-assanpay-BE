@@ -4,3 +4,9 @@ export type SendForResubmissionResult = {
   emailLogId: string
   error?: string
 }
+
+export type RegeneratedResubmissionLinkResult = {
+  url: string
+  expiresAt: string
+  rejectedFieldCount: number
+}

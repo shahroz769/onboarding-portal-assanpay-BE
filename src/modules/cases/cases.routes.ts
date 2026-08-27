@@ -71,6 +71,7 @@ import {
   listCaseHistory,
 } from './case-comments.service'
 import {
+  regenerateResubmissionLink,
   saveDocumentReviewSubMerchant,
   saveFieldReviews,
   sendForResubmission,
@@ -501,6 +502,14 @@ caseRoutes.post(
     return c.json(result)
   },
 )
+
+// Replace the active client link with one scoped to the latest rejections.
+caseRoutes.post('/:id/send-for-resubmission/regenerate-link', async (c) => {
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await regenerateResubmissionLink(id, auth.userId)
+  return c.json(result)
+})
 
 // PUT /api/cases/:id/sub-merchant-form/selection — Select sub-merchant
 caseRoutes.put(
