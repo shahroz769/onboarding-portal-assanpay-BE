@@ -190,7 +190,10 @@ export const limitsAndMdrSettingsSchema = z
 
 export const BUSINESS_TYPE_OPTIONS = [
   { value: 'sole_proprietorship', label: 'Sole Proprietorship' },
-  { value: 'private_limited_company', label: 'Private Limited Company' },
+  {
+    value: 'private_limited_company',
+    label: 'Private Limited Company / SMC Private Limited',
+  },
   { value: 'public_limited_company', label: 'Public Limited Company' },
   { value: 'partnership', label: 'Partnership' },
   {

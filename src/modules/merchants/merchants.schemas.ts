@@ -47,11 +47,14 @@ export const merchantSpecificDocumentMap = {
     optional: ['authority_letter', 'taxpayer_registration_certificate'],
   },
   private_limited_company: {
-    required: ['company_ntn', 'company_incorporation_certificate'],
+    required: [
+      'company_ntn',
+      'company_incorporation_certificate',
+      'form_a',
+    ],
     optional: [
       'memorandum_articles',
       'form_ii',
-      'form_a',
       'board_resolution',
       'certificate_of_commencement',
     ],

@@ -44,7 +44,7 @@ export const DOCUMENT_TYPE_LABELS: Record<MerchantDocumentType, string> = {
   company_incorporation_certificate: 'Company Incorporation Certificate',
   memorandum_articles: 'Memorandum & Articles',
   form_ii: 'Form II',
-  form_a: 'Form A',
+  form_a: 'Form 1 / Form A',
   board_resolution: 'Board Resolution / Authorization Letter',
   certificate_of_commencement: 'Certificate Of Commencement',
   partnership_deed: 'Partnership Deed',
