@@ -638,7 +638,7 @@ caseRoutes.post(
 )
 
 // GET /api/cases/:id/comments — List comments for a case
-// POST /api/cases/:id/testing/send-credentials-mail - Send credentials and Go-Live link
+// POST /api/cases/:id/testing/send-credentials-mail - Send testing credentials
 caseRoutes.post(
   '/:id/testing/send-credentials-mail',
   zodValidator('json', sendMidCreationEmailSchema),

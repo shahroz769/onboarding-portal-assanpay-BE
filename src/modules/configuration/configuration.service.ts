@@ -738,14 +738,13 @@ async function syncStartRules(
     })
   }
 
-  const deactivateIds = existing
+  const deleteIds = existing
     .map((row) => row.id)
     .filter((id) => !keepIds.has(id))
-  if (deactivateIds.length > 0) {
+  if (deleteIds.length > 0) {
     await tx
-      .update(caseFlowStartRules)
-      .set({ isActive: false, updatedAt: now })
-      .where(inArray(caseFlowStartRules.id, deactivateIds))
+      .delete(caseFlowStartRules)
+      .where(inArray(caseFlowStartRules.id, deleteIds))
   }
 }
 
@@ -788,14 +787,13 @@ async function syncCloseTriggers(
     })
   }
 
-  const deactivateIds = existing
+  const deleteIds = existing
     .map((row) => row.id)
     .filter((id) => !keepIds.has(id))
-  if (deactivateIds.length > 0) {
+  if (deleteIds.length > 0) {
     await tx
-      .update(caseFlowCloseTriggers)
-      .set({ isActive: false, updatedAt: now })
-      .where(inArray(caseFlowCloseTriggers.id, deactivateIds))
+      .delete(caseFlowCloseTriggers)
+      .where(inArray(caseFlowCloseTriggers.id, deleteIds))
   }
 }
 
@@ -836,14 +834,13 @@ async function syncCloseBlockers(
     })
   }
 
-  const deactivateIds = existing
+  const deleteIds = existing
     .map((row) => row.id)
     .filter((id) => !keepIds.has(id))
-  if (deactivateIds.length > 0) {
+  if (deleteIds.length > 0) {
     await tx
-      .update(caseFlowCloseBlockers)
-      .set({ isActive: false, updatedAt: now })
-      .where(inArray(caseFlowCloseBlockers.id, deactivateIds))
+      .delete(caseFlowCloseBlockers)
+      .where(inArray(caseFlowCloseBlockers.id, deleteIds))
   }
 }
 
@@ -884,14 +881,13 @@ async function syncCreationRequirements(
     })
   }
 
-  const deactivateIds = existing
+  const deleteIds = existing
     .map((row) => row.id)
     .filter((id) => !keepIds.has(id))
-  if (deactivateIds.length > 0) {
+  if (deleteIds.length > 0) {
     await tx
-      .update(caseFlowCreationRequirements)
-      .set({ isActive: false, updatedAt: now })
-      .where(inArray(caseFlowCreationRequirements.id, deactivateIds))
+      .delete(caseFlowCreationRequirements)
+      .where(inArray(caseFlowCreationRequirements.id, deleteIds))
   }
 }
 

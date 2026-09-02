@@ -9,8 +9,6 @@ import {
   inArray,
   isNull,
   lt,
-  or,
-  sql,
 } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
@@ -24,12 +22,10 @@ import {
   caseHistory,
   caseResubmissionTokens,
   cases,
-  midGoLiveTokens,
   merchantDocuments,
   merchants,
   portalMidLimitApplications,
   queues,
-  queueCaseSequences,
   queueStages,
   subMerchantFormDetails,
   subMerchantDraftTemplates,
@@ -37,14 +33,11 @@ import {
 } from '../../db/schema'
 import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { hashToken } from '../../lib/security'
-import { env } from '../../config/env'
 import type { SessionUser } from '../../types/auth'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import {
-  ensureQueueStages,
   getVisibleStagesForQueue,
   getStatusForStage,
   resolveStageForCase,
@@ -69,18 +62,12 @@ import {
   getConfiguredAgreementDraftForMerchantType,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
-  getLinkDeadlineSettings,
   getMerchantPortalSettings,
   getPaymentMethodSettings,
   getPayoutMethodSettings,
 } from '../configuration/configuration.service'
 import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
 import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
-import {
-  assertCreationRequirementsSatisfied,
-  enqueueCasesAfterSuccessfulClose,
-} from './case-flow.service'
-import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -128,7 +115,6 @@ import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
 } from './sub-merchant-form.config'
-import { isCaseSlaBreached } from './case-sla'
 import {
   assertCanViewCase,
   assertCanWorkCase,
@@ -195,8 +181,6 @@ import {
   isMerchantPortalRole,
   normalizeMethodLabel,
   parseLegacyMethodSettings,
-  tokenMatchesGoLiveAvailability,
-  type MidCreationCredentials,
   DEFAULT_MERCHANT_PORTAL_ROLE,
   ROLE_PAYOUT_METHOD_LABELS,
 } from './case-detail-lookups'
@@ -208,7 +192,6 @@ import {
   buildMidCreationEmailBody,
   buildMidCreationMessageBody,
   buildResubmissionEmailBody,
-  formatEmailDateTime,
   formatExpiryDate,
   formatExpiryLine,
   getMerchantIntegrationGuideLabel,
@@ -217,7 +200,6 @@ import {
   resolveMerchantEmailRecipient,
   uploadEmailProofFile,
 } from './case-communication-helpers'
-import { generatePublicTokenString } from './case-public-token'
 import {
   ensurePrivateInternalCaseFolder,
   ensurePublicFinalAgreementFolder,
@@ -328,7 +310,6 @@ export async function saveMidCreationDetails(
 export type MidCreationEmailResult = {
   status: 'sent' | 'failed'
   emailLogId: string
-  goLiveAvailableAt: string | null
   error?: string
 }
 
@@ -396,38 +377,10 @@ export async function sendMidCreationCredentialsEmail(
     input.recipientEmailType,
   )
 
-  const now = new Date()
-  const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
-    getLinkDeadlineSettings(),
+  const [limitsAndMdr, merchantPortal] = await Promise.all([
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
-  const availableAt =
-    linkDeadlines.goLiveAvailabilityHours == null
-      ? now
-      : new Date(
-          now.getTime() +
-            linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
-        )
-  const token = generatePublicTokenString()
-  const tokenHash = await hashToken(token)
-
-  const [tokenRow] = await db
-    .insert(midGoLiveTokens)
-    .values({
-      caseId,
-      token: null,
-      tokenHash,
-      availableAt,
-      createdBy: userId,
-    })
-    .returning({ id: midGoLiveTokens.id })
-
-  if (!tokenRow) {
-    throw new AppError(500, 'Failed to issue Go-Live token.')
-  }
-
-  const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${token}`
   const portalPassword = buildPortalPassword(
     credentials.email,
     caseRow.merchantNumber,
@@ -437,6 +390,7 @@ export async function sendMidCreationCredentialsEmail(
     caseRow.websiteCms,
     merchantPortal,
   )
+  const communicationId = crypto.randomUUID()
 
   const emailResult = await sendEmail({
     to: recipient.email,
@@ -447,9 +401,6 @@ export async function sendMidCreationCredentialsEmail(
       portalEmail: credentials.email,
       portalPassword,
       merchantPortalUrl: merchantPortal.loginUrl,
-      goLiveUrl,
-      availableAt: formatEmailDateTime(availableAt),
-      goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
       integrationGuideLabel: getMerchantIntegrationGuideLabel(
         caseRow.websiteCms,
       ),
@@ -464,10 +415,8 @@ export async function sendMidCreationCredentialsEmail(
     }),
     caseId,
     merchantId: caseRow.merchantId,
-    idempotencyKey: `mid-creation/${caseId}/${tokenRow.id}`,
+    idempotencyKey: `mid-creation/${caseId}/${communicationId}`,
     metadata: {
-      tokenId: tokenRow.id,
-      availableAt: availableAt.toISOString(),
       recipient: recipient.email,
       recipientEmailType: recipient.recipientEmailType,
       portalEmail: credentials.email,
@@ -476,18 +425,10 @@ export async function sendMidCreationCredentialsEmail(
       paymentMethods: credentials.paymentMethods,
       payoutMethods: credentials.payoutMethods,
       limitsAndMdr,
-      goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
       merchantPortalUrl: merchantPortal.loginUrl,
       serverIntegration,
     },
   })
-
-  if (emailResult.status === 'failed') {
-    await db
-      .update(midGoLiveTokens)
-      .set({ consumedAt: new Date() })
-      .where(eq(midGoLiveTokens.id, tokenRow.id))
-  }
 
   await db.insert(caseHistory).values({
     caseId,
@@ -497,13 +438,10 @@ export async function sendMidCreationCredentialsEmail(
         ? 'mid_creation_email_sent'
         : 'mid_creation_email_failed',
     details: {
-      tokenId: tokenRow.id,
       emailLogId: emailResult.emailLogId,
       recipient: recipient.email,
       recipientEmailType: recipient.recipientEmailType,
       portalMid: credentials.portalMid,
-      availableAt:
-        emailResult.status === 'sent' ? availableAt.toISOString() : null,
       error: emailResult.error ?? null,
     },
   })
@@ -512,7 +450,6 @@ export async function sendMidCreationCredentialsEmail(
     return {
       status: 'failed',
       emailLogId: emailResult.emailLogId,
-      goLiveAvailableAt: null,
       error: emailResult.error,
     }
   }
@@ -520,348 +457,5 @@ export async function sendMidCreationCredentialsEmail(
   return {
     status: 'sent',
     emailLogId: emailResult.emailLogId,
-    goLiveAvailableAt: availableAt.toISOString(),
   }
-}
-
-export type MidGoLiveContext = {
-  status: 'not_ready' | 'ready' | 'started'
-  caseNumber: string
-  merchantName: string
-  availableAt: string
-  availableInHours: number
-  liveCaseNumber: string | null
-  testingMethods: MidGoLiveTestingMethod[]
-}
-
-export type MidGoLiveTestingMethod = {
-  key: string
-  label: string
-  type: 'collection' | 'disbursement'
-}
-
-function getMidGoLiveTestingMethods(
-  credentials: MidCreationCredentials,
-): MidGoLiveTestingMethod[] {
-  return [
-    ...credentials.paymentMethods.map((method) => ({
-      key: `collection:${method.id}`,
-      label: method.label,
-      type: 'collection' as const,
-    })),
-    ...(credentials.payoutMethods.length > 0
-      ? credentials.payoutMethods.map((method) => ({
-          key: `disbursement:${method.id}`,
-          label: method.label,
-          type: 'disbursement' as const,
-        }))
-      : [
-          {
-            key: 'disbursement:default',
-            label: 'Disbursement',
-            type: 'disbursement' as const,
-          },
-        ]),
-  ]
-}
-
-export async function getMidGoLiveContext(
-  token: string,
-): Promise<MidGoLiveContext> {
-  const db = getDb()
-  const tokenHash = await hashToken(token)
-  const [row] = await db
-    .select({
-      tokenId: midGoLiveTokens.id,
-      availableAt: midGoLiveTokens.availableAt,
-      consumedAt: midGoLiveTokens.consumedAt,
-      liveCaseId: midGoLiveTokens.liveCaseId,
-      createdAt: midGoLiveTokens.createdAt,
-      midCaseNumber: cases.caseNumber,
-      merchantName: merchants.businessName,
-      merchantId: merchants.id,
-    })
-    .from(midGoLiveTokens)
-    .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
-    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-    .where(
-      or(
-        eq(midGoLiveTokens.tokenHash, tokenHash),
-        eq(midGoLiveTokens.token, token),
-      ),
-    )
-    .limit(1)
-
-  if (!row) {
-    throw new AppError(404, 'Go-Live link not found.')
-  }
-
-  const isStarted = Boolean(row.consumedAt && row.liveCaseId)
-  const isReady = row.availableAt.getTime() <= Date.now()
-  const availableInHours = Math.max(
-    0,
-    Math.round(
-      (row.availableAt.getTime() - row.createdAt.getTime()) / (60 * 60 * 1000),
-    ),
-  )
-  const liveCase = row.liveCaseId
-    ? await db.query.cases.findFirst({
-        where: eq(cases.id, row.liveCaseId),
-        columns: { caseNumber: true },
-      })
-    : null
-  const credentials = await getMidCreationCredentials(row.merchantId)
-
-  if (!credentials) {
-    throw new AppError(409, 'Merchant testing methods are not configured.')
-  }
-
-  return {
-    status: isStarted ? 'started' : isReady ? 'ready' : 'not_ready',
-    caseNumber: row.midCaseNumber,
-    merchantName: row.merchantName,
-    availableAt: row.availableAt.toISOString(),
-    availableInHours,
-    liveCaseNumber: liveCase?.caseNumber ?? null,
-    testingMethods: getMidGoLiveTestingMethods(credentials),
-  }
-}
-
-export async function activateMidGoLive(
-  token: string,
-  input: { testedMethodKeys: string[] },
-) {
-  const db = getDb()
-  const tokenHash = await hashToken(token)
-  let closeJobsEnqueued = false
-
-  const result = await db.transaction(async (tx) => {
-    // Serialize retries across all API processes before reading token state.
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${token}))`)
-
-    const [tokenRow] = await tx
-      .select({
-        id: midGoLiveTokens.id,
-        caseId: midGoLiveTokens.caseId,
-        availableAt: midGoLiveTokens.availableAt,
-        consumedAt: midGoLiveTokens.consumedAt,
-        liveCaseId: midGoLiveTokens.liveCaseId,
-        merchantId: cases.merchantId,
-        midQueueId: cases.queueId,
-        midCaseNumber: cases.caseNumber,
-        midCaseStatus: cases.status,
-        midCaseCreatedAt: cases.createdAt,
-        midCaseQueueSlaHours: queues.slaHours,
-        merchantName: merchants.businessName,
-      })
-      .from(midGoLiveTokens)
-      .innerJoin(cases, eq(midGoLiveTokens.caseId, cases.id))
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-      .where(
-        or(
-          eq(midGoLiveTokens.tokenHash, tokenHash),
-          eq(midGoLiveTokens.token, token),
-        ),
-      )
-      .limit(1)
-
-    if (!tokenRow) {
-      throw new AppError(404, 'Go-Live link not found.')
-    }
-
-    if (tokenRow.consumedAt && tokenRow.liveCaseId) {
-      const liveCase = await tx.query.cases.findFirst({
-        where: eq(cases.id, tokenRow.liveCaseId),
-        columns: { caseNumber: true },
-      })
-      return {
-        success: true as const,
-        alreadyStarted: true,
-        caseNumber: tokenRow.midCaseNumber,
-        liveCaseId: tokenRow.liveCaseId,
-        liveCaseNumber: liveCase?.caseNumber ?? null,
-      }
-    }
-
-    if (tokenRow.consumedAt) {
-      throw new AppError(410, 'This Go-Live link has already been used.')
-    }
-
-    if (tokenRow.availableAt.getTime() > Date.now()) {
-      throw new AppError(
-        425,
-        `This Go-Live link works after ${formatEmailDateTime(tokenRow.availableAt)}.`,
-      )
-    }
-
-    const credentials = await getMidCreationCredentials(tokenRow.merchantId)
-    if (!credentials) {
-      throw new AppError(409, 'Merchant testing methods are not configured.')
-    }
-
-    const testingMethods = getMidGoLiveTestingMethods(credentials)
-    const expectedMethodKeys = new Set(
-      testingMethods.map((method) => method.key),
-    )
-    const testedMethodKeys = new Set(input.testedMethodKeys)
-    const allMethodsTested =
-      expectedMethodKeys.size > 0 &&
-      testedMethodKeys.size === input.testedMethodKeys.length &&
-      testedMethodKeys.size === expectedMethodKeys.size &&
-      [...expectedMethodKeys].every((key) => testedMethodKeys.has(key))
-
-    if (!allMethodsTested) {
-      throw new AppError(
-        400,
-        'Confirm that every enabled collection and disbursement method was tested before going live.',
-      )
-    }
-
-    const liveQueue = await tx.query.queues.findFirst({
-      where: eq(queues.workflowType, 'live'),
-      columns: {
-        id: true,
-        name: true,
-        slug: true,
-        workflowType: true,
-        lifecycle: true,
-        qcEnabled: true,
-        isActive: true,
-      },
-    })
-    if (!liveQueue) {
-      throw new AppError(500, 'Live queue is not configured.')
-    }
-    if (liveQueue.lifecycle !== 'active') {
-      throw new AppError(409, 'Live queue is inactive. Go-Live is disabled.')
-    }
-
-    const existingLiveCase = await tx.query.cases.findFirst({
-      where: and(
-        eq(cases.queueId, liveQueue.id),
-        eq(cases.merchantId, tokenRow.merchantId),
-      ),
-      columns: { id: true, caseNumber: true },
-    })
-
-    const now = new Date()
-    let liveCaseId = existingLiveCase?.id ?? null
-    let liveCaseNumber = existingLiveCase?.caseNumber ?? null
-
-    if (!existingLiveCase) {
-      await assertCreationRequirementsSatisfied(tx, {
-        merchantId: tokenRow.merchantId,
-        targetQueueId: liveQueue.id,
-      })
-
-      const liveStages = await ensureQueueStages(tx, {
-        id: liveQueue.id,
-        name: liveQueue.name,
-        slug: liveQueue.slug,
-        qcEnabled: liveQueue.qcEnabled,
-        workflowType: liveQueue.workflowType,
-      })
-      const initialStage = liveStages[0]
-      if (!initialStage) {
-        throw new AppError(500, 'No initial stage configured for Live queue.')
-      }
-
-      const caseNumber = await generateCaseNumber(tx, liveQueue.id)
-      const [createdLiveCase] = await tx
-        .insert(cases)
-        .values({
-          caseNumber,
-          queueId: liveQueue.id,
-          merchantId: tokenRow.merchantId,
-          ownerId: null,
-          currentStageId: initialStage.id,
-          status: 'new',
-          updatedAt: now,
-        })
-        .returning({ id: cases.id, caseNumber: cases.caseNumber })
-
-      if (!createdLiveCase) {
-        throw new AppError(500, 'Failed to create Live case.')
-      }
-
-      liveCaseId = createdLiveCase.id
-      liveCaseNumber = createdLiveCase.caseNumber
-
-      await tx.insert(caseHistory).values({
-        caseId: createdLiveCase.id,
-        actorId: null,
-        action: 'case_created_from_mid_go_live',
-        details: {
-          midCaseId: tokenRow.caseId,
-          midCaseNumber: tokenRow.midCaseNumber,
-          merchantName: tokenRow.merchantName,
-        },
-      })
-    }
-
-    const closedStage = await tx.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, tokenRow.midQueueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    await tx
-      .update(midGoLiveTokens)
-      .set({
-        consumedAt: now,
-        liveCaseId,
-      })
-      .where(eq(midGoLiveTokens.id, tokenRow.id))
-
-    if (tokenRow.midCaseStatus !== 'closed') {
-      await tx
-        .update(cases)
-        .set({
-          status: 'closed',
-          currentStageId: closedStage?.id ?? null,
-          closeOutcome: 'successful',
-          slaBreached: isCaseSlaBreached({
-            createdAt: tokenRow.midCaseCreatedAt,
-            evaluatedAt: now,
-            slaHours: tokenRow.midCaseQueueSlaHours,
-          }),
-          closeReason: null,
-          closedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(cases.id, tokenRow.caseId))
-
-      await enqueueCasesAfterSuccessfulClose(tx, {
-        id: tokenRow.caseId,
-        merchantId: tokenRow.merchantId,
-        queueId: tokenRow.midQueueId,
-      })
-      closeJobsEnqueued = true
-    }
-
-    await tx.insert(caseHistory).values({
-      caseId: tokenRow.caseId,
-      actorId: null,
-      action: 'mid_go_live_started',
-      details: {
-        tokenId: tokenRow.id,
-        liveCaseId,
-        liveCaseNumber,
-        testedMethods: testingMethods,
-      },
-    })
-
-    return {
-      success: true as const,
-      alreadyStarted: Boolean(existingLiveCase),
-      caseNumber: tokenRow.midCaseNumber,
-      liveCaseId,
-      liveCaseNumber,
-    }
-  })
-
-  if (closeJobsEnqueued) requestCaseFlowCloseJobDrain()
-  return result
 }

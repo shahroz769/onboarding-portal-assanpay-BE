@@ -6,7 +6,6 @@ import {
   EmailShell,
   H2,
   KeyRow,
-  LinkFallback,
   Panel,
   Paragraph,
   SectionLabel,
@@ -17,9 +16,6 @@ export type MidCreationEmailProps = {
   portalEmail: string
   portalPassword: string
   merchantPortalUrl: string
-  goLiveUrl: string
-  availableAt: string
-  goLiveAvailabilityHours?: number | null
   integrationGuideLabel: string
   serverIntegration?: {
     baseUrl: string
@@ -54,9 +50,6 @@ export function MidCreationEmail({
   portalEmail,
   portalPassword,
   merchantPortalUrl,
-  goLiveUrl,
-  availableAt,
-  goLiveAvailabilityHours = 72,
   integrationGuideLabel,
   serverIntegration = null,
   paymentMethods = [],
@@ -177,30 +170,11 @@ export function MidCreationEmail({
 
       <H2>Going live</H2>
       <Paragraph>
-        {goLiveAvailabilityHours == null ? (
-          <>
-            The Go-Live button is available <strong>immediately</strong>.
-          </>
-        ) : (
-          <>
-            The Go-Live button unlocks{' '}
-            <strong>{goLiveAvailabilityHours} hours</strong> after this email —
-            on <strong>{availableAt}</strong>. Until then the link will show
-            these same instructions.
-          </>
-        )}{' '}
+        Your account cannot go live until AssanPay receives and approves the
+        signed agreement. After the Agreement case is closed successfully,
+        AssanPay will start the Live process automatically. No additional
+        Go-Live request is required from you.
       </Paragraph>
-
-      <ButtonRow>
-        <CTAButton href={goLiveUrl} variant="secondary">
-          Go live
-        </CTAButton>
-      </ButtonRow>
-
-      <LinkFallback
-        href={goLiveUrl}
-        label="If the Go-Live button doesn’t work"
-      />
     </EmailShell>
   )
 }
@@ -210,9 +184,6 @@ MidCreationEmail.PreviewProps = {
   portalEmail: 'merchant@example.com',
   portalPassword: 'merchant@ASSAN123',
   merchantPortalUrl: 'https://merchant.assanpay.com/login',
-  goLiveUrl: 'https://app.example.com/onboarding-form/go-live/abc123',
-  availableAt: 'May 8, 2026, 12:00 PM',
-  goLiveAvailabilityHours: 72,
   integrationGuideLabel: 'Custom Website',
 } satisfies MidCreationEmailProps
 

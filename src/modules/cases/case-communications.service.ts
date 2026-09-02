@@ -2,9 +2,7 @@ import {
   and,
   asc,
   count,
-  desc,
   eq,
-  gt,
   ilike,
   inArray,
   isNull,
@@ -24,7 +22,6 @@ import {
   caseHistory,
   caseResubmissionTokens,
   cases,
-  midGoLiveTokens,
   merchantDocuments,
   merchants,
   portalMidLimitApplications,
@@ -37,7 +34,6 @@ import {
 } from '../../db/schema'
 import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { hashToken } from '../../lib/security'
 import { env } from '../../config/env'
 import type { SessionUser } from '../../types/auth'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
@@ -194,7 +190,6 @@ import {
   isMerchantPortalRole,
   normalizeMethodLabel,
   parseLegacyMethodSettings,
-  tokenMatchesGoLiveAvailability,
   type MidCreationCredentials,
   DEFAULT_MERCHANT_PORTAL_ROLE,
   ROLE_PAYOUT_METHOD_LABELS,
@@ -207,7 +202,6 @@ import {
   buildMidCreationEmailBody,
   buildMidCreationMessageBody,
   buildResubmissionEmailBody,
-  formatEmailDateTime,
   formatExpiryDate,
   formatExpiryLine,
   getMerchantIntegrationGuideLabel,
@@ -230,7 +224,6 @@ import {
   validateWordpressScreenshotFile,
 } from './case-upload-validation'
 import { loadAgreementCase } from './agreement-case.service'
-import { generatePublicTokenString } from './case-public-token'
 import { loadLiveCase } from './live-case.service'
 import { loadMidCreationCase } from './mid-case.service'
 
@@ -742,7 +735,6 @@ export type MidCreationEmailPreviewResult = {
   subject: string
   body: string
   tokenId: string
-  goLiveAvailableAt: string
 }
 
 export async function getMidCreationEmailPreview(
@@ -770,68 +762,10 @@ export async function getMidCreationEmailPreview(
     _input.recipientEmailType,
   )
 
-  const [linkDeadlines, limitsAndMdr, merchantPortal] = await Promise.all([
-    getLinkDeadlineSettings(),
+  const [limitsAndMdr, merchantPortal] = await Promise.all([
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
-
-  const now = new Date()
-  const availableAt =
-    linkDeadlines.goLiveAvailabilityHours == null
-      ? now // immediately available when no delay configured
-      : new Date(
-          now.getTime() +
-            linkDeadlines.goLiveAvailabilityHours * 60 * 60 * 1000,
-        )
-
-  // Reuse an unconsumed pending go-live token
-  const minExpiry = new Date(Date.now() + 60 * 60 * 1000)
-  const existingTokenCandidate = await db.query.midGoLiveTokens.findFirst({
-    where: and(
-      eq(midGoLiveTokens.caseId, caseId),
-      isNull(midGoLiveTokens.consumedAt),
-      gt(midGoLiveTokens.availableAt, minExpiry),
-    ),
-    orderBy: [desc(midGoLiveTokens.createdAt)],
-  })
-  const existingToken =
-    existingTokenCandidate &&
-    tokenMatchesGoLiveAvailability(
-      existingTokenCandidate,
-      linkDeadlines.goLiveAvailabilityHours,
-    )
-      ? existingTokenCandidate
-      : null
-
-  let tokenId: string
-  let goLiveToken: string
-  let resolvedAvailableAt: Date
-
-  if (existingToken?.token) {
-    tokenId = existingToken.id
-    goLiveToken = existingToken.token
-    resolvedAvailableAt = existingToken.availableAt
-  } else {
-    const token = generatePublicTokenString()
-    const tokenHash = await hashToken(token)
-    resolvedAvailableAt = availableAt
-    const [tokenRow] = await db
-      .insert(midGoLiveTokens)
-      .values({
-        caseId,
-        token: null,
-        tokenHash,
-        availableAt,
-        createdBy: userId,
-      })
-      .returning({ id: midGoLiveTokens.id })
-    if (!tokenRow) throw new AppError(500, 'Failed to issue Go-Live token.')
-    tokenId = tokenRow.id
-    goLiveToken = token
-  }
-
-  const goLiveUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/go-live/${goLiveToken}`
   const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
   const portalPassword = buildPortalPassword(
     credentials.email,
@@ -847,9 +781,6 @@ export async function getMidCreationEmailPreview(
     portalEmail: credentials.email,
     portalPassword,
     merchantPortalUrl: merchantPortal.loginUrl,
-    goLiveUrl,
-    availableAt: formatEmailDateTime(resolvedAvailableAt),
-    goLiveAvailabilityHours: linkDeadlines.goLiveAvailabilityHours,
     integrationGuideLabel: getMerchantIntegrationGuideLabel(caseRow.websiteCms),
     serverIntegration,
     paymentMethods: credentials.paymentMethods,
@@ -863,8 +794,7 @@ export async function getMidCreationEmailPreview(
     recipient: recipient.email,
     subject,
     body,
-    tokenId,
-    goLiveAvailableAt: resolvedAvailableAt.toISOString(),
+    tokenId: caseId,
   }
 }
 
@@ -899,14 +829,9 @@ export async function confirmMidCreationEmailManual(
     input.recipientEmailType,
   )
 
-  const tokenRow = await db.query.midGoLiveTokens.findFirst({
-    where: and(
-      eq(midGoLiveTokens.id, input.tokenId),
-      eq(midGoLiveTokens.caseId, caseId),
-      isNull(midGoLiveTokens.consumedAt),
-    ),
-  })
-  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
+  if (input.tokenId !== caseId) {
+    throw new AppError(400, 'Invalid preview token.')
+  }
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,
@@ -931,7 +856,6 @@ export async function confirmMidCreationEmailManual(
         : 'mid_creation_email_sent_manual',
     details: {
       tokenId: input.tokenId,
-      availableAt: tokenRow.availableAt.toISOString(),
       recipient: recipient.email,
       recipientEmailType: recipient.recipientEmailType,
       portalMid: credentials.portalMid,
@@ -950,7 +874,6 @@ export type LiveActivationEmailPreviewResult = {
   subject: string
   body: string
   tokenId: string
-  goLiveAvailableAt: null
 }
 
 export async function getLiveActivationEmailPreview(
@@ -985,7 +908,6 @@ export async function getLiveActivationEmailPreview(
       liveLimits: limitsAndMdr.live,
     }),
     tokenId: caseId,
-    goLiveAvailableAt: null,
   }
 }
 

@@ -276,9 +276,6 @@ export function buildMidCreationEmailBody(params: {
   portalEmail: string
   portalPassword: string
   merchantPortalUrl: string
-  goLiveUrl: string
-  availableAt: string
-  goLiveAvailabilityHours: number | null
   serverIntegration?: ServerIntegrationDetails | null
   testingLimits: {
     transactionLimit: number
@@ -294,18 +291,11 @@ export function buildMidCreationEmailBody(params: {
     portalEmail,
     portalPassword,
     merchantPortalUrl,
-    goLiveUrl,
-    availableAt,
-    goLiveAvailabilityHours,
     testingLimits,
     paymentMethods,
     payoutRate,
     payoutRateLabel,
   } = params
-  const goLiveAvailabilityLabel =
-    goLiveAvailabilityHours == null
-      ? 'immediately'
-      : `after ${goLiveAvailabilityHours}h`
   return `AssanPay Merchant Portal Credentials for ${merchantName}
 
 Portal Login: ${merchantPortalUrl}
@@ -332,9 +322,8 @@ Rates:
 ${paymentMethods.map((method) => `• ${method.label}: ${method.commissionRate}%`).join('\n')}
 • ${payoutRateLabel}: ${payoutRate}
 
-Go-Live Link (available ${goLiveAvailabilityLabel}):
-${goLiveUrl}
-Available at: ${availableAt}
+Live activation:
+Your account cannot go live until AssanPay receives and approves the signed agreement. After the Agreement case is closed successfully, AssanPay will start the Live process automatically. No additional Go-Live request is required from you.
 
 Please keep your credentials secure and do not share them with anyone.
 
@@ -347,9 +336,6 @@ export function buildMidCreationMessageBody(params: {
   portalEmail: string
   portalPassword: string
   merchantPortalUrl: string
-  goLiveUrl: string
-  availableAt: string
-  goLiveAvailabilityHours: number | null
   integrationGuideLabel: string
   serverIntegration?: ServerIntegrationDetails | null
   testingLimits: {
@@ -371,11 +357,6 @@ export function buildMidCreationMessageBody(params: {
   payoutRate: string
   payoutRateLabel: string
 }): string {
-  const goLiveAvailabilityLabel =
-    params.goLiveAvailabilityHours == null
-      ? 'immediately'
-      : `after ${params.goLiveAvailabilityHours}h`
-
   return `AssanPay Merchant Portal Credentials for ${params.merchantName}
 
 Portal Login: ${params.merchantPortalUrl}
@@ -409,9 +390,8 @@ Testing Instructions:
 - After testing, withdraw your balance.
 - Settlement is T+2 and is processed at 12:00 AM after each 48-hour period.
 
-Go-Live Link (available ${goLiveAvailabilityLabel}):
-${params.goLiveUrl}
-Available at: ${params.availableAt}
+Live activation:
+Your account cannot go live until AssanPay receives and approves the signed agreement. After the Agreement case is closed successfully, AssanPay will start the Live process automatically. No additional Go-Live request is required from you.
 
 Please keep your credentials secure and do not share them with anyone.
 

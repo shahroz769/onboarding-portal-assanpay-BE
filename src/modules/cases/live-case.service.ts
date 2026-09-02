@@ -418,7 +418,6 @@ export async function sendLiveActivationEmail(
     return {
       status: 'failed',
       emailLogId: emailResult.emailLogId,
-      goLiveAvailableAt: null,
       error: emailResult.error,
     }
   }
@@ -426,6 +425,5 @@ export async function sendLiveActivationEmail(
   return {
     status: 'sent',
     emailLogId: emailResult.emailLogId,
-    goLiveAvailableAt: null,
   }
 }

@@ -254,6 +254,31 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       )
     }
 
+    if (isQueueWorkflowType(queue, 'live')) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${merchant.id}), hashtext('live-case'))`,
+      )
+
+      const [existingLiveCase] = await tx
+        .select({ caseNumber: cases.caseNumber })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(
+          and(
+            eq(cases.merchantId, merchant.id),
+            eq(queues.workflowType, 'live'),
+          ),
+        )
+        .limit(1)
+
+      if (existingLiveCase) {
+        throw new AppError(
+          409,
+          `Live case ${existingLiveCase.caseNumber} already exists for this merchant.`,
+        )
+      }
+    }
+
     const selectedSubMerchant = isQueueWorkflowType(queue, 'sub_merchant_form')
       ? input.subMerchantId
         ? await tx.query.subMerchantDraftTemplates.findFirst({

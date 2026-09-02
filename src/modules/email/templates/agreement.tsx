@@ -71,6 +71,12 @@ export function AgreementEmail({
         tracking details for our record.
       </Paragraph>
       <Paragraph>
+        Your account cannot go live until AssanPay receives and approves the
+        signed agreement. Once the Agreement case is closed successfully,
+        AssanPay will start the Live process automatically. No additional
+        Go-Live request is required from you.
+      </Paragraph>
+      <Paragraph>
         If you need any clarification, please feel free to contact us at{' '}
         <a href={`mailto:${legalEmail}`}>{legalEmail}</a>.
       </Paragraph>

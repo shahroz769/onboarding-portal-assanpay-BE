@@ -344,7 +344,6 @@ export type SendLiveEmailInput = z.infer<typeof sendLiveEmailSchema>
 export const midCreationEmailResponseSchema = z.object({
   status: z.enum(['sent', 'failed']),
   emailLogId: z.string().uuid(),
-  goLiveAvailableAt: z.string().nullable(),
   error: z.string().optional(),
 })
 

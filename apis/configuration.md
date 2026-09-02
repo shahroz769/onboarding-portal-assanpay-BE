@@ -157,7 +157,7 @@ revision. Do not overwrite a stale revision.
 
 Notes:
 
-- Auto triggers always create a new case.
-- Go-Live email activation continues to create the Live case through the fixed
-  Go-Live flow.
+- Auto close triggers skip their target when that case already exists.
+- A successfully closed Agreement case creates the Live case automatically.
+- Merchants are not sent a Go-Live link and do not request Live activation.
 - Queues not referenced by these rules can still be manually triggered.
