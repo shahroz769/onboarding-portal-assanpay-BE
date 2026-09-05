@@ -4,7 +4,7 @@ import { getDb } from '../../db/client'
 import {
   agreementDraftTemplates,
   caseFlowCloseBlockers,
-  caseFlowCloseJobs,
+  caseFlowVersions,
   caseFlowCloseTriggers,
   caseFlowCreationRequirements,
   caseFlowStartRules,
@@ -33,7 +33,6 @@ import {
   buildCaseFlowDependencyEdges,
   findDependencyCycle,
 } from './case-flow-graph'
-import { requestCaseFlowCloseJobDrain } from '../cases/case-flow-worker'
 import type {
   BusinessType,
   EmailSendingModeSettings,
@@ -549,20 +548,48 @@ export async function createSubMerchantDraft(input: {
   return listSubMerchantDrafts()
 }
 
-export async function getCaseFlowConfiguration() {
+export async function getCaseFlowConfiguration(versionId?: number) {
+  return getDb().transaction((tx) => readCaseFlowConfiguration(tx, versionId))
+}
+
+async function readCaseFlowConfiguration(
+  tx: DbTransaction,
+  versionId?: number,
+) {
+  const [current] = await tx
+    .select()
+    .from(flowConfigurationRevisions)
+    .where(eq(flowConfigurationRevisions.id, 1))
+    .for('share')
+  if (!current)
+    throw new AppError(409, 'Case flow versioning is not initialized.')
+  const selectedVersionId = versionId ?? current.activeFlowVersionId
+  const version = await tx.query.caseFlowVersions.findFirst({
+    where: and(
+      eq(caseFlowVersions.id, selectedVersionId),
+      isNotNull(caseFlowVersions.publishedAt),
+    ),
+  })
+  if (!version) throw new AppError(404, 'Published flow version not found.')
+  const versions = await tx
+    .select({
+      id: caseFlowVersions.id,
+      publishedAt: caseFlowVersions.publishedAt,
+      publishedBy: caseFlowVersions.publishedBy,
+      changeNote: caseFlowVersions.changeNote,
+    })
+    .from(caseFlowVersions)
+    .where(isNotNull(caseFlowVersions.publishedAt))
+    .orderBy(asc(caseFlowVersions.id))
+
   const [
-    revisionRow,
     queueRows,
     startRules,
     closeTriggers,
     closeBlockers,
     creationRequirements,
   ] = await Promise.all([
-    getDb().query.flowConfigurationRevisions.findFirst({
-      where: eq(flowConfigurationRevisions.id, 1),
-      columns: { revision: true },
-    }),
-    getDb()
+    tx
       .select({
         id: queues.id,
         name: queues.name,
@@ -574,7 +601,7 @@ export async function getCaseFlowConfiguration() {
       })
       .from(queues)
       .orderBy(queues.name),
-    getDb()
+    tx
       .select({
         id: caseFlowStartRules.id,
         targetQueueId: caseFlowStartRules.targetQueueId,
@@ -582,11 +609,12 @@ export async function getCaseFlowConfiguration() {
         isActive: caseFlowStartRules.isActive,
       })
       .from(caseFlowStartRules)
+      .where(eq(caseFlowStartRules.flowVersionId, selectedVersionId))
       .orderBy(
         asc(caseFlowStartRules.order),
         asc(caseFlowStartRules.createdAt),
       ),
-    getDb()
+    tx
       .select({
         id: caseFlowCloseTriggers.id,
         sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
@@ -595,12 +623,13 @@ export async function getCaseFlowConfiguration() {
         isActive: caseFlowCloseTriggers.isActive,
       })
       .from(caseFlowCloseTriggers)
+      .where(eq(caseFlowCloseTriggers.flowVersionId, selectedVersionId))
       .orderBy(
         asc(caseFlowCloseTriggers.sourceQueueId),
         asc(caseFlowCloseTriggers.order),
         asc(caseFlowCloseTriggers.createdAt),
       ),
-    getDb()
+    tx
       .select({
         id: caseFlowCloseBlockers.id,
         blockedQueueId: caseFlowCloseBlockers.blockedQueueId,
@@ -608,11 +637,12 @@ export async function getCaseFlowConfiguration() {
         isActive: caseFlowCloseBlockers.isActive,
       })
       .from(caseFlowCloseBlockers)
+      .where(eq(caseFlowCloseBlockers.flowVersionId, selectedVersionId))
       .orderBy(
         asc(caseFlowCloseBlockers.blockedQueueId),
         asc(caseFlowCloseBlockers.createdAt),
       ),
-    getDb()
+    tx
       .select({
         id: caseFlowCreationRequirements.id,
         targetQueueId: caseFlowCreationRequirements.targetQueueId,
@@ -620,6 +650,7 @@ export async function getCaseFlowConfiguration() {
         isActive: caseFlowCreationRequirements.isActive,
       })
       .from(caseFlowCreationRequirements)
+      .where(eq(caseFlowCreationRequirements.flowVersionId, selectedVersionId))
       .orderBy(
         asc(caseFlowCreationRequirements.targetQueueId),
         asc(caseFlowCreationRequirements.createdAt),
@@ -627,8 +658,14 @@ export async function getCaseFlowConfiguration() {
   ])
 
   return {
-    revision: revisionRow?.revision ?? 1,
-    queues: queueRows,
+    revision: current.revision,
+    versionId: version.id,
+    activeVersionId: current.activeFlowVersionId,
+    versions,
+    queues:
+      version.id === current.activeFlowVersionId
+        ? queueRows
+        : version.queueSnapshot,
     startRules,
     closeTriggers,
     closeBlockers,
@@ -638,257 +675,90 @@ export async function getCaseFlowConfiguration() {
 
 export async function updateCaseFlowConfiguration(
   input: UpdateCaseFlowConfigurationInput,
+  publishedBy: string,
 ) {
   const value = updateCaseFlowConfigurationSchema.parse(input)
-  const now = new Date()
-
-  await getDb().transaction(async (tx) => {
-    const [bumped] = await tx
-      .update(flowConfigurationRevisions)
-      .set({
-        revision: sql`${flowConfigurationRevisions.revision} + 1`,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(flowConfigurationRevisions.id, 1),
-          eq(flowConfigurationRevisions.revision, value.revision),
-        ),
-      )
-      .returning({ revision: flowConfigurationRevisions.revision })
-
-    if (!bumped) {
-      const current = await tx.query.flowConfigurationRevisions.findFirst({
-        where: eq(flowConfigurationRevisions.id, 1),
-        columns: { revision: true },
-      })
+  return getDb().transaction(async (tx) => {
+    const [current] = await tx
+      .select()
+      .from(flowConfigurationRevisions)
+      .where(eq(flowConfigurationRevisions.id, 1))
+      .for('update')
+    if (!current || current.revision !== value.revision) {
       throw new AppError(
         409,
         'Case flow configuration was updated by someone else. Reload and try again.',
-        { revision: current?.revision ?? value.revision },
+        {
+          revision: current?.revision ?? value.revision,
+        },
       )
     }
-
     const queueById = await assertReferencedQueuesExistTx(tx, value)
-
-    await syncStartRules(tx, value.startRules, now)
-    await syncCloseTriggers(tx, value.closeTriggers, now)
-    await syncCloseBlockers(tx, value.closeBlockers, now)
-    await syncCreationRequirements(tx, value.creationRequirements, now)
-
     await assertActiveFlowGraphValid(tx, value, queueById)
-
-    // A configuration change can satisfy jobs previously blocked by a
-    // deterministic business rule. Wake those jobs immediately.
-    await tx
-      .update(caseFlowCloseJobs)
-      .set({
-        availableAt: sql`now()`,
-        blockedAt: null,
-        lastError: null,
-        failedAt: null,
+    const queueSnapshot = await tx
+      .select({
+        id: queues.id,
+        name: queues.name,
+        slug: queues.slug,
+        prefix: queues.prefix,
+        workflowType: queues.workflowType,
+        lifecycle: queues.lifecycle,
+        isActive: queues.isActive,
       })
-      .where(
-        and(
-          isNull(caseFlowCloseJobs.completedAt),
-          isNotNull(caseFlowCloseJobs.blockedAt),
-        ),
+      .from(queues)
+      .orderBy(asc(queues.id))
+    const [version] = await tx
+      .insert(caseFlowVersions)
+      .values({
+        publishedBy,
+        changeNote: value.changeNote ?? null,
+        queueSnapshot,
+      })
+      .returning({ id: caseFlowVersions.id })
+    // Editor IDs belong to the previous version; every published rule gets a new ID.
+    if (value.startRules.length)
+      await tx.insert(caseFlowStartRules).values(
+        value.startRules.map(({ id, ...rule }) => ({
+          ...rule,
+          flowVersionId: version.id,
+        })),
       )
+    if (value.closeTriggers.length)
+      await tx.insert(caseFlowCloseTriggers).values(
+        value.closeTriggers.map(({ id, ...rule }) => ({
+          ...rule,
+          flowVersionId: version.id,
+        })),
+      )
+    if (value.closeBlockers.length)
+      await tx.insert(caseFlowCloseBlockers).values(
+        value.closeBlockers.map(({ id, ...rule }) => ({
+          ...rule,
+          flowVersionId: version.id,
+        })),
+      )
+    if (value.creationRequirements.length)
+      await tx.insert(caseFlowCreationRequirements).values(
+        value.creationRequirements.map(({ id, ...rule }) => ({
+          ...rule,
+          flowVersionId: version.id,
+        })),
+      )
+    await tx
+      .update(caseFlowVersions)
+      .set({ publishedAt: new Date() })
+      .where(eq(caseFlowVersions.id, version.id))
+    await tx
+      .update(flowConfigurationRevisions)
+      .set({
+        activeFlowVersionId: version.id,
+        revision: current.revision + 1,
+        updatedAt: new Date(),
+      })
+      .where(eq(flowConfigurationRevisions.id, 1))
+    // Publishing never wakes or changes jobs pinned to earlier versions.
+    return readCaseFlowConfiguration(tx, version.id)
   })
-
-  requestCaseFlowCloseJobDrain()
-
-  return getCaseFlowConfiguration()
-}
-
-async function syncStartRules(
-  tx: DbTransaction,
-  rules: UpdateCaseFlowConfigurationInput['startRules'],
-  now: Date,
-) {
-  const existing = await tx
-    .select({ id: caseFlowStartRules.id })
-    .from(caseFlowStartRules)
-  const existingIds = new Set(existing.map((row) => row.id))
-  const keepIds = new Set<string>()
-
-  for (const rule of rules) {
-    if (rule.id) {
-      if (!existingIds.has(rule.id)) {
-        throw new AppError(400, `Unknown start rule id: ${rule.id}`)
-      }
-      keepIds.add(rule.id)
-      await tx
-        .update(caseFlowStartRules)
-        .set({
-          targetQueueId: rule.targetQueueId,
-          order: rule.order,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })
-        .where(eq(caseFlowStartRules.id, rule.id))
-      continue
-    }
-
-    await tx.insert(caseFlowStartRules).values({
-      targetQueueId: rule.targetQueueId,
-      order: rule.order,
-      isActive: rule.isActive,
-      updatedAt: now,
-    })
-  }
-
-  const deleteIds = existing
-    .map((row) => row.id)
-    .filter((id) => !keepIds.has(id))
-  if (deleteIds.length > 0) {
-    await tx
-      .delete(caseFlowStartRules)
-      .where(inArray(caseFlowStartRules.id, deleteIds))
-  }
-}
-
-async function syncCloseTriggers(
-  tx: DbTransaction,
-  rules: UpdateCaseFlowConfigurationInput['closeTriggers'],
-  now: Date,
-) {
-  const existing = await tx
-    .select({ id: caseFlowCloseTriggers.id })
-    .from(caseFlowCloseTriggers)
-  const existingIds = new Set(existing.map((row) => row.id))
-  const keepIds = new Set<string>()
-
-  for (const rule of rules) {
-    if (rule.id) {
-      if (!existingIds.has(rule.id)) {
-        throw new AppError(400, `Unknown close trigger id: ${rule.id}`)
-      }
-      keepIds.add(rule.id)
-      await tx
-        .update(caseFlowCloseTriggers)
-        .set({
-          sourceQueueId: rule.sourceQueueId,
-          targetQueueId: rule.targetQueueId,
-          order: rule.order,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })
-        .where(eq(caseFlowCloseTriggers.id, rule.id))
-      continue
-    }
-
-    await tx.insert(caseFlowCloseTriggers).values({
-      sourceQueueId: rule.sourceQueueId,
-      targetQueueId: rule.targetQueueId,
-      order: rule.order,
-      isActive: rule.isActive,
-      updatedAt: now,
-    })
-  }
-
-  const deleteIds = existing
-    .map((row) => row.id)
-    .filter((id) => !keepIds.has(id))
-  if (deleteIds.length > 0) {
-    await tx
-      .delete(caseFlowCloseTriggers)
-      .where(inArray(caseFlowCloseTriggers.id, deleteIds))
-  }
-}
-
-async function syncCloseBlockers(
-  tx: DbTransaction,
-  rules: UpdateCaseFlowConfigurationInput['closeBlockers'],
-  now: Date,
-) {
-  const existing = await tx
-    .select({ id: caseFlowCloseBlockers.id })
-    .from(caseFlowCloseBlockers)
-  const existingIds = new Set(existing.map((row) => row.id))
-  const keepIds = new Set<string>()
-
-  for (const rule of rules) {
-    if (rule.id) {
-      if (!existingIds.has(rule.id)) {
-        throw new AppError(400, `Unknown close requirement id: ${rule.id}`)
-      }
-      keepIds.add(rule.id)
-      await tx
-        .update(caseFlowCloseBlockers)
-        .set({
-          blockedQueueId: rule.blockedQueueId,
-          prerequisiteQueueId: rule.prerequisiteQueueId,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })
-        .where(eq(caseFlowCloseBlockers.id, rule.id))
-      continue
-    }
-
-    await tx.insert(caseFlowCloseBlockers).values({
-      blockedQueueId: rule.blockedQueueId,
-      prerequisiteQueueId: rule.prerequisiteQueueId,
-      isActive: rule.isActive,
-      updatedAt: now,
-    })
-  }
-
-  const deleteIds = existing
-    .map((row) => row.id)
-    .filter((id) => !keepIds.has(id))
-  if (deleteIds.length > 0) {
-    await tx
-      .delete(caseFlowCloseBlockers)
-      .where(inArray(caseFlowCloseBlockers.id, deleteIds))
-  }
-}
-
-async function syncCreationRequirements(
-  tx: DbTransaction,
-  rules: UpdateCaseFlowConfigurationInput['creationRequirements'],
-  now: Date,
-) {
-  const existing = await tx
-    .select({ id: caseFlowCreationRequirements.id })
-    .from(caseFlowCreationRequirements)
-  const existingIds = new Set(existing.map((row) => row.id))
-  const keepIds = new Set<string>()
-
-  for (const rule of rules) {
-    if (rule.id) {
-      if (!existingIds.has(rule.id)) {
-        throw new AppError(400, `Unknown creation requirement id: ${rule.id}`)
-      }
-      keepIds.add(rule.id)
-      await tx
-        .update(caseFlowCreationRequirements)
-        .set({
-          targetQueueId: rule.targetQueueId,
-          prerequisiteQueueId: rule.prerequisiteQueueId,
-          isActive: rule.isActive,
-          updatedAt: now,
-        })
-        .where(eq(caseFlowCreationRequirements.id, rule.id))
-      continue
-    }
-
-    await tx.insert(caseFlowCreationRequirements).values({
-      targetQueueId: rule.targetQueueId,
-      prerequisiteQueueId: rule.prerequisiteQueueId,
-      isActive: rule.isActive,
-      updatedAt: now,
-    })
-  }
-
-  const deleteIds = existing
-    .map((row) => row.id)
-    .filter((id) => !keepIds.has(id))
-  if (deleteIds.length > 0) {
-    await tx
-      .delete(caseFlowCreationRequirements)
-      .where(inArray(caseFlowCreationRequirements.id, deleteIds))
-  }
 }
 
 async function assertReferencedQueuesExistTx(
@@ -921,6 +791,8 @@ async function assertReferencedQueuesExistTx(
     })
     .from(queues)
     .where(inArray(queues.id, Array.from(queueIds)))
+    .orderBy(asc(queues.id))
+    .for('share')
 
   if (existingRows.length !== queueIds.size) {
     throw new AppError(400, 'One or more selected queues do not exist.')

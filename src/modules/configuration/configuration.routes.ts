@@ -102,6 +102,13 @@ configurationRoutes.get('/case-flow', async (c) => {
   return c.json(await getCaseFlowConfiguration())
 })
 
+configurationRoutes.get('/case-flow/versions/:versionId', async (c) => {
+  const versionId = Number(c.req.param('versionId'))
+  if (!Number.isSafeInteger(versionId) || versionId < 1)
+    return c.json({ message: 'Invalid version.' }, 400)
+  return c.json(await getCaseFlowConfiguration(versionId))
+})
+
 configurationRoutes.put(
   '/case-flow',
   zodValidator('json', updateCaseFlowConfigurationSchema),
@@ -109,7 +116,9 @@ configurationRoutes.put(
     const input = c.req.valid(
       'json' as never,
     ) as UpdateCaseFlowConfigurationInput
-    return c.json(await updateCaseFlowConfiguration(input))
+    return c.json(
+      await updateCaseFlowConfiguration(input, c.get('auth').userId),
+    )
   },
 )
 

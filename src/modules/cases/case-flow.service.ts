@@ -42,6 +42,19 @@ type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
 >[0]
 
+export async function getMerchantFlowVersionId(
+  tx: DbTransaction,
+  merchantId: string,
+) {
+  const merchant = await tx.query.merchants.findFirst({
+    where: eq(merchants.id, merchantId),
+    columns: { flowVersionId: true },
+  })
+  if (!merchant?.flowVersionId)
+    throw new AppError(409, 'Merchant has no assigned flow version.')
+  return merchant.flowVersionId
+}
+
 type TriggerType = 'form_submission' | 'case_close'
 
 type CreatedFlowCase = {
@@ -64,6 +77,7 @@ const backfillSourceQueues = alias(queues, 'backfill_source_queues')
 const backfillTargetQueues = alias(queues, 'backfill_target_queues')
 
 type ActiveCloseTrigger = {
+  flowVersionId: number
   id: string
   sourceQueueId: string
   sourceQueueName: string
@@ -78,6 +92,7 @@ async function getActiveCloseTrigger(
   const [trigger] = await tx
     .select({
       id: caseFlowCloseTriggers.id,
+      flowVersionId: caseFlowCloseTriggers.flowVersionId,
       sourceQueueId: caseFlowCloseTriggers.sourceQueueId,
       sourceQueueName: backfillSourceQueues.name,
       targetQueueId: caseFlowCloseTriggers.targetQueueId,
@@ -119,6 +134,7 @@ async function listMissingCloseTriggerCandidates(
     .where(
       and(
         eq(cases.queueId, trigger.sourceQueueId),
+        eq(merchants.flowVersionId, trigger.flowVersionId),
         eq(cases.status, 'closed'),
         eq(cases.closeOutcome, 'successful'),
         notExists(
@@ -232,6 +248,7 @@ async function getCloseTriggerCandidateBreakdown(
 function closeTriggerSummary(trigger: ActiveCloseTrigger) {
   return {
     id: trigger.id,
+    flowVersionId: trigger.flowVersionId,
     sourceQueueId: trigger.sourceQueueId,
     sourceQueueName: trigger.sourceQueueName,
     targetQueueId: trigger.targetQueueId,
@@ -431,7 +448,12 @@ async function createConfiguredCase(
 ): Promise<CreatedFlowCase> {
   const merchant = await tx.query.merchants.findFirst({
     where: eq(merchants.id, input.merchantId),
-    columns: { id: true, businessName: true, priority: true },
+    columns: {
+      id: true,
+      businessName: true,
+      priority: true,
+      flowVersionId: true,
+    },
   })
 
   const queue = await tx.query.queues.findFirst({
@@ -483,6 +505,7 @@ async function createConfiguredCase(
     .insert(cases)
     .values({
       caseNumber,
+      flowVersionId: merchant.flowVersionId,
       queueId: queue.id,
       merchantId: merchant.id,
       subMerchantId: input.subMerchant?.id ?? null,
@@ -675,10 +698,16 @@ export async function triggerStartCasesForMerchant(
   tx: DbTransaction,
   merchantId: string,
 ) {
+  const flowVersionId = await getMerchantFlowVersionId(tx, merchantId)
   const rules = await tx
     .select({ targetQueueId: caseFlowStartRules.targetQueueId })
     .from(caseFlowStartRules)
-    .where(eq(caseFlowStartRules.isActive, true))
+    .where(
+      and(
+        eq(caseFlowStartRules.isActive, true),
+        eq(caseFlowStartRules.flowVersionId, flowVersionId),
+      ),
+    )
     .orderBy(asc(caseFlowStartRules.order), asc(caseFlowStartRules.createdAt))
 
   const createdCases: CreatedFlowCase[] = []
@@ -701,6 +730,7 @@ export async function assertCloseBlockersSatisfied(
   tx: DbTransaction,
   input: { merchantId: string; queueId: string },
 ) {
+  const flowVersionId = await getMerchantFlowVersionId(tx, input.merchantId)
   const blockers = await tx
     .select({
       prerequisiteQueueId: caseFlowCloseBlockers.prerequisiteQueueId,
@@ -712,6 +742,7 @@ export async function assertCloseBlockersSatisfied(
       and(
         eq(caseFlowCloseBlockers.blockedQueueId, input.queueId),
         eq(caseFlowCloseBlockers.isActive, true),
+        eq(caseFlowCloseBlockers.flowVersionId, flowVersionId),
       ),
     )
 
@@ -763,6 +794,7 @@ export async function assertCreationRequirementsSatisfied(
   tx: DbTransaction,
   input: { merchantId: string; targetQueueId: string },
 ) {
+  const flowVersionId = await getMerchantFlowVersionId(tx, input.merchantId)
   const requirements = await tx
     .select({
       prerequisiteQueueId: caseFlowCreationRequirements.prerequisiteQueueId,
@@ -777,6 +809,7 @@ export async function assertCreationRequirementsSatisfied(
       and(
         eq(caseFlowCreationRequirements.targetQueueId, input.targetQueueId),
         eq(caseFlowCreationRequirements.isActive, true),
+        eq(caseFlowCreationRequirements.flowVersionId, flowVersionId),
       ),
     )
 
@@ -826,6 +859,10 @@ export async function enqueueCasesAfterSuccessfulClose(
   tx: DbTransaction,
   sourceCase: { id: string; merchantId: string; queueId: string },
 ) {
+  const flowVersionId = await getMerchantFlowVersionId(
+    tx,
+    sourceCase.merchantId,
+  )
   const rules = await tx
     .select({ targetQueueId: caseFlowCloseTriggers.targetQueueId })
     .from(caseFlowCloseTriggers)
@@ -833,6 +870,7 @@ export async function enqueueCasesAfterSuccessfulClose(
       and(
         eq(caseFlowCloseTriggers.sourceQueueId, sourceCase.queueId),
         eq(caseFlowCloseTriggers.isActive, true),
+        eq(caseFlowCloseTriggers.flowVersionId, flowVersionId),
         // Match the database trigger's once-only invariant. A completed job
         // is a tombstone proving this target was created in the past.
         notExists(
@@ -881,6 +919,7 @@ export async function enqueueCasesAfterSuccessfulClose(
     .insert(caseFlowCloseJobs)
     .values(
       rules.map((rule) => ({
+        flowVersionId,
         sourceCaseId: sourceCase.id,
         merchantId: sourceCase.merchantId,
         sourceQueueId: sourceCase.queueId,
@@ -913,6 +952,7 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
       const [job] = await tx
         .select({
           id: caseFlowCloseJobs.id,
+          flowVersionId: caseFlowCloseJobs.flowVersionId,
           sourceCaseId: caseFlowCloseJobs.sourceCaseId,
           merchantId: caseFlowCloseJobs.merchantId,
           sourceQueueId: caseFlowCloseJobs.sourceQueueId,
@@ -949,6 +989,15 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
             sql`select pg_advisory_xact_lock(hashtext(${job.merchantId}), hashtext(${job.targetQueueId}))`,
           )
 
+          const flowVersionId = await getMerchantFlowVersionId(
+            jobTx,
+            job.merchantId,
+          )
+          if (flowVersionId !== job.flowVersionId)
+            throw new AppError(
+              409,
+              'Job flow version does not match its merchant.',
+            )
           await createConfiguredCases(jobTx, {
             merchantId: job.merchantId,
             targetQueueId: job.targetQueueId,
@@ -1115,7 +1164,10 @@ export async function listFailedCaseFlowCloseJobs() {
         isNotNull(caseFlowCloseJobs.lastError),
       ),
     )
-    .orderBy(desc(caseFlowCloseJobs.lastAttemptAt), desc(caseFlowCloseJobs.createdAt))
+    .orderBy(
+      desc(caseFlowCloseJobs.lastAttemptAt),
+      desc(caseFlowCloseJobs.createdAt),
+    )
     .limit(100)
 }
 

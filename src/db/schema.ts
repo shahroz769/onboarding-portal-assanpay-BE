@@ -225,11 +225,43 @@ export const configurationSettings = pgTable('configuration_settings', {
     .notNull(),
 })
 
+// Published versions and rules are immutable, enforced by database triggers.
+export const caseFlowVersions = pgTable(
+  'case_flow_versions',
+  {
+    id: serial('id').primaryKey(),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    publishedBy: uuid('published_by').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    changeNote: text('change_note'),
+    queueSnapshot: jsonb('queue_snapshot')
+      .$type<
+        Array<{
+          id: string
+          name: string
+          slug: string
+          prefix: string
+          workflowType: (typeof queueWorkflowTypeEnum.enumValues)[number]
+          lifecycle: (typeof queueLifecycleEnum.enumValues)[number]
+          isActive: boolean
+        }>
+      >()
+      .notNull(),
+  },
+  (table) => [
+    index('case_flow_versions_published_by_idx').on(table.publishedBy),
+  ],
+)
+
 export const flowConfigurationRevisions = pgTable(
   'flow_configuration_revisions',
   {
     id: integer('id').primaryKey().default(1),
     revision: integer('revision').default(1).notNull(),
+    activeFlowVersionId: integer('active_flow_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -436,6 +468,11 @@ export const merchants = pgTable(
   'merchants',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Assigned on insert by the database; reassignment is rejected.
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .default(sql`active_case_flow_version()`)
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     merchantNumber: serial('merchant_number').notNull().unique(),
     submitterEmail: varchar('submitter_email', { length: 255 }).notNull(),
     ownerFullName: varchar('owner_full_name', { length: 160 }).notNull(),
@@ -493,6 +530,7 @@ export const merchants = pgTable(
       .notNull(),
   },
   (table) => ({
+    flowVersionIdx: index('merchants_flow_version_idx').on(table.flowVersionId),
     merchantsSubmitterEmailIdx: index('merchants_submitter_email_idx').on(
       table.submitterEmail,
     ),
@@ -618,6 +656,11 @@ export const cases = pgTable(
   'cases',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Assigned on insert by the database; reassignment is rejected.
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .default(sql`NULL`)
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     caseNumber: varchar('case_number', { length: 20 }).notNull().unique(),
     queueId: uuid('queue_id')
       .notNull()
@@ -647,6 +690,7 @@ export const cases = pgTable(
       .notNull(),
   },
   (table) => ({
+    flowVersionIdx: index('cases_flow_version_idx').on(table.flowVersionId),
     casesMerchantQueueIdx: index('cases_merchant_queue_idx').on(
       table.merchantId,
       table.queueId,
@@ -857,9 +901,12 @@ export const caseFlowStartRules = pgTable(
   'case_flow_start_rules',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     targetQueueId: uuid('target_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     order: integer('order').default(1).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -873,9 +920,10 @@ export const caseFlowStartRules = pgTable(
     caseFlowStartRulesTargetQueueUnique: uniqueIndex(
       'case_flow_start_rules_target_queue_unique',
     )
-      .on(table.targetQueueId)
+      .on(table.flowVersionId, table.targetQueueId)
       .where(sql`${table.isActive} = true`),
     caseFlowStartRulesOrderIdx: index('case_flow_start_rules_order_idx').on(
+      table.flowVersionId,
       table.order,
     ),
     caseFlowStartRulesOrderPositive: check(
@@ -889,12 +937,15 @@ export const caseFlowCloseTriggers = pgTable(
   'case_flow_close_triggers',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     sourceQueueId: uuid('source_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     targetQueueId: uuid('target_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     order: integer('order').default(1).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -908,11 +959,11 @@ export const caseFlowCloseTriggers = pgTable(
     caseFlowCloseTriggersSourceTargetUnique: uniqueIndex(
       'case_flow_close_triggers_source_target_unique',
     )
-      .on(table.sourceQueueId, table.targetQueueId)
+      .on(table.flowVersionId, table.sourceQueueId, table.targetQueueId)
       .where(sql`${table.isActive} = true`),
     caseFlowCloseTriggersSourceOrderIdx: index(
       'case_flow_close_triggers_source_order_idx',
-    ).on(table.sourceQueueId, table.order),
+    ).on(table.flowVersionId, table.sourceQueueId, table.order),
     caseFlowCloseTriggersOrderPositive: check(
       'case_flow_close_triggers_order_positive',
       sql`${table.order} > 0`,
@@ -924,12 +975,15 @@ export const caseFlowCloseBlockers = pgTable(
   'case_flow_close_blockers',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     blockedQueueId: uuid('blocked_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     prerequisiteQueueId: uuid('prerequisite_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -939,10 +993,13 @@ export const caseFlowCloseBlockers = pgTable(
       .notNull(),
   },
   (table) => ({
+    flowVersionIdx: index('case_flow_close_blockers_version_idx').on(
+      table.flowVersionId,
+    ),
     caseFlowCloseBlockersBlockedPrerequisiteUnique: uniqueIndex(
       'case_flow_close_blockers_blocked_prerequisite_unique',
     )
-      .on(table.blockedQueueId, table.prerequisiteQueueId)
+      .on(table.flowVersionId, table.blockedQueueId, table.prerequisiteQueueId)
       .where(sql`${table.isActive} = true`),
   }),
 )
@@ -951,12 +1008,15 @@ export const caseFlowCreationRequirements = pgTable(
   'case_flow_creation_requirements',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     targetQueueId: uuid('target_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     prerequisiteQueueId: uuid('prerequisite_queue_id')
       .notNull()
-      .references(() => queues.id, { onDelete: 'cascade' }),
+      .references(() => queues.id, { onDelete: 'restrict' }),
     isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -966,10 +1026,13 @@ export const caseFlowCreationRequirements = pgTable(
       .notNull(),
   },
   (table) => ({
+    flowVersionIdx: index('case_flow_creation_requirements_version_idx').on(
+      table.flowVersionId,
+    ),
     caseFlowCreationRequirementsTargetPrerequisiteUnique: uniqueIndex(
       'case_flow_creation_requirements_target_prerequisite_unique',
     )
-      .on(table.targetQueueId, table.prerequisiteQueueId)
+      .on(table.flowVersionId, table.targetQueueId, table.prerequisiteQueueId)
       .where(sql`${table.isActive} = true`),
   }),
 )
@@ -1011,6 +1074,11 @@ export const caseFlowCloseJobs = pgTable(
   'case_flow_close_jobs',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Assigned on insert by the database; reassignment is rejected.
+    flowVersionId: integer('flow_version_id')
+      .notNull()
+      .default(sql`NULL`)
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
     sourceCaseId: uuid('source_case_id')
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
@@ -1040,6 +1108,9 @@ export const caseFlowCloseJobs = pgTable(
       .notNull(),
   },
   (table) => ({
+    flowVersionIdx: index('case_flow_close_jobs_flow_version_idx').on(
+      table.flowVersionId,
+    ),
     caseFlowCloseJobsSourceTargetUnique: uniqueIndex(
       'case_flow_close_jobs_source_target_unique',
     ).on(table.sourceCaseId, table.targetQueueId),

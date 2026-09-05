@@ -269,6 +269,7 @@ const caseFlowCreationRequirementInputSchema = z
 export const updateCaseFlowConfigurationSchema = z
   .object({
     revision: z.coerce.number().int().min(1),
+    changeNote: z.string().trim().max(1000).optional(),
     startRules: z.array(caseFlowStartRuleInputSchema),
     closeTriggers: z.array(caseFlowCloseTriggerInputSchema),
     closeBlockers: z.array(caseFlowCloseBlockerInputSchema),

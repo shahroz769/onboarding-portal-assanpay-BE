@@ -519,6 +519,13 @@
       "when": 1788307200000,
       "tag": "0074_agreement_driven_live",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1788566400000,
+      "tag": "0075_case_flow_versions",
+      "breakpoints": true
     }
   ]
 }
