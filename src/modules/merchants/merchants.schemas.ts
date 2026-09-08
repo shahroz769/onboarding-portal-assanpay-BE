@@ -169,6 +169,7 @@ const extensionToMimeType: Record<
 export const bankNames = [
   'Al Baraka Islamic Bank Limited',
   'Bank AlFalah Limited',
+  'Bank Al Habib',
   'Allied Bank Limited',
   'Askari Commercial Bank Limited',
   'Bank of Khyber',
