@@ -414,7 +414,7 @@ type ResubmissionNotifyInput = {
 }
 
 /**
- * Notify the case owner that the client has submitted updated details.
+ * Notify the case owner that the merchant has submitted updated details.
  * Best-effort: callers should wrap with try/catch to avoid breaking primary flow.
  */
 export async function notifyOnResubmission(input: ResubmissionNotifyInput) {

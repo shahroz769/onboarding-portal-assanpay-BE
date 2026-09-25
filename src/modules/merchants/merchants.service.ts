@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   gt,
@@ -559,6 +560,15 @@ export async function listMerchants(query: ListMerchantsQuery) {
       })
     : null
 
+  // Count the filtered set only on the first page; later pages reuse it.
+  const total = cursor
+    ? null
+    : await db
+        .select({ value: count() })
+        .from(merchants)
+        .where(and(...conditions))
+        .then((result) => result[0]?.value ?? 0)
+
   if (cursor) {
     conditions.push(
       buildKeysetCondition({
@@ -613,6 +623,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
     nextCursor,
     hasMore,
     limit: query.limit,
+    total,
   }
 }
 

@@ -73,8 +73,8 @@ export function buildNotificationCopy(input: NotificationCopy): {
       }
     case 'case_resubmitted':
       return {
-        title: `Case ${input.caseNumber} — client submitted updated details`,
-        body: `${input.clientName ?? 'The client'} resubmitted ${input.fieldCount} field${input.fieldCount === 1 ? '' : 's'} for your review.`,
+        title: `Case ${input.caseNumber} — merchant submitted updated details`,
+        body: `${input.clientName ?? 'The merchant'} resubmitted ${input.fieldCount} field${input.fieldCount === 1 ? '' : 's'} for your review.`,
       }
   }
 }

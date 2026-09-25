@@ -179,7 +179,7 @@ export function getStageTemplateDefinitions(
           isActive: true,
         },
         {
-          name: 'Awaiting Client',
+          name: 'Awaiting Merchant',
           slug: 'awaiting_client',
           order: 3,
           category: 'in_progress',

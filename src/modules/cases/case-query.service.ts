@@ -519,6 +519,17 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       })
     : null
 
+  // Count the filtered set only on the first page; later pages reuse it.
+  const total = cursor
+    ? null
+    : await db
+        .select({ value: count() })
+        .from(cases)
+        .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .then((result) => result[0]?.value ?? 0)
+
   if (cursor) {
     conditions.push(
       buildKeysetCondition({
@@ -587,6 +598,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
     nextCursor,
     hasMore,
     limit: query.limit,
+    total,
   }
 }
 

@@ -34,7 +34,8 @@ function getStatusForStage(
   if (
     normalizedSlug === 'awaiting_client' ||
     normalizedSlug === 'awaiting-client' ||
-    normalizedName === 'awaiting client'
+    normalizedName === 'awaiting client' ||
+    normalizedName === 'awaiting merchant'
   ) {
     return 'awaiting_client'
   }

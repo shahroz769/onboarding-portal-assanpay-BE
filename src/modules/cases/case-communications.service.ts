@@ -278,7 +278,7 @@ export async function getResubmissionEmailPreview(
   if (row.status !== 'working' && row.status !== 'awaiting_client') {
     throw new AppError(
       400,
-      'The case must be in the working or awaiting-client stage to send for resubmission.',
+      'The case must be in the working or awaiting-merchant stage to send for resubmission.',
     )
   }
   const recipient = resolveMerchantEmailRecipient(
@@ -677,7 +677,7 @@ export async function confirmAgreementEmailManual(
     .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
     .returning({ id: cases.id })
   if (!reservedCase)
-    throw new AppError(409, 'This case has already been sent to the client.')
+    throw new AppError(409, 'This case has already been sent to the merchant.')
 
   const { savedFile } = await uploadEmailProofFile(
     caseId,

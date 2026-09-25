@@ -257,7 +257,7 @@ export async function saveFieldReviews(
   if (caseData.status === 'awaiting_client') {
     throw new AppError(
       400,
-      'Rejection changes are locked while awaiting client resubmission.',
+      'Rejection changes are locked while awaiting merchant resubmission.',
     )
   }
 
@@ -875,7 +875,7 @@ export async function regenerateResubmissionLink(
   if (row.status !== 'awaiting_client') {
     throw new AppError(
       400,
-      'The case must be awaiting the client to regenerate its resubmission link.',
+      'The case must be awaiting the merchant to regenerate its resubmission link.',
     )
   }
 

@@ -502,7 +502,7 @@ export async function sendAgreementToClient(
     .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
     .returning({ id: cases.id })
   if (!reservedCase) {
-    throw new AppError(409, 'This case has already been sent to the client.')
+    throw new AppError(409, 'This case has already been sent to the merchant.')
   }
 
   const emailResult = await sendEmail({

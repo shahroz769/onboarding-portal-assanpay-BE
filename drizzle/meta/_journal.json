@@ -533,6 +533,13 @@
       "when": 1788652800000,
       "tag": "0076_decode_merchant_html_entities",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1788739200000,
+      "tag": "0077_rename_awaiting_client_stage",
+      "breakpoints": true
     }
   ]
 }
