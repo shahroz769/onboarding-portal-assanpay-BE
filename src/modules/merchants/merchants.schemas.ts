@@ -196,12 +196,6 @@ export const bankNames = [
   'United Bank Limited',
 ] as const
 
-const sanitizedStringSchema = z
-  .string()
-  .trim()
-  .min(1, 'This field is required.')
-  .transform(sanitizeText)
-
 const trimmedStringSchema = z.string().trim().min(1, 'This field is required.')
 const bareDomainPattern =
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#].*)?$/i
@@ -230,19 +224,19 @@ export const scalarMerchantSchema = z
       .email('Submitter email must be a valid email.')
       .transform(toLower),
     activeWhatsappNumber: localMobileNumberSchema,
-    ownerFullName: sanitizedStringSchema,
+    ownerFullName: trimmedStringSchema,
     ownerPhone: localMobileNumberSchema,
-    businessName: sanitizedStringSchema,
+    businessName: trimmedStringSchema,
     businessPhone: digitsOnlyPhoneNumberSchema,
     businessEmail: z
       .string()
       .trim()
       .email('Business email must be a valid email.')
       .transform(toLower),
-    businessAddress: sanitizedStringSchema,
+    businessAddress: trimmedStringSchema,
     businessWebsite: businessWebsiteSchema,
     websiteCms: z.enum(websiteCmsValues),
-    businessDescription: sanitizedStringSchema,
+    businessDescription: trimmedStringSchema,
     businessRegistrationDate: z
       .string()
       .trim()
@@ -257,7 +251,7 @@ export const scalarMerchantSchema = z
         return date <= today
       }, 'Business registration date cannot be in the future.')
       .transform((value) => new Date(value).toISOString().slice(0, 10)),
-    businessNature: sanitizedStringSchema,
+    businessNature: trimmedStringSchema,
     merchantType: z.enum(merchantTypes),
     estimatedMonthlyTransactions: z.coerce
       .number()
@@ -267,9 +261,9 @@ export const scalarMerchantSchema = z
       .number()
       .positive('Estimated monthly volume must be greater than zero.')
       .transform((value) => value.toFixed(2)),
-    accountTitle: sanitizedStringSchema,
+    accountTitle: trimmedStringSchema,
     bankName: z.enum(bankNames),
-    branchName: sanitizedStringSchema,
+    branchName: trimmedStringSchema,
     accountNumberIban: trimmedStringSchema,
     swiftCode: z
       .string()
@@ -517,25 +511,6 @@ export function normalizeMimeType(file: File) {
   }
 
   return extensionToMimeType[extension]
-}
-
-function sanitizeText(value: string) {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case '&':
-        return '&amp;'
-      case '<':
-        return '&lt;'
-      case '>':
-        return '&gt;'
-      case '"':
-        return '&quot;'
-      case "'":
-        return '&#39;'
-      default:
-        return character
-    }
-  })
 }
 
 function toLower(value: string) {
