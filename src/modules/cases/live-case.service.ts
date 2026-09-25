@@ -263,6 +263,7 @@ export async function markLiveLimitsApplied(
   if (caseRow.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can update this case.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (caseRow.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
@@ -347,6 +348,7 @@ export async function loadLiveCase(caseId: string, userId: string) {
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send the live email.')
   }
+  await assertCanWorkCase(caseId, userId)
   if (row.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
   }

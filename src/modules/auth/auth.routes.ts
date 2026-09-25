@@ -49,6 +49,31 @@ const authRateLimiter = rateLimiter({
     c.json({ error: 'Too many attempts. Please try again later.' }, 429),
 })
 
+// Per-account guard against password guessing spread across many IPs. Only
+// failed attempts count, so a user who signs in normally is never limited.
+const loginAccountRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: async (c) => {
+    const body: unknown = await c.req.json().catch(() => null)
+    const account =
+      body && typeof body === 'object'
+        ? ('identifier' in body && body.identifier) ||
+          ('email' in body && body.email)
+        : null
+    return typeof account === 'string'
+      ? `account:${account.trim().toLowerCase()}`
+      : `ip:${getClientIp(c)}`
+  },
+  handler: (c) =>
+    c.json(
+      { error: 'Too many failed sign-in attempts. Please try again later.' },
+      429,
+    ),
+})
+
 export const authRoutes = new Hono<AppEnv>()
 
 authRoutes.use('/login', csrf({ origin: env.CORS_ORIGIN }))
@@ -56,6 +81,7 @@ authRoutes.use('/refresh', csrf({ origin: env.CORS_ORIGIN }))
 authRoutes.use('/logout', csrf({ origin: env.CORS_ORIGIN }))
 
 authRoutes.use('/login', authRateLimiter)
+authRoutes.use('/login', loginAccountRateLimiter)
 authRoutes.use('/register-super-admin', authRateLimiter)
 
 authRoutes.post(

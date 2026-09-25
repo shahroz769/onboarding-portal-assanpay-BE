@@ -250,6 +250,7 @@ export async function saveMidCreationDetails(
   if (caseRow.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can save MID details.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (caseRow.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
@@ -346,6 +347,7 @@ export async function loadMidCreationCase(caseId: string, userId: string) {
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send credentials.')
   }
+  await assertCanWorkCase(caseId, userId)
   if (row.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')
   }

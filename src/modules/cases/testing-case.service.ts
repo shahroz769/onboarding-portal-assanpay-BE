@@ -234,6 +234,7 @@ export async function markTestingLimitsApplied(
   if (caseRow.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can update this case.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (caseRow.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')

@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 
 import { AppError } from '../lib/errors'
 
@@ -7,6 +8,15 @@ export function errorHandler(error: Error, c: Context) {
     return c.json(
       { error: error.message, ...(error.details ?? {}) },
       error.statusCode as never,
+    )
+  }
+
+  // Hono's own middleware (e.g. csrf) throws HTTPException with the intended
+  // status; keep it instead of reporting a server error.
+  if (error instanceof HTTPException) {
+    return c.json(
+      { error: error.status === 403 ? 'Forbidden.' : 'Request failed.' },
+      error.status,
     )
   }
 

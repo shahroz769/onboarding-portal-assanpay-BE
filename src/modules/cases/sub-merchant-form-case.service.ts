@@ -252,6 +252,7 @@ export async function loadSubMerchantFormCase(caseId: string, userId: string) {
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can update this case.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (row.status !== 'working') {
     throw new AppError(400, 'The case must be in the working stage.')

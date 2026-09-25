@@ -253,6 +253,7 @@ export async function saveFieldReviews(
   if (caseData.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can save field reviews.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (caseData.status === 'awaiting_client') {
     throw new AppError(
@@ -513,6 +514,7 @@ export async function saveDocumentReviewSubMerchant(
   if (caseRow.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can select sub-merchants.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (caseRow.status !== 'working' || !caseRow.currentStageId) {
     throw new AppError(
@@ -627,6 +629,7 @@ export async function sendForResubmission(
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send for resubmission.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (row.status !== 'working') {
     throw new AppError(
@@ -872,6 +875,7 @@ export async function regenerateResubmissionLink(
       'Only the case owner can regenerate the resubmission link.',
     )
   }
+  await assertCanWorkCase(caseId, userId)
   if (row.status !== 'awaiting_client') {
     throw new AppError(
       400,

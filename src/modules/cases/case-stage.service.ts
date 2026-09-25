@@ -226,6 +226,7 @@ export async function updateCaseStatus(
       'Only the current case owner can work on this case.',
     )
   }
+  await assertCanWorkCase(caseId, userId)
 
   const currentStatus = existing.status as CaseStatusValue
 
@@ -306,6 +307,7 @@ export async function advanceStage(caseId: string, userId: string) {
   if (caseData.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can advance the stage.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   if (!caseData.currentStageId) {
     throw new AppError(400, 'Case has no current stage.')
@@ -738,6 +740,7 @@ export async function closeUnsuccessful(
   if (caseData.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can close the case.')
   }
+  await assertCanWorkCase(caseId, userId)
 
   const queue = await db.query.queues.findFirst({
     where: eq(queues.id, caseData.queueId),

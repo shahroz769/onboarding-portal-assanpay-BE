@@ -111,9 +111,12 @@ const envSchema = z.object({
     .transform((value) => value === 'true'),
   COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('lax'),
   CORS_ORIGIN: corsOriginSchema.default(['http://localhost:5173']),
+  // Defaults to true: production runs behind Cloudflare, which sets
+  // CF-Connecting-IP. Without a proxy header the socket IP is used anyway
+  // (see lib/client-ip.ts). Set to false only for a directly exposed server.
   TRUST_PROXY_HEADERS: z
     .enum(['true', 'false'])
-    .default('false')
+    .default('true')
     .transform((value) => value === 'true'),
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),

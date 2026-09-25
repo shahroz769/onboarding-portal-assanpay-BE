@@ -277,6 +277,7 @@ export async function loadAgreementCase(
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can update this case.')
   }
+  await assertCanWorkCase(caseId, userId)
   if (
     row.status !== 'working' &&
     !(options.allowAwaitingClient && row.status === 'awaiting_client')

@@ -7,6 +7,7 @@ import {
   inArray,
   isNull,
   ne,
+  notInArray,
   or,
   sql,
 } from 'drizzle-orm'
@@ -244,6 +245,44 @@ function normalizeQueueAccess(roleType: RoleType, input: QueueAccessInput) {
   return { queueViewScope, viewQueueIds, workQueueIds }
 }
 
+/**
+ * An agent may only own cases in queues they can work (case mutations enforce
+ * it). Refuse an access change that would strand their open cases in queues
+ * they could no longer work; they must be reassigned first.
+ */
+async function assertOwnedCasesStayWorkable(
+  userId: string,
+  roleType: RoleType,
+  workQueueIds: string[],
+) {
+  if (roleType !== 'agent') return
+
+  const stranded = await getDb()
+    .select({ queueName: queues.name, count: sql<number>`count(*)::int` })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .where(
+      and(
+        eq(cases.ownerId, userId),
+        notInArray(cases.status, ['closed', 'error']),
+        workQueueIds.length > 0
+          ? notInArray(cases.queueId, workQueueIds)
+          : undefined,
+      ),
+    )
+    .groupBy(queues.name)
+
+  if (stranded.length === 0) return
+
+  const summary = stranded
+    .map((row) => `${row.count} in ${row.queueName}`)
+    .join(', ')
+  throw new AppError(
+    409,
+    `This user still owns open cases in queues they would no longer be able to work (${summary}). Reassign those cases first.`,
+  )
+}
+
 async function replaceQueueAccess(
   tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0],
   userId: string,
@@ -458,6 +497,15 @@ export async function updateUser(
     workQueueIds: input.workQueueIds ?? existingAccess.workQueueIds,
   })
   await assertQueuesExist([...access.viewQueueIds, ...access.workQueueIds])
+  const isChangingAccess =
+    isChangingRole ||
+    input.queueViewScope !== undefined ||
+    input.viewQueueIds !== undefined ||
+    input.workQueueIds !== undefined
+  // Deactivation is always allowed: an inactive user cannot act on anything.
+  if (isChangingAccess && input.status !== 'inactive') {
+    await assertOwnedCasesStayWorkable(userId, nextRole, access.workQueueIds)
+  }
 
   const updatedUser = await getDb().transaction(async (tx) => {
     const [updated] = await tx

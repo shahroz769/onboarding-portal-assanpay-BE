@@ -275,6 +275,7 @@ export async function getResubmissionEmailPreview(
   if (row.ownerId !== userId) {
     throw new AppError(403, 'Only the case owner can send for resubmission.')
   }
+  await assertCanWorkCase(caseId, userId)
   if (row.status !== 'working' && row.status !== 'awaiting_client') {
     throw new AppError(
       400,
@@ -402,6 +403,7 @@ export async function confirmResubmissionEmailManual(
   if (!row) throw new AppError(404, 'Case not found.')
   if (row.ownerId !== userId)
     throw new AppError(403, 'Only the case owner can confirm this.')
+  await assertCanWorkCase(caseId, userId)
   if (
     row.status !== 'working' &&
     !(channel === 'whatsapp' && row.status === 'awaiting_client')
