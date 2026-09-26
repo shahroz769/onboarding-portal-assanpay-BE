@@ -32,6 +32,8 @@ import type {
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0]
 
+const STAGE_REORDER_PARKING_OFFSET = 1_000_000
+
 function mapQueueDto(queue: Queue, stages?: QueueStage[]) {
   return {
     id: queue.id,
@@ -792,7 +794,10 @@ export async function reorderQueueStages(
     }
 
     const stages = await loadQueueStages(tx, queueId)
-    if (stages.length !== input.stageIds.length) {
+    if (
+      stages.length !== input.stageIds.length ||
+      new Set(input.stageIds).size !== input.stageIds.length
+    ) {
       throw new AppError(422, 'Reorder must include every stage exactly once.')
     }
 
@@ -805,13 +810,13 @@ export async function reorderQueueStages(
 
     await bumpQueueRevision(tx, queueId, input.revision)
 
-    // Two-phase update to avoid unique (queue_id, order) collisions.
-    for (let index = 0; index < input.stageIds.length; index += 1) {
-      await tx
-        .update(queueStages)
-        .set({ order: -(index + 1) })
-        .where(eq(queueStages.id, input.stageIds[index]!))
-    }
+    // Two-phase update to avoid unique (queue_id, order) collisions. Stages are
+    // parked above their final range first; negative parking would violate the
+    // queue_stages_order_positive check.
+    await tx
+      .update(queueStages)
+      .set({ order: sql`${queueStages.order} + ${STAGE_REORDER_PARKING_OFFSET}` })
+      .where(eq(queueStages.queueId, queueId))
     for (let index = 0; index < input.stageIds.length; index += 1) {
       await tx
         .update(queueStages)
