@@ -1,8 +1,10 @@
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { ZodError } from 'zod'
 
 import { AppError } from '../lib/errors'
+import type { AppEnv } from '../types/auth'
 
 // Unique constraints valid input can hit. Anything not listed still maps to a
 // generic 409 so a conflict is never reported as a server failure.
@@ -33,21 +35,20 @@ function getDatabaseError(error: Error) {
   return null
 }
 
-export function errorHandler(error: Error, c: Context) {
+export function errorHandler(error: Error, c: Context<AppEnv>) {
   if (error instanceof AppError) {
     return c.json(
       { error: error.message, ...(error.details ?? {}) },
-      error.statusCode as never,
+      error.statusCode as ContentfulStatusCode,
     )
   }
 
-  // Hono's own middleware throws HTTPException with the intended status; keep
-  // it instead of reporting a server error.
+  // Hono's own middleware and validators throw HTTPException with the intended
+  // status and a client-safe message; keep both instead of reporting a server
+  // error. An exception thrown with a custom response is returned as-is.
   if (error instanceof HTTPException) {
-    return c.json(
-      { error: error.status === 403 ? 'Forbidden.' : 'Request failed.' },
-      error.status,
-    )
+    if (error.res) return error.getResponse()
+    return c.json({ error: error.message || 'Request failed.' }, error.status)
   }
 
   // Service-level schema.parse() calls reject client input.
@@ -86,6 +87,6 @@ export function errorHandler(error: Error, c: Context) {
     return c.json({ error: 'Invalid identifier or value.' }, 400)
   }
 
-  console.error(error)
+  console.error(`[request ${c.get('requestId')}]`, error)
   return c.json({ error: 'Internal server error.' }, 500)
 }

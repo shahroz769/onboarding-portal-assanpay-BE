@@ -547,6 +547,13 @@
       "when": 1788825600000,
       "tag": "0078_sub_merchant_seller_code_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1788912000000,
+      "tag": "0079_drop_dead_go_live_tokens_and_user_deleted_at",
+      "breakpoints": true
     }
   ]
 }

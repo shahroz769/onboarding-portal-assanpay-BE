@@ -28,24 +28,7 @@ import {
   updateCaseStatusSchema,
 } from './cases.schemas'
 import type {
-  AssignCaseInput,
-  BulkAssignCaseInput,
-  CloseUnsuccessfulInput,
-  CreateCaseInput,
-  CreateCommentInput,
-  ListCasesQuery,
-  MarkLiveLimitsAppliedInput,
-  MarkTestingLimitsAppliedInput,
-  SaveDocumentReviewSubMerchantInput,
-  SaveFieldReviewsInput,
-  SaveMidCreationDetailsInput,
   SaveWordpressWebsiteInput,
-  SendAgreementEmailInput,
-  SendLiveEmailInput,
-  SendMidCreationEmailInput,
-  SelectSubMerchantFormInput,
-  UpdateCasePriorityInput,
-  UpdateCaseStatusInput,
   EmailRecipientType,
 } from './cases.schemas'
 import {
@@ -149,7 +132,7 @@ caseRoutes.get('/owners', async (c) => {
 
 // GET /api/cases — List cases (all authenticated users)
 caseRoutes.get('/', zodValidator('query', listCasesQuerySchema), async (c) => {
-  const query = c.req.valid('query' as never) as ListCasesQuery
+  const query = c.req.valid('query')
   const result = await listCases(query, c.var.auth)
   return c.json(result)
 })
@@ -160,7 +143,7 @@ caseRoutes.post(
   requireRoles('super_admin', 'admin'),
   zodValidator('json', createCaseSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as CreateCaseInput
+    const input = c.req.valid('json')
     const auth = c.get('auth')
     const result = await createCase(input, auth.userId)
     return c.json(result, 201)
@@ -174,7 +157,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendLiveEmailInput
+    const input = c.req.valid('json')
     const result = await sendLiveActivationEmail(id, auth.userId, input)
     return c.json(result)
   },
@@ -187,7 +170,7 @@ caseRoutes.post(
   zodValidator('json', bulkAssignCaseSchema),
   async (c) => {
     const auth = c.get('auth')
-    const input = c.req.valid('json' as never) as BulkAssignCaseInput
+    const input = c.req.valid('json')
     const result = await bulkAssignCases(input.ids, input.ownerId, auth.userId)
     return c.json(result)
   },
@@ -215,9 +198,7 @@ caseRoutes.get(
   requireRoles('super_admin', 'admin'),
   zodValidator('query', closeTriggerBackfillSchema),
   async (c) => {
-    const { triggerId } = c.req.valid('query' as never) as z.infer<
-      typeof closeTriggerBackfillSchema
-    >
+    const { triggerId } = c.req.valid('query')
     return c.json(await previewMissingCloseTriggerCases(triggerId))
   },
 )
@@ -227,9 +208,7 @@ caseRoutes.post(
   requireRoles('super_admin', 'admin'),
   zodValidator('json', closeTriggerBackfillSchema),
   async (c) => {
-    const { triggerId } = c.req.valid('json' as never) as z.infer<
-      typeof closeTriggerBackfillSchema
-    >
+    const { triggerId } = c.req.valid('json')
     return c.json(await createMissingCloseTriggerCases(triggerId))
   },
 )
@@ -241,7 +220,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendLiveEmailInput
+    const input = c.req.valid('json')
     const result = await getLiveActivationEmailPreview(id, auth.userId, input)
     return c.json(result)
   },
@@ -254,7 +233,7 @@ caseRoutes.patch(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as UpdateCaseStatusInput
+    const input = c.req.valid('json')
     const result = await updateCaseStatus(id, auth.userId, input)
     return c.json(result)
   },
@@ -305,7 +284,7 @@ caseRoutes.patch(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as AssignCaseInput
+    const input = c.req.valid('json')
     const result = await assignCase(id, input.ownerId, auth.userId)
     return c.json(result)
   },
@@ -318,7 +297,7 @@ caseRoutes.patch(
   zodValidator('json', updateCasePrioritySchema),
   async (c) => {
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as UpdateCasePriorityInput
+    const input = c.req.valid('json')
     const result = await updateCasePriority(id, input.priority)
     return c.json(result)
   },
@@ -354,7 +333,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as MarkTestingLimitsAppliedInput
+    const input = c.req.valid('json')
     const result = await markTestingLimitsApplied(id, auth.userId, input)
     return c.json(result)
   },
@@ -366,7 +345,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SaveMidCreationDetailsInput
+    const input = c.req.valid('json')
     const result = await saveMidCreationDetails(id, auth.userId, input)
     return c.json(result)
   },
@@ -378,7 +357,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as MarkLiveLimitsAppliedInput
+    const input = c.req.valid('json')
     const result = await markLiveLimitsApplied(id, auth.userId, input)
     return c.json(result)
   },
@@ -455,7 +434,7 @@ caseRoutes.put(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SaveFieldReviewsInput
+    const input = c.req.valid('json')
     const result = await saveFieldReviews(id, auth.userId, input)
     return c.json(result)
   },
@@ -467,9 +446,7 @@ caseRoutes.put(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid(
-      'json' as never,
-    ) as SaveDocumentReviewSubMerchantInput
+    const input = c.req.valid('json')
     const result = await saveDocumentReviewSubMerchant(id, auth.userId, input)
     return c.json(result)
   },
@@ -482,7 +459,7 @@ caseRoutes.patch(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as CloseUnsuccessfulInput
+    const input = c.req.valid('json')
     const result = await closeUnsuccessful(id, auth.userId, input)
     return c.json(result)
   },
@@ -495,9 +472,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as {
-      recipientEmailType: EmailRecipientType
-    }
+    const input = c.req.valid('json')
     const result = await sendForResubmission(id, auth.userId, input)
     return c.json(result)
   },
@@ -518,7 +493,7 @@ caseRoutes.put(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SelectSubMerchantFormInput
+    const input = c.req.valid('json')
     const result = await selectSubMerchantForm(id, auth.userId, input)
     return c.json(result)
   },
@@ -634,7 +609,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendAgreementEmailInput
+    const input = c.req.valid('json')
     const result = await sendAgreementToClient(id, auth.userId, input)
     return c.json(result)
   },
@@ -648,7 +623,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendMidCreationEmailInput
+    const input = c.req.valid('json')
     const result = await sendMidCreationCredentialsEmail(id, auth.userId, input)
     return c.json(result)
   },
@@ -661,9 +636,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as {
-      recipientEmailType: EmailRecipientType
-    }
+    const input = c.req.valid('json')
     const result = await getResubmissionEmailPreview(id, auth.userId, input)
     return c.json(result)
   },
@@ -706,7 +679,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendAgreementEmailInput
+    const input = c.req.valid('json')
     const result = await getAgreementEmailPreview(id, auth.userId, input)
     return c.json(result)
   },
@@ -751,7 +724,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as SendMidCreationEmailInput
+    const input = c.req.valid('json')
     const result = await getMidCreationEmailPreview(id, auth.userId, input)
     return c.json(result)
   },
@@ -803,7 +776,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as CreateCommentInput
+    const input = c.req.valid('json')
     const result = await createCaseComment(id, auth, input)
     return c.json(result, 201)
   },

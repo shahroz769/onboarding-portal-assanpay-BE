@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { createMiddleware } from 'hono/factory'
 
 import { getDb } from '../db/client'
@@ -30,7 +30,6 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
       eq(users.id, session.userId),
       eq(users.status, 'active'),
       eq(users.sessionVersion, session.sessionVersion),
-      isNull(users.deletedAt),
     ),
   })
 

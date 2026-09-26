@@ -52,7 +52,7 @@ merchantRoutes.get(
   '/',
   zodValidator('query', listMerchantsQuerySchema),
   async (c) => {
-    const query = c.req.valid('query' as never) as ListMerchantsQuery
+    const query = c.req.valid('query')
     const result = await listMerchants(query)
     return c.json(result)
   },
@@ -100,7 +100,7 @@ merchantRoutes.patch(
   zodValidator('json', merchantLimitsMdrSchema),
   async (c) => {
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as MerchantLimitsMdr
+    const input = c.req.valid('json')
     const result = await updateMerchantLimitsMdr(id, input)
     return c.json(result)
   },
@@ -125,7 +125,7 @@ merchantRoutes.patch(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as TerminateMerchantInput
+    const input = c.req.valid('json')
     const result = await terminateMerchant(id, auth.userId, input)
     return c.json(result)
   },
@@ -138,7 +138,7 @@ merchantRoutes.delete(
   zodValidator('json', permanentlyDeleteMerchantSchema),
   async (c) => {
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as PermanentlyDeleteMerchantInput
+    const input = c.req.valid('json')
     const result = await permanentlyDeleteMerchant(id, input)
     return c.json(result)
   },
@@ -151,7 +151,7 @@ merchantRoutes.patch(
   zodValidator('json', updatePrioritySchema),
   async (c) => {
     const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as UpdatePriorityInput
+    const input = c.req.valid('json')
     const result = await updateMerchantPriority(id, input)
     return c.json(result)
   },
@@ -164,7 +164,7 @@ merchantRoutes.post(
   zodValidator('json', bulkTerminateMerchantsSchema),
   async (c) => {
     const auth = c.get('auth')
-    const input = c.req.valid('json' as never) as BulkTerminateMerchantsInput
+    const input = c.req.valid('json')
     const result = await bulkTerminateMerchants(input.ids, auth.userId, input)
     return c.json(result)
   },
@@ -183,7 +183,7 @@ merchantRoutes.post(
   requireRoles('super_admin'),
   zodValidator('json', bulkIdsSchema),
   async (c) => {
-    const { ids } = c.req.valid('json' as never) as BulkIdsInput
+    const { ids } = c.req.valid('json')
     const result = await bulkSoftDeleteMerchants(ids)
     return c.json(result)
   },
@@ -195,9 +195,7 @@ merchantRoutes.post(
   requireRoles('super_admin', 'admin'),
   zodValidator('json', bulkPrioritySchema),
   async (c) => {
-    const { ids, priority, note } = c.req.valid(
-      'json' as never,
-    ) as BulkPriorityInput
+    const { ids, priority, note } = c.req.valid('json')
     const result = await bulkUpdatePriority(ids, priority, note)
     return c.json(result)
   },

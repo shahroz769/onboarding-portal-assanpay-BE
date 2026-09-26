@@ -1,4 +1,14 @@
-import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -575,6 +585,96 @@ export async function createSubMerchantDraft(input: {
       .catch((cleanupError) =>
         console.error('[configuration] Draft cleanup failed:', cleanupError),
       )
+    throw error
+  }
+
+  return listSubMerchantDrafts()
+}
+
+export async function updateSubMerchantDraft(input: {
+  id: string
+  name: string
+  sellerCode: string
+  file: File | null
+}) {
+  const name = input.name.trim()
+  const sellerCode = input.sellerCode.trim()
+  if (!name) {
+    throw new AppError(400, 'Sub-merchant name is required.')
+  }
+  if (!sellerCode) {
+    throw new AppError(400, 'Seller Code is required.')
+  }
+
+  const existing = await getDb().query.subMerchantDraftTemplates.findFirst({
+    where: eq(subMerchantDraftTemplates.id, input.id),
+  })
+  if (!existing) {
+    throw new AppError(404, 'Sub-merchant not found.')
+  }
+
+  const [conflict] = await getDb()
+    .select({
+      name: subMerchantDraftTemplates.name,
+      sellerCode: subMerchantDraftTemplates.sellerCode,
+    })
+    .from(subMerchantDraftTemplates)
+    .where(
+      and(
+        ne(subMerchantDraftTemplates.id, input.id),
+        or(
+          sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`,
+          sql`lower(${subMerchantDraftTemplates.sellerCode}) = lower(${sellerCode})`,
+        ),
+      ),
+    )
+    .limit(1)
+  if (conflict) {
+    throw new AppError(
+      409,
+      conflict.sellerCode.toLowerCase() === sellerCode.toLowerCase()
+        ? 'A sub-merchant with this Seller Code already exists.'
+        : 'A sub-merchant with this name already exists.',
+    )
+  }
+
+  // The previous draft file is kept in Drive: links to it may already have
+  // been sent to merchants.
+  const uploaded = input.file
+    ? await uploadConfigurationDraft({
+        folderPath: ['Configuration', 'Sub-Merchants', name],
+        file: input.file,
+      })
+    : null
+
+  try {
+    await getDb()
+      .update(subMerchantDraftTemplates)
+      .set({
+        name,
+        sellerCode,
+        ...(uploaded
+          ? {
+              originalName: uploaded.fileName,
+              mimeType: uploaded.mimeType,
+              sizeBytes: uploaded.sizeBytes,
+              googleDriveFileId: uploaded.fileId,
+              googleDriveWebViewLink: uploaded.webViewLink,
+              googleDriveDownloadLink: uploaded.downloadLink,
+              googleDriveFolderId: uploaded.folderId,
+            }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(subMerchantDraftTemplates.id, input.id))
+  } catch (error) {
+    if (uploaded) {
+      await new GoogleDriveStorageProvider()
+        .deleteFile(uploaded.fileId)
+        .catch((cleanupError) =>
+          console.error('[configuration] Draft cleanup failed:', cleanupError),
+        )
+    }
     throw error
   }
 

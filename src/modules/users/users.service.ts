@@ -5,12 +5,12 @@ import {
   eq,
   ilike,
   inArray,
-  isNull,
   ne,
   notInArray,
   or,
   sql,
 } from 'drizzle-orm'
+import type { SQL } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
@@ -170,12 +170,8 @@ async function assertUniqueUser(input: {
       ? and(
           or(eq(users.email, input.email), eq(users.username, input.username)),
           ne(users.id, input.userId),
-          isNull(users.deletedAt),
         )
-      : and(
-          or(eq(users.email, input.email), eq(users.username, input.username)),
-          isNull(users.deletedAt),
-        ),
+      : or(eq(users.email, input.email), eq(users.username, input.username)),
   })
 
   if (!existingUser) return
@@ -361,7 +357,7 @@ async function sendPasswordEmail(input: {
 }
 
 export async function listUsers(query: ListUsersQuery = {}) {
-  const conditions = [isNull(users.deletedAt)]
+  const conditions: SQL[] = []
 
   if (query.search) {
     const term = `%${query.search}%`
@@ -401,14 +397,14 @@ export async function listActiveUserDirectory() {
       name: true,
       username: true,
     },
-    where: and(eq(users.status, 'active'), isNull(users.deletedAt)),
+    where: eq(users.status, 'active'),
     orderBy: (table) => [asc(table.name), asc(table.username)],
   })
 }
 
 export async function getUserById(id: string) {
   const user = await getDb().query.users.findFirst({
-    where: and(eq(users.id, id), isNull(users.deletedAt)),
+    where: eq(users.id, id),
   })
 
   if (!user) {
@@ -482,7 +478,7 @@ export async function updateUser(
   input: Partial<Omit<UserMutationInput, 'email' | 'username'>>,
 ) {
   const existingUser = await getDb().query.users.findFirst({
-    where: and(eq(users.id, userId), isNull(users.deletedAt)),
+    where: eq(users.id, userId),
   })
 
   if (!existingUser) {
@@ -583,7 +579,7 @@ export async function bulkUpdateUserStatus(
   }
 
   const targetUsers = await getDb().query.users.findMany({
-    where: and(inArray(users.id, uniqueIds), isNull(users.deletedAt)),
+    where: inArray(users.id, uniqueIds),
     columns: { roleType: true },
   })
   if (targetUsers.length !== uniqueIds.length) {
@@ -604,7 +600,7 @@ export async function bulkUpdateUserStatus(
         sessionVersion: sql`${users.sessionVersion} + 1`,
         updatedAt: new Date(),
       })
-      .where(and(inArray(users.id, uniqueIds), isNull(users.deletedAt)))
+      .where(inArray(users.id, uniqueIds))
       .returning({ id: users.id })
 
     await tx
@@ -624,7 +620,7 @@ export async function sendResetPassword(actor: SessionUser, userId: string) {
   }
 
   const user = await getDb().query.users.findFirst({
-    where: and(eq(users.id, userId), isNull(users.deletedAt)),
+    where: eq(users.id, userId),
   })
 
   if (!user) {
@@ -656,7 +652,7 @@ export async function bulkSendResetPasswords(
   }
 
   const targetUsers = await getDb().query.users.findMany({
-    where: and(inArray(users.id, uniqueIds), isNull(users.deletedAt)),
+    where: inArray(users.id, uniqueIds),
     columns: { id: true, email: true, name: true },
   })
   const foundIds = new Set(targetUsers.map((user) => user.id))
@@ -709,7 +705,7 @@ export async function deactivateUser(actor: SessionUser, userId: string) {
   }
 
   const existingUser = await getDb().query.users.findFirst({
-    where: and(eq(users.id, userId), isNull(users.deletedAt)),
+    where: eq(users.id, userId),
   })
 
   if (!existingUser) {

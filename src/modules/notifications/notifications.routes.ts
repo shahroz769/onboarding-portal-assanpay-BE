@@ -13,7 +13,6 @@ import {
 } from './notifications.service'
 import { subscribe } from './notifications.events'
 import { listNotificationsQuerySchema } from './notifications.schemas'
-import type { ListNotificationsQuery } from './notifications.schemas'
 
 export const notificationRoutes = new Hono<AppEnv>()
 const NOTIFICATION_STREAM_HEARTBEAT_MS = 25_000
@@ -32,7 +31,7 @@ notificationRoutes.get(
   zodValidator('query', listNotificationsQuerySchema),
   async (c) => {
     const auth = c.get('auth')
-    const query = c.req.valid('query' as never) as ListNotificationsQuery
+    const query = c.req.valid('query')
     const result = await listForUser(auth.userId, query)
     return c.json(result)
   },
@@ -61,7 +60,7 @@ notificationRoutes.patch(
   ),
   async (c) => {
     const auth = c.get('auth')
-    const id = c.req.param('id')
+    const id = c.req.valid('param').id
     const result = await markRead(auth.userId, id)
     return c.json(result)
   },

@@ -134,7 +134,13 @@ resubmissionRoutes.post('/:token', async (c) => {
     rejectedReviews.map((review) => [review.fieldName, review] as const),
   )
 
-  const formData = await c.req.formData()
+  const contentType = c.req.header('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new AppError(400, 'Content-Type must be multipart/form-data.')
+  }
+  const formData = await c.req.formData().catch(() => {
+    throw new AppError(400, 'Invalid multipart form payload.')
+  })
   const submittedTextFields = new Map<string, string>()
   const submittedFiles = new Map<string, File>()
   const documentActions = new Map<string, 'replace' | 'remove'>()

@@ -15,16 +15,6 @@ import {
   updateQueueStageSchema,
   updateQueueStatusSchema,
 } from './queues.schemas'
-import type {
-  CreateQueueInput,
-  CreateQueueStageInput,
-  DeactivateQueueStageInput,
-  ReorderQueueStagesInput,
-  UpdateQueueInput,
-  UpdateQueueSlaInput,
-  UpdateQueueStageInput,
-  UpdateQueueStatusInput,
-} from './queues.schemas'
 import {
   createQueue,
   createQueueStage,
@@ -72,7 +62,7 @@ queueRoutes.get(
   requireRoles('super_admin'),
   queueIdParam,
   async (c) => {
-    const result = await getQueueDetail(c.req.param('id'))
+    const result = await getQueueDetail(c.req.valid('param').id)
     return c.json(result)
   },
 )
@@ -82,7 +72,7 @@ queueRoutes.post(
   requireRoles('super_admin'),
   zodValidator('json', createQueueSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as CreateQueueInput
+    const input = c.req.valid('json')
     const result = await createQueue(input)
     return c.json(result, 201)
   },
@@ -94,8 +84,8 @@ queueRoutes.patch(
   queueIdParam,
   zodValidator('json', updateQueueSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as UpdateQueueInput
-    const result = await updateQueue(c.req.param('id'), input)
+    const input = c.req.valid('json')
+    const result = await updateQueue(c.req.valid('param').id, input)
     return c.json(result)
   },
 )
@@ -106,8 +96,8 @@ queueRoutes.patch(
   queueIdParam,
   zodValidator('json', updateQueueStatusSchema),
   async (c) => {
-    const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as UpdateQueueStatusInput
+    const id = c.req.valid('param').id
+    const input = c.req.valid('json')
     const result = await updateQueueStatus(id, input)
     return c.json(result)
   },
@@ -119,8 +109,8 @@ queueRoutes.patch(
   queueIdParam,
   zodValidator('json', updateQueueSlaSchema),
   async (c) => {
-    const id = c.req.param('id')
-    const input = c.req.valid('json' as never) as UpdateQueueSlaInput
+    const id = c.req.valid('param').id
+    const input = c.req.valid('json')
     const result = await updateQueueSla(id, input)
     return c.json(result)
   },
@@ -132,8 +122,8 @@ queueRoutes.post(
   queueIdParam,
   zodValidator('json', createQueueStageSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as CreateQueueStageInput
-    const result = await createQueueStage(c.req.param('id'), input)
+    const input = c.req.valid('json')
+    const result = await createQueueStage(c.req.valid('param').id, input)
     return c.json(result, 201)
   },
 )
@@ -144,8 +134,8 @@ queueRoutes.patch(
   queueIdParam,
   zodValidator('json', reorderQueueStagesSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as ReorderQueueStagesInput
-    const result = await reorderQueueStages(c.req.param('id'), input)
+    const input = c.req.valid('json')
+    const result = await reorderQueueStages(c.req.valid('param').id, input)
     return c.json(result)
   },
 )
@@ -156,10 +146,10 @@ queueRoutes.patch(
   queueStageParam,
   zodValidator('json', updateQueueStageSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as UpdateQueueStageInput
+    const input = c.req.valid('json')
     const result = await updateQueueStage(
-      c.req.param('id'),
-      c.req.param('stageId'),
+      c.req.valid('param').id,
+      c.req.valid('param').stageId,
       input,
     )
     return c.json(result)
@@ -172,10 +162,10 @@ queueRoutes.post(
   queueStageParam,
   zodValidator('json', deactivateQueueStageSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as DeactivateQueueStageInput
+    const input = c.req.valid('json')
     const result = await deactivateQueueStage(
-      c.req.param('id'),
-      c.req.param('stageId'),
+      c.req.valid('param').id,
+      c.req.valid('param').stageId,
       input,
     )
     return c.json(result)
@@ -191,10 +181,10 @@ queueRoutes.delete(
     z.object({ revision: z.coerce.number().int().min(1) }).strict(),
   ),
   async (c) => {
-    const input = c.req.valid('json' as never) as { revision: number }
+    const input = c.req.valid('json')
     const result = await deleteQueueStage(
-      c.req.param('id'),
-      c.req.param('stageId'),
+      c.req.valid('param').id,
+      c.req.valid('param').stageId,
       input.revision,
     )
     return c.json(result)

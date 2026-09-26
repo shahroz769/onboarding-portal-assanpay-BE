@@ -2,6 +2,8 @@ import { lt, or, eq, and, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
+import { requestId } from 'hono/request-id'
+import { secureHeaders } from 'hono/secure-headers'
 import { rateLimiter } from 'hono-rate-limiter'
 
 import { env } from './config/env'
@@ -59,6 +61,8 @@ const publicMultipartLimit = bodyLimit({
   onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
 })
 
+app.use('*', requestId())
+app.use('*', secureHeaders())
 app.use(
   '*',
   cors({
@@ -66,12 +70,13 @@ app.use(
     credentials: true,
     allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
-    exposeHeaders: ['Content-Length'],
+    exposeHeaders: ['Content-Length', 'X-Request-Id'],
     maxAge: 86400,
   }),
 )
 
 app.onError(errorHandler)
+app.notFound((c) => c.json({ error: 'Not found.' }, 404))
 
 app.use('/api/public/*', publicRateLimiter)
 app.use('/api/public/merchant-form', publicMultipartLimit)

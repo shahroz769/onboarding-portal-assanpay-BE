@@ -1,3 +1,5 @@
+import type { RequestIdVariables } from 'hono/request-id'
+
 export const roleTypes = ['super_admin', 'admin', 'agent'] as const
 
 export type RoleType = (typeof roleTypes)[number]
@@ -9,7 +11,7 @@ export type SessionUser = {
   sessionVersion: number
 }
 
-export type AppVariables = {
+export type AppVariables = RequestIdVariables & {
   auth: SessionUser
 }
 

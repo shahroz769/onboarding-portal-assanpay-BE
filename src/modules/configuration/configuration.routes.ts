@@ -25,6 +25,7 @@ import {
   listAgreementDrafts,
   listSubMerchantDrafts,
   updateCaseFlowConfiguration,
+  updateSubMerchantDraft,
 } from './configuration.service'
 import {
   businessTypeSchema,
@@ -35,15 +36,6 @@ import {
   merchantPortalSettingsSchema,
   paymentMethodSettingsSchema,
   payoutMethodSettingsSchema,
-} from './configuration.schemas'
-import type {
-  EmailSendingModeSettings,
-  LimitsAndMdrSettings,
-  LinkDeadlineSettings,
-  MerchantPortalSettings,
-  PaymentMethodSettings,
-  PayoutMethodSettings,
-  UpdateCaseFlowConfigurationInput,
 } from './configuration.schemas'
 
 export const configurationRoutes = new Hono<AppEnv>()
@@ -104,20 +96,28 @@ configurationRoutes.get('/case-flow', async (c) => {
   return c.json(await getCaseFlowConfiguration())
 })
 
-configurationRoutes.get('/case-flow/versions/:versionId', async (c) => {
-  const versionId = Number(c.req.param('versionId'))
-  if (!Number.isSafeInteger(versionId) || versionId < 1)
-    return c.json({ message: 'Invalid version.' }, 400)
-  return c.json(await getCaseFlowConfiguration(versionId))
-})
+configurationRoutes.get(
+  '/case-flow/versions/:versionId',
+  zodValidator(
+    'param',
+    z.object({
+      versionId: z.coerce
+        .number({ message: 'Invalid version.' })
+        .int({ message: 'Invalid version.' })
+        .min(1, { message: 'Invalid version.' }),
+    }),
+  ),
+  async (c) => {
+    const { versionId } = c.req.valid('param')
+    return c.json(await getCaseFlowConfiguration(versionId))
+  },
+)
 
 configurationRoutes.put(
   '/case-flow',
   zodValidator('json', updateCaseFlowConfigurationSchema),
   async (c) => {
-    const input = c.req.valid(
-      'json' as never,
-    ) as UpdateCaseFlowConfigurationInput
+    const input = c.req.valid('json')
     return c.json(
       await updateCaseFlowConfiguration(input, c.get('auth').userId),
     )
@@ -128,7 +128,7 @@ configurationRoutes.put(
   '/limits-and-mdr',
   zodValidator('json', limitsAndMdrSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as LimitsAndMdrSettings
+    const input = c.req.valid('json')
     return c.json(await updateLimitsAndMdrSettings(input))
   },
 )
@@ -137,7 +137,7 @@ configurationRoutes.put(
   '/link-deadlines',
   zodValidator('json', linkDeadlineSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as LinkDeadlineSettings
+    const input = c.req.valid('json')
     return c.json(await updateLinkDeadlineSettings(input))
   },
 )
@@ -146,7 +146,7 @@ configurationRoutes.put(
   '/email-sending-mode',
   zodValidator('json', emailSendingModeSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as EmailSendingModeSettings
+    const input = c.req.valid('json')
     return c.json(await updateEmailSendingModeSettings(input))
   },
 )
@@ -155,7 +155,7 @@ configurationRoutes.put(
   '/merchant-portal',
   zodValidator('json', merchantPortalSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as MerchantPortalSettings
+    const input = c.req.valid('json')
     return c.json(await updateMerchantPortalSettings(input))
   },
 )
@@ -164,7 +164,7 @@ configurationRoutes.put(
   '/payment-methods',
   zodValidator('json', paymentMethodSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as PaymentMethodSettings
+    const input = c.req.valid('json')
     return c.json(await updatePaymentMethodSettings(input))
   },
 )
@@ -173,7 +173,7 @@ configurationRoutes.put(
   '/payout-methods',
   zodValidator('json', payoutMethodSettingsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as PayoutMethodSettings
+    const input = c.req.valid('json')
     return c.json(await updatePayoutMethodSettings(input))
   },
 )
@@ -192,11 +192,11 @@ configurationRoutes.post(
     const body = await c.req.parseBody()
     const file = body.file
     if (!(file instanceof File)) {
-      return c.json({ message: 'Draft file is required.' }, 400)
+      return c.json({ error: 'Draft file is required.' }, 400)
     }
 
     const result = await uploadAgreementDraft({
-      businessType: c.req.param('businessType'),
+      businessType: c.req.valid('param').businessType,
       file,
     })
     return c.json(result)
@@ -209,15 +209,46 @@ configurationRoutes.post('/sub-merchants', async (c) => {
   const name = body.name
   const sellerCode = body.sellerCode
   if (typeof name !== 'string') {
-    return c.json({ message: 'Sub-merchant name is required.' }, 400)
+    return c.json({ error: 'Sub-merchant name is required.' }, 400)
   }
   if (typeof sellerCode !== 'string') {
-    return c.json({ message: 'Seller Code is required.' }, 400)
+    return c.json({ error: 'Seller Code is required.' }, 400)
   }
   if (!(file instanceof File)) {
-    return c.json({ message: 'Draft file is required.' }, 400)
+    return c.json({ error: 'Draft file is required.' }, 400)
   }
 
   const result = await createSubMerchantDraft({ name, sellerCode, file })
   return c.json(result, 201)
 })
+
+configurationRoutes.patch(
+  '/sub-merchants/:id',
+  zodValidator(
+    'param',
+    z.object({ id: z.uuid({ message: 'Invalid sub-merchant.' }) }),
+  ),
+  async (c) => {
+    const body = await c.req.parseBody()
+    const file = body.file
+    const name = body.name
+    const sellerCode = body.sellerCode
+    if (typeof name !== 'string') {
+      return c.json({ error: 'Sub-merchant name is required.' }, 400)
+    }
+    if (typeof sellerCode !== 'string') {
+      return c.json({ error: 'Seller Code is required.' }, 400)
+    }
+    if (file !== undefined && !(file instanceof File)) {
+      return c.json({ error: 'Draft file is invalid.' }, 400)
+    }
+
+    const result = await updateSubMerchantDraft({
+      id: c.req.valid('param').id,
+      name,
+      sellerCode,
+      file: file ?? null,
+    })
+    return c.json(result)
+  },
+)

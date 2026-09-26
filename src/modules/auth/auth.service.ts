@@ -89,10 +89,7 @@ function sanitizeUser(
 
 async function assertUniqueUser(input: { email: string; username: string }) {
   const existingUser = await getDb().query.users.findFirst({
-    where: and(
-      or(eq(users.email, input.email), eq(users.username, input.username)),
-      isNull(users.deletedAt),
-    ),
+    where: or(eq(users.email, input.email), eq(users.username, input.username)),
   })
 
   if (!existingUser) {
@@ -194,10 +191,7 @@ export async function registerSuperAdmin(input: {
 export async function getLoginAccountKey(identifier: string) {
   const user = await getDb().query.users.findFirst({
     columns: { id: true },
-    where: and(
-      or(eq(users.email, identifier), eq(users.username, identifier)),
-      isNull(users.deletedAt),
-    ),
+    where: or(eq(users.email, identifier), eq(users.username, identifier)),
   })
 
   return user ? `user:${user.id}` : `account:${identifier.toLowerCase()}`
@@ -216,7 +210,6 @@ export async function login(input: {
         eq(users.username, input.identifier),
       ),
       eq(users.status, 'active'),
-      isNull(users.deletedAt),
     ),
   })
 
@@ -314,7 +307,6 @@ export async function refreshSession(input: {
       where: and(
         eq(users.id, payload.userId),
         eq(users.status, 'active'),
-        isNull(users.deletedAt),
       ),
     })
 
@@ -480,7 +472,6 @@ async function loadValidPasswordToken(token: string) {
       name: users.name,
       email: users.email,
       status: users.status,
-      deletedAt: users.deletedAt,
     })
     .from(userPasswordTokens)
     .innerJoin(users, eq(userPasswordTokens.userId, users.id))
@@ -493,7 +484,7 @@ async function loadValidPasswordToken(token: string) {
     )
     .limit(1)
 
-  if (!row || row.deletedAt || row.status !== 'active') {
+  if (!row || row.status !== 'active') {
     throw new AppError(410, 'This password link is expired or invalid.')
   }
 
@@ -539,7 +530,6 @@ export async function setPasswordWithToken(input: {
       where: and(
         eq(users.id, claimedToken.userId),
         eq(users.status, 'active'),
-        isNull(users.deletedAt),
       ),
       columns: { id: true },
     })

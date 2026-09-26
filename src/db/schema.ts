@@ -145,7 +145,6 @@ export const users = pgTable(
       { onDelete: 'set null' },
     ),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1223,43 +1222,6 @@ export const emailLog = pgTable(
   }),
 )
 
-export const midGoLiveTokens = pgTable(
-  'mid_go_live_tokens',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    caseId: uuid('case_id')
-      .notNull()
-      .references(() => cases.id, { onDelete: 'cascade' }),
-    token: varchar('token', { length: 86 }).unique(),
-    tokenHash: varchar('token_hash', { length: 64 }).unique(),
-    availableAt: timestamp('available_at', { withTimezone: true }).notNull(),
-    consumedAt: timestamp('consumed_at', { withTimezone: true }),
-    liveCaseId: uuid('live_case_id').references(() => cases.id, {
-      onDelete: 'set null',
-    }),
-    createdBy: uuid('created_by').references(() => users.id, {
-      onDelete: 'set null',
-    }),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => ({
-    midGoLiveTokensCaseIdIdx: index('mid_go_live_tokens_case_id_idx').on(
-      table.caseId,
-    ),
-    midGoLiveTokensAvailableAtIdx: index(
-      'mid_go_live_tokens_available_at_idx',
-    ).on(table.availableAt),
-    midGoLiveTokensLiveCaseIdx: index('mid_go_live_tokens_live_case_idx').on(
-      table.liveCaseId,
-    ),
-    midGoLiveTokensCreatedByIdx: index('mid_go_live_tokens_created_by_idx').on(
-      table.createdBy,
-    ),
-  }),
-)
-
 export const portalMidLimitApplications = pgTable(
   'portal_mid_limit_applications',
   {
@@ -1581,8 +1543,6 @@ export type NewSubMerchantDraftTemplate =
   typeof subMerchantDraftTemplates.$inferInsert
 export type QueueStage = typeof queueStages.$inferSelect
 export type NewQueueStage = typeof queueStages.$inferInsert
-export type MidGoLiveToken = typeof midGoLiveTokens.$inferSelect
-export type NewMidGoLiveToken = typeof midGoLiveTokens.$inferInsert
 export type PortalMidLimitApplication =
   typeof portalMidLimitApplications.$inferSelect
 export type NewPortalMidLimitApplication =

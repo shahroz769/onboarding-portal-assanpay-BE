@@ -652,21 +652,6 @@ export function getClientPayoutRateLabel(role: MerchantPortalRole) {
   return role === 'merchant_admin' ? 'Bank Settlement' : 'Payout'
 }
 
-export function tokenMatchesGoLiveAvailability(
-  token: { availableAt: Date; createdAt: Date },
-  goLiveAvailabilityHours: number | null,
-) {
-  const delayMs = token.availableAt.getTime() - token.createdAt.getTime()
-  const toleranceMs = 5 * 60 * 1000
-
-  if (goLiveAvailabilityHours == null) {
-    return delayMs <= toleranceMs
-  }
-
-  const expectedDelayMs = goLiveAvailabilityHours * 60 * 60 * 1000
-  return Math.abs(delayMs - expectedDelayMs) <= toleranceMs
-}
-
 export async function getPayoutMethodsForMerchantRole(
   role: MerchantPortalRole,
 ) {

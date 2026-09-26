@@ -23,7 +23,7 @@ dashboardRoutes.get(
   '/',
   zodValidator('query', dashboardQuerySchema),
   async (c) => {
-    const query = c.req.valid('query' as never) as DashboardQuery
+    const query = c.req.valid('query')
     const result = await getDashboard(query)
     return c.json(result)
   },
@@ -34,7 +34,7 @@ dashboardRoutes.post(
   requireRoles('super_admin', 'admin'),
   zodValidator('json', applyPortalMidLimitsSchema),
   async (c) => {
-    const input = c.req.valid('json' as never) as ApplyPortalMidLimitsInput
+    const input = c.req.valid('json')
     const auth = c.get('auth')
     const result = await applyPortalMidLimits(input, auth.userId)
     return c.json(result)
