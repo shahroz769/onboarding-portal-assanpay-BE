@@ -13,6 +13,7 @@ import { authRoutes } from './modules/auth/auth.routes'
 import { caseRoutes } from './modules/cases/cases.routes'
 import {
   getCaseFlowCloseJobHealth,
+  getNextCaseFlowCloseJobDueAt,
   processCaseFlowCloseJobs,
 } from './modules/cases/case-flow.service'
 import { setCaseFlowCloseJobDrainHandler } from './modules/cases/case-flow-worker'
@@ -182,7 +183,7 @@ function requestCaseFlowWorkerRun() {
   scheduleCaseFlowWorker(0)
 }
 
-function nextCaseFlowWorkerDelay(claimed: number) {
+function nextCaseFlowWorkerDelay(claimed: number, nextDueAt: Date | null) {
   if (
     caseFlowWorkerDrainRequested ||
     claimed >= env.CASE_FLOW_WORKER_BATCH_SIZE
@@ -196,6 +197,14 @@ function nextCaseFlowWorkerDelay(claimed: number) {
       Math.max(caseFlowWorkerDelayMs, env.CASE_FLOW_WORKER_POLL_MS) * 2,
       caseFlowWorkerIdlePollMs,
     )
+    // Wake when the next scheduled retry is due; the idle poll is only a
+    // safety net for jobs enqueued without a drain request.
+    if (nextDueAt) {
+      return Math.max(
+        env.CASE_FLOW_WORKER_POLL_MS,
+        Math.min(caseFlowWorkerDelayMs, nextDueAt.getTime() - Date.now()),
+      )
+    }
     return caseFlowWorkerDelayMs
   }
 
@@ -209,12 +218,14 @@ function drainCaseFlowCloseJobs() {
   const startedAt = performance.now()
   caseFlowWorkerPromise = (async () => {
     let claimed = 0
+    let nextDueAt: Date | null = null
 
     try {
       const result = await processCaseFlowCloseJobs(
         env.CASE_FLOW_WORKER_BATCH_SIZE,
       )
       claimed = result.claimed
+      if (claimed === 0) nextDueAt = await getNextCaseFlowCloseJobDueAt()
       caseFlowWorkerLastError = null
 
       if (result.claimed > 0 || result.completed > 0 || result.failed > 0) {
@@ -235,7 +246,7 @@ function drainCaseFlowCloseJobs() {
         Math.round((performance.now() - startedAt) * 100) / 100
       caseFlowWorkerPromise = null
 
-      const delayMs = nextCaseFlowWorkerDelay(claimed)
+      const delayMs = nextCaseFlowWorkerDelay(claimed, nextDueAt)
       caseFlowWorkerDrainRequested = false
       if (!shuttingDown) scheduleCaseFlowWorker(delayMs)
     }

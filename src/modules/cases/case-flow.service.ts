@@ -1088,6 +1088,19 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
   return { claimed, completed, failed }
 }
 
+// Earliest time any open job becomes claimable. Lets the idle worker sleep
+// until a scheduled retry is due instead of waiting for the next idle poll.
+export async function getNextCaseFlowCloseJobDueAt() {
+  const [row] = await getDb()
+    .select({
+      dueAt: sql<Date | string | null>`min(${caseFlowCloseJobs.availableAt})`,
+    })
+    .from(caseFlowCloseJobs)
+    .where(isNull(caseFlowCloseJobs.completedAt))
+
+  return row?.dueAt ? new Date(row.dueAt) : null
+}
+
 export async function getCaseFlowCloseJobHealth() {
   const [row] = await getDb()
     .select({
