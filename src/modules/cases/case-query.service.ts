@@ -176,6 +176,7 @@ import {
   buildKeysetCondition,
   decodeKeysetCursor,
   encodeKeysetCursor,
+  keysetCursorExpression,
   parseCsvValues,
 } from './case-cursor'
 import { generateCaseNumber } from './case-number'
@@ -536,6 +537,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
         expression: sortSpec.expression,
         idExpression: cases.id,
         sortOrder: query.sortOrder,
+        kind: cursor.kind,
         value: cursor.value,
         id: cursor.id,
       }),
@@ -562,7 +564,7 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
       closedAt: cases.closedAt,
       createdAt: cases.createdAt,
       updatedAt: cases.updatedAt,
-      cursorValue: sortSpec.expression,
+      cursorValue: keysetCursorExpression(sortSpec),
     })
     .from(cases)
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))

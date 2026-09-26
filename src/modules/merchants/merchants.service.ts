@@ -33,6 +33,13 @@ import {
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
+import {
+  buildKeysetCondition,
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  keysetCursorExpression,
+  parseCsvValues,
+} from '../cases/case-cursor'
 import { isCaseSlaBreached } from '../cases/case-sla'
 import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import {
@@ -90,117 +97,6 @@ type UploadedDocumentRecord = {
 const priorityValueSet = new Set<string>(priorityValues)
 const businessScopeValueSet = new Set<string>(businessScopeValues)
 const merchantStatusValueSet = new Set<string>(merchantStatusValues)
-
-function parseCsvValues<TValue extends string>(
-  rawValue: string,
-  allowedValues: ReadonlySet<string>,
-) {
-  return rawValue
-    .split(',')
-    .map((value) => value.trim())
-    .filter(
-      (value): value is TValue => value.length > 0 && allowedValues.has(value),
-    )
-}
-
-type KeysetCursorKind = 'date' | 'number' | 'string'
-
-type DecodedKeysetCursor = {
-  sortBy: string
-  sortOrder: 'asc' | 'desc'
-  value: Date | number | string
-  id: string
-}
-
-function encodeKeysetCursor(input: {
-  sortBy: string
-  sortOrder: 'asc' | 'desc'
-  value: unknown
-  id: string
-}) {
-  return btoa(
-    encodeURIComponent(
-      JSON.stringify({
-        ...input,
-        value:
-          input.value instanceof Date ? input.value.toISOString() : input.value,
-      }),
-    ),
-  )
-}
-
-function decodeKeysetCursor(
-  rawCursor: string,
-  expected: {
-    sortBy: string
-    sortOrder: 'asc' | 'desc'
-    kind: KeysetCursorKind
-  },
-): DecodedKeysetCursor {
-  try {
-    const parsed = JSON.parse(decodeURIComponent(atob(rawCursor))) as {
-      sortBy?: unknown
-      sortOrder?: unknown
-      value?: unknown
-      id?: unknown
-    }
-
-    if (
-      parsed.sortBy !== expected.sortBy ||
-      parsed.sortOrder !== expected.sortOrder ||
-      typeof parsed.id !== 'string'
-    ) {
-      throw new Error('Cursor does not match the active sort.')
-    }
-
-    let value: Date | number | string
-    if (expected.kind === 'date') {
-      if (typeof parsed.value !== 'string') {
-        throw new Error('Cursor date is invalid.')
-      }
-      value = new Date(parsed.value)
-      if (Number.isNaN(value.getTime())) {
-        throw new Error('Cursor date is invalid.')
-      }
-    } else if (expected.kind === 'number') {
-      value = Number(parsed.value)
-      if (!Number.isFinite(value)) {
-        throw new Error('Cursor number is invalid.')
-      }
-    } else {
-      if (typeof parsed.value !== 'string') {
-        throw new Error('Cursor value is invalid.')
-      }
-      value = parsed.value
-    }
-
-    return {
-      sortBy: expected.sortBy,
-      sortOrder: expected.sortOrder,
-      value,
-      id: parsed.id,
-    }
-  } catch {
-    throw new AppError(400, 'Invalid pagination cursor.')
-  }
-}
-
-function buildKeysetCondition(input: {
-  expression: unknown
-  idExpression: unknown
-  sortOrder: 'asc' | 'desc'
-  value: Date | number | string
-  id: string
-}) {
-  const operator = input.sortOrder === 'desc' ? '<' : '>'
-  return or(
-    sql`${input.expression} ${sql.raw(operator)} ${input.value}`,
-    and(
-      sql`${input.expression} = ${input.value}`,
-      sql`${input.idExpression} ${sql.raw(operator)} ${input.id}`,
-    ),
-  )!
-}
 
 function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
   return {
@@ -575,6 +471,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
         expression: sortSpec.expression,
         idExpression: merchants.id,
         sortOrder: query.sortOrder,
+        kind: cursor.kind,
         value: cursor.value,
         id: cursor.id,
       }),
@@ -594,7 +491,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
       currency: merchants.currency,
       businessScope: merchants.businessScope,
       liveAt: merchants.liveAt,
-      cursorValue: sortSpec.expression,
+      cursorValue: keysetCursorExpression(sortSpec),
     })
     .from(merchants)
     .where(where)

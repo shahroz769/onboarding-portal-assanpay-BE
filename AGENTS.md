@@ -2,6 +2,8 @@
 
 If a contract change requires frontend work, use Desktop path `\Onboarding Portal\onboarding-portal-assanpay-FE` and read its `AGENTS.md` first.
 
+The current DB is a test DB and can be used for read/write tests, verifications, etc
+
 - Stack: Bun, Hono, strict TypeScript, Drizzle, PostgreSQL.
 - Style: two spaces, single quotes, trailing commas, no semicolons.
 - Before handoff run `bun run typecheck`.

@@ -1,4 +1,5 @@
-import { and, or, sql } from 'drizzle-orm'
+import { and, or, sql, type SQL } from 'drizzle-orm'
+import type { PgColumn } from 'drizzle-orm/pg-core'
 
 import { AppError } from '../../lib/errors'
 
@@ -21,8 +22,22 @@ export type KeysetCursorKind = 'date' | 'number' | 'string'
 export type DecodedKeysetCursor = {
   sortBy: string
   sortOrder: 'asc' | 'desc'
-  value: Date | number | string
+  kind: KeysetCursorKind
+  value: number | string
   id: string
+}
+
+// Postgres timestamps keep microseconds but JS Dates only keep milliseconds, so
+// date cursors round-trip as full-precision UTC ISO strings instead of Dates.
+const cursorTimestampPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/
+
+export function keysetCursorExpression(spec: {
+  expression: PgColumn | SQL
+  kind: KeysetCursorKind
+}) {
+  if (spec.kind !== 'date') return spec.expression
+  return sql<string>`to_char(${spec.expression} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 }
 
 export function encodeKeysetCursor(input: {
@@ -66,15 +81,18 @@ export function decodeKeysetCursor(
       throw new Error('Cursor does not match the active sort.')
     }
 
-    let value: Date | number | string
+    let value: number | string
     if (expected.kind === 'date') {
-      if (typeof parsed.value !== 'string') {
+      if (
+        typeof parsed.value !== 'string' ||
+        !cursorTimestampPattern.test(parsed.value) ||
+        Number.isNaN(
+          new Date(parsed.value.replace(/(\.\d{3})\d+/, '$1')).getTime(),
+        )
+      ) {
         throw new Error('Cursor date is invalid.')
       }
-      value = new Date(parsed.value)
-      if (Number.isNaN(value.getTime())) {
-        throw new Error('Cursor date is invalid.')
-      }
+      value = parsed.value
     } else if (expected.kind === 'number') {
       value = Number(parsed.value)
       if (!Number.isFinite(value)) {
@@ -90,6 +108,7 @@ export function decodeKeysetCursor(
     return {
       sortBy: expected.sortBy,
       sortOrder: expected.sortOrder,
+      kind: expected.kind,
       value,
       id: parsed.id,
     }
@@ -102,14 +121,15 @@ export function buildKeysetCondition(input: {
   expression: unknown
   idExpression: unknown
   sortOrder: 'asc' | 'desc'
-  value: Date | number | string
+  kind: KeysetCursorKind
+  value: number | string
   id: string
 }) {
   const operator = input.sortOrder === 'desc' ? '<' : '>'
-  // Raw SQL parameters do not inherit the timestamp column's Drizzle encoder.
-  // Serialize dates explicitly so postgres.js receives a wire-safe value.
+  // Raw SQL parameters do not inherit the timestamp column's Drizzle encoder,
+  // so date cursors stay ISO strings and are cast on the Postgres side.
   const value =
-    input.value instanceof Date ? input.value.toISOString() : input.value
+    input.kind === 'date' ? sql`${input.value}::timestamptz` : input.value
 
   return or(
     sql`${input.expression} ${sql.raw(operator)} ${value}`,
