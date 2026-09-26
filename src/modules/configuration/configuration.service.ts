@@ -6,7 +6,6 @@ import {
   isNotNull,
   isNull,
   ne,
-  or,
   sql,
 } from 'drizzle-orm'
 
@@ -539,25 +538,12 @@ export async function createSubMerchantDraft(input: {
 
   // Check before uploading so a duplicate never leaves an orphaned Drive file.
   const [conflict] = await getDb()
-    .select({
-      name: subMerchantDraftTemplates.name,
-      sellerCode: subMerchantDraftTemplates.sellerCode,
-    })
+    .select({ id: subMerchantDraftTemplates.id })
     .from(subMerchantDraftTemplates)
-    .where(
-      or(
-        sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`,
-        sql`lower(${subMerchantDraftTemplates.sellerCode}) = lower(${sellerCode})`,
-      ),
-    )
+    .where(sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`)
     .limit(1)
   if (conflict) {
-    throw new AppError(
-      409,
-      conflict.sellerCode.toLowerCase() === sellerCode.toLowerCase()
-        ? 'A sub-merchant with this Seller Code already exists.'
-        : 'A sub-merchant with this name already exists.',
-    )
+    throw new AppError(409, 'A sub-merchant with this name already exists.')
   }
 
   const uploaded = await uploadConfigurationDraft({
@@ -614,28 +600,17 @@ export async function updateSubMerchantDraft(input: {
   }
 
   const [conflict] = await getDb()
-    .select({
-      name: subMerchantDraftTemplates.name,
-      sellerCode: subMerchantDraftTemplates.sellerCode,
-    })
+    .select({ id: subMerchantDraftTemplates.id })
     .from(subMerchantDraftTemplates)
     .where(
       and(
         ne(subMerchantDraftTemplates.id, input.id),
-        or(
-          sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`,
-          sql`lower(${subMerchantDraftTemplates.sellerCode}) = lower(${sellerCode})`,
-        ),
+        sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`,
       ),
     )
     .limit(1)
   if (conflict) {
-    throw new AppError(
-      409,
-      conflict.sellerCode.toLowerCase() === sellerCode.toLowerCase()
-        ? 'A sub-merchant with this Seller Code already exists.'
-        : 'A sub-merchant with this name already exists.',
-    )
+    throw new AppError(409, 'A sub-merchant with this name already exists.')
   }
 
   // The previous draft file is kept in Drive: links to it may already have

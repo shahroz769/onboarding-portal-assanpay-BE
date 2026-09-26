@@ -18,8 +18,6 @@ const uniqueViolationMessages: Record<string, string> = {
   users_username_unique: 'A user with this username already exists.',
   sub_merchant_draft_templates_name_unique:
     'A sub-merchant with this name already exists.',
-  sub_merchant_draft_templates_seller_code_uniq:
-    'A sub-merchant with this Seller Code already exists.',
 }
 
 function getDatabaseError(error: Error) {
