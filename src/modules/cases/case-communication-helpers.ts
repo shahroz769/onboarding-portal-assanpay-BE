@@ -1,10 +1,6 @@
-import { eq } from 'drizzle-orm'
-
 import { getDb } from '../../db/client'
 import { caseFiles } from '../../db/schema'
-import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import { getEmailSendingModeSettings } from '../configuration/configuration.service'
 import {
   DOCUMENT_TYPE_LABELS,
@@ -13,11 +9,8 @@ import {
   isDocumentFieldName,
 } from './field-labels'
 import type { EmailRecipientType } from './cases.schemas'
-import type { MidCreationCredentials } from './case-detail-lookups'
-import { getClientPayoutRateLabel } from './case-detail-lookups'
 import { ensurePrivateInternalCaseFolder } from './case-drive-folders'
 import { getCaseFileStorage } from './case-storage'
-import { validateEmailProofFile } from './case-upload-validation'
 
 export function getRejectionLabel(
   fieldName: string,
@@ -45,18 +38,6 @@ export function formatExpiryDate(date: Date): string {
 export function formatExpiryLine(expiresAt: string): string {
   if (expiresAt.trim().toLowerCase() === 'no expiry') return ''
   return `\n\nThis link expires ${expiresAt}.`
-}
-
-export function formatEmailDateTime(date: Date): string {
-  return new Intl.DateTimeFormat('en-PK', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'Asia/Karachi',
-    timeZoneName: 'short',
-  }).format(date)
 }
 
 export type ServerIntegrationDetails = {
@@ -232,13 +213,7 @@ export function buildAgreementEmailBody(params: {
   legalEmail: string
   remarks: string | null
 }): string {
-  const {
-    ownerName,
-    agreementUrl,
-    officeAddress,
-    legalEmail,
-    remarks,
-  } = params
+  const { ownerName, agreementUrl, officeAddress, legalEmail, remarks } = params
   let body = `Hi ${ownerName},
 
 Please find the agreement for your review and execution.
@@ -269,66 +244,6 @@ Best regards,
 AssanPay Onboarding Team`
 
   return body
-}
-
-export function buildMidCreationEmailBody(params: {
-  merchantName: string
-  portalEmail: string
-  portalPassword: string
-  merchantPortalUrl: string
-  serverIntegration?: ServerIntegrationDetails | null
-  testingLimits: {
-    transactionLimit: number
-    dailyLimit: number
-    monthlyLimit: number
-  }
-  paymentMethods: Array<{ label: string; commissionRate: number }>
-  payoutRate: string
-  payoutRateLabel: string
-}): string {
-  const {
-    merchantName,
-    portalEmail,
-    portalPassword,
-    merchantPortalUrl,
-    testingLimits,
-    paymentMethods,
-    payoutRate,
-    payoutRateLabel,
-  } = params
-  return `AssanPay Merchant Portal Credentials for ${merchantName}
-
-Portal Login: ${merchantPortalUrl}
-Email: ${portalEmail}
-Password: ${portalPassword}
-${
-  params.serverIntegration
-    ? `
-Custom Website Server Integration:
-Server Base URL: ${params.serverIntegration.baseUrl}
-Server Callback IP: ${params.serverIntegration.callbackIp}
-`
-    : ''
-}
-
-For your security, update this temporary password after your first login.
-
-Testing Limits:
-• Per Transaction: PKR ${testingLimits.transactionLimit.toLocaleString()}
-• Daily: PKR ${testingLimits.dailyLimit.toLocaleString()}
-• Monthly: PKR ${testingLimits.monthlyLimit.toLocaleString()}
-
-Rates:
-${paymentMethods.map((method) => `• ${method.label}: ${method.commissionRate}%`).join('\n')}
-• ${payoutRateLabel}: ${payoutRate}
-
-Live activation:
-Your account cannot go live until AssanPay receives and approves the signed agreement. After the Agreement case is closed successfully, AssanPay will start the Live process automatically. No additional Go-Live request is required from you.
-
-Please keep your credentials secure and do not share them with anyone.
-
-Best regards,
-AssanPay Onboarding Team`
 }
 
 export function buildMidCreationMessageBody(params: {

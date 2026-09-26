@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { roleTypes } from '../../types/auth'
 
@@ -13,7 +13,10 @@ const queueAccessSchema = z
     workQueueIds: z.array(z.uuid()).default([]),
   })
   .superRefine((value, ctx) => {
-    if (value.queueViewScope === 'selected' && value.viewQueueIds.length === 0) {
+    if (
+      value.queueViewScope === 'selected' &&
+      value.viewQueueIds.length === 0
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['viewQueueIds'],
@@ -68,7 +71,7 @@ export const updateUserSchema = z
     }
   })
   .refine((value) => Object.keys(value).length > 0, {
-    message: 'At least one field is required.',
+    error: 'At least one field is required.',
   })
 
 export const bulkUserStatusSchema = z.object({

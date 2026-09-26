@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 import {
   QUEUE_LIFECYCLES,
@@ -14,40 +14,38 @@ const stageCategorySchema = z.enum([
   'closed',
 ])
 
-export const queueStageDefinitionSchema = z
-  .object({
-    name: z.string().min(1).max(120),
-    slug: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
-        message:
-          'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
-      }),
-    order: z.coerce.number().int().min(1),
-    category: stageCategorySchema,
-    isActive: z.boolean().optional().default(true),
-    capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
-  })
-  .strict()
+export const queueStageDefinitionSchema = z.strictObject({
+  name: z.string().min(1).max(120),
+  slug: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
+      error:
+        'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
+    }),
+  order: z.coerce.number().int().min(1),
+  category: stageCategorySchema,
+  isActive: z.boolean().optional().default(true),
+  capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
+})
 
 export const createQueueSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(120),
     slug: z
       .string()
       .min(1)
       .max(120)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-        message: 'Slug must be lowercase alphanumeric with hyphens.',
+        error: 'Slug must be lowercase alphanumeric with hyphens.',
       }),
     prefix: z
       .string()
       .min(1)
       .max(4)
       .regex(/^[A-Z]{1,4}$/, {
-        message: 'Prefix must be 1-4 uppercase letters.',
+        error: 'Prefix must be 1-4 uppercase letters.',
       }),
     workflowType: z.enum(QUEUE_WORKFLOW_TYPES),
     lifecycle: z.enum(QUEUE_LIFECYCLES).optional().default('draft'),
@@ -56,7 +54,6 @@ export const createQueueSchema = z
     stageTemplate: z.enum(QUEUE_STAGE_TEMPLATES).optional(),
     stages: z.array(queueStageDefinitionSchema).optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     if (value.lifecycle === 'active') {
       ctx.addIssue({
@@ -71,7 +68,7 @@ export const createQueueSchema = z
 export type CreateQueueInput = z.infer<typeof createQueueSchema>
 
 export const updateQueueSchema = z
-  .object({
+  .strictObject({
     revision: z.coerce.number().int().min(1),
     name: z.string().min(1).max(120).optional(),
     prefix: z
@@ -79,7 +76,7 @@ export const updateQueueSchema = z
       .min(1)
       .max(4)
       .regex(/^[A-Z]{1,4}$/, {
-        message: 'Prefix must be 1-4 uppercase letters.',
+        error: 'Prefix must be 1-4 uppercase letters.',
       })
       .optional(),
     workflowType: z.enum(QUEUE_WORKFLOW_TYPES).optional(),
@@ -90,7 +87,6 @@ export const updateQueueSchema = z
     slaHours: z.coerce.number().int().min(1).max(8760).optional(),
     stages: z.array(queueStageDefinitionSchema).optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     if (value.lifecycle !== undefined && value.isActive !== undefined) {
       ctx.addIssue({
@@ -104,13 +100,12 @@ export const updateQueueSchema = z
 export type UpdateQueueInput = z.infer<typeof updateQueueSchema>
 
 export const updateQueueStatusSchema = z
-  .object({
+  .strictObject({
     lifecycle: z.enum(QUEUE_LIFECYCLES).optional(),
     /** @deprecated Prefer lifecycle. */
     isActive: z.boolean().optional(),
     revision: z.coerce.number().int().min(1).optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     if (value.lifecycle === undefined && value.isActive === undefined) {
       ctx.addIssue({
@@ -130,72 +125,62 @@ export const updateQueueStatusSchema = z
 
 export type UpdateQueueStatusInput = z.infer<typeof updateQueueStatusSchema>
 
-export const updateQueueSlaSchema = z
-  .object({
-    slaHours: z.coerce.number().int().min(1).max(8760),
-    revision: z.coerce.number().int().min(1).optional(),
-  })
-  .strict()
+export const updateQueueSlaSchema = z.strictObject({
+  slaHours: z.coerce.number().int().min(1).max(8760),
+  revision: z.coerce.number().int().min(1).optional(),
+})
 
 export type UpdateQueueSlaInput = z.infer<typeof updateQueueSlaSchema>
 
-export const createQueueStageSchema = z
-  .object({
-    revision: z.coerce.number().int().min(1),
-    name: z.string().min(1).max(120),
-    slug: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
-        message:
-          'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
-      }),
-    order: z.coerce.number().int().min(1),
-    category: stageCategorySchema,
-    isActive: z.boolean().optional().default(true),
-    capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
-  })
-  .strict()
+export const createQueueStageSchema = z.strictObject({
+  revision: z.coerce.number().int().min(1),
+  name: z.string().min(1).max(120),
+  slug: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
+      error:
+        'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
+    }),
+  order: z.coerce.number().int().min(1),
+  category: stageCategorySchema,
+  isActive: z.boolean().optional().default(true),
+  capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
+})
 
 export type CreateQueueStageInput = z.infer<typeof createQueueStageSchema>
 
-export const updateQueueStageSchema = z
-  .object({
-    revision: z.coerce.number().int().min(1),
-    name: z.string().min(1).max(120).optional(),
-    slug: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
-        message:
-          'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
-      })
-      .optional(),
-    order: z.coerce.number().int().min(1).optional(),
-    category: stageCategorySchema.optional(),
-    isActive: z.boolean().optional(),
-    capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
-  })
-  .strict()
+export const updateQueueStageSchema = z.strictObject({
+  revision: z.coerce.number().int().min(1),
+  name: z.string().min(1).max(120).optional(),
+  slug: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, {
+      error:
+        'Stage slug must be lowercase alphanumeric with hyphens or underscores.',
+    })
+    .optional(),
+  order: z.coerce.number().int().min(1).optional(),
+  category: stageCategorySchema.optional(),
+  isActive: z.boolean().optional(),
+  capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
+})
 
 export type UpdateQueueStageInput = z.infer<typeof updateQueueStageSchema>
 
-export const reorderQueueStagesSchema = z
-  .object({
-    revision: z.coerce.number().int().min(1),
-    stageIds: z.array(z.string().uuid()).min(1),
-  })
-  .strict()
+export const reorderQueueStagesSchema = z.strictObject({
+  revision: z.coerce.number().int().min(1),
+  stageIds: z.array(z.uuid()).min(1),
+})
 
 export type ReorderQueueStagesInput = z.infer<typeof reorderQueueStagesSchema>
 
-export const deactivateQueueStageSchema = z
-  .object({
-    revision: z.coerce.number().int().min(1),
-  })
-  .strict()
+export const deactivateQueueStageSchema = z.strictObject({
+  revision: z.coerce.number().int().min(1),
+})
 
 export type DeactivateQueueStageInput = z.infer<
   typeof deactivateQueueStageSchema

@@ -2,12 +2,10 @@ import { and, asc, desc, eq, ilike, inArray } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
-  caseFieldReviews,
   caseFiles,
   caseHistory,
   cases,
   documentReviewDetails,
-  merchants,
   portalMidLimitApplications,
   queues,
   subMerchantDraftTemplates,
@@ -20,9 +18,6 @@ import type { SessionUser } from '../../types/auth'
 import {
   defaultPaymentMethodSettings,
   defaultPayoutMethodSettings,
-  getLimitsAndMdrSettings,
-  getMerchantPortalSettings,
-  getPaymentMethodSettings,
   getPayoutMethodSettings,
 } from '../configuration/configuration.service'
 import {
@@ -39,13 +34,11 @@ import {
   type MerchantPortalRole,
 } from './cases.schemas'
 import {
-  DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
   MID_CREATION_CREDENTIALS_SENT_ACTIONS,
   WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
 } from './case-constants'
-import type { DbTransaction } from './case-db'
 import { SUB_MERCHANT_EMAIL_PROOF_KIND } from './sub-merchant-form.config'
 
 export async function getTestingLimitsAppliedEntry(caseId: string) {
@@ -109,21 +102,6 @@ export async function getLiveLimitsAppliedEntry(caseId: string) {
       ),
     )
     .orderBy(desc(caseHistory.createdAt))
-    .limit(1)
-
-  return entry ?? null
-}
-
-export async function getDocumentReviewResubmissionSentEntry(caseId: string) {
-  const [entry] = await getDb()
-    .select({ id: caseHistory.id })
-    .from(caseHistory)
-    .where(
-      and(
-        eq(caseHistory.caseId, caseId),
-        inArray(caseHistory.action, DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS),
-      ),
-    )
     .limit(1)
 
   return entry ?? null
@@ -449,13 +427,6 @@ export async function ensureInheritedSubMerchantFormDetails(input: {
   return getSubMerchantFormDetails(input.caseId)
 }
 
-export async function getMidCreationPortalMid(
-  merchantId: string,
-): Promise<number | null> {
-  const credentials = await getMidCreationCredentials(merchantId)
-  return credentials?.portalMid ?? null
-}
-
 export type MidCreationCredentials = {
   portalMid: number
   internalPortalMid: number
@@ -600,28 +571,6 @@ export async function getInternalPortalMidLimitsAppliedEntryForMerchant(
     actorId: application.appliedBy,
     actorName: application.appliedByName,
     portalMid: credentials.internalPortalMid,
-  }
-}
-
-export async function assertInternalPortalMidLimitsApplied(merchantId: string) {
-  const credentials = await getMidCreationCredentials(merchantId)
-
-  if (!credentials) {
-    throw new AppError(
-      400,
-      'Save Portal MID (Internal) in MID Creation before closing this WordPress Website case.',
-    )
-  }
-
-  const application = await getPortalMidLimitApplication(
-    credentials.internalPortalMid,
-  )
-
-  if (!application) {
-    throw new AppError(
-      400,
-      `Live limits have not been applied for Portal MID (Internal) ${credentials.internalPortalMid}. Apply limits from the dashboard before closing this WordPress Website case.`,
-    )
   }
 }
 

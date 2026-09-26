@@ -6,13 +6,18 @@ import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
 import {
   applyPortalMidLimitsSchema,
+  awaitingPhysicalAgreementsQuerySchema,
   dashboardQuerySchema,
+  pendingPortalMidValuesQuerySchema,
+  pendingPortalMidsQuerySchema,
 } from './dashboard.schemas'
-import type {
-  ApplyPortalMidLimitsInput,
-  DashboardQuery,
-} from './dashboard.schemas'
-import { applyPortalMidLimits, getDashboard } from './dashboard.service'
+import {
+  applyPortalMidLimits,
+  getDashboard,
+  listAwaitingPhysicalAgreementsPage,
+  listPendingPortalMidLimitsPage,
+  listPendingPortalMidValues,
+} from './dashboard.service'
 
 export const dashboardRoutes = new Hono<AppEnv>()
 
@@ -25,6 +30,39 @@ dashboardRoutes.get(
   async (c) => {
     const query = c.req.valid('query')
     const result = await getDashboard(query)
+    return c.json(result)
+  },
+)
+
+// GET /api/dashboard/portal-mids/pending — Paged MIDs awaiting limits
+dashboardRoutes.get(
+  '/portal-mids/pending',
+  zodValidator('query', pendingPortalMidsQuerySchema),
+  async (c) => {
+    const result = await listPendingPortalMidLimitsPage(c.req.valid('query'))
+    return c.json(result)
+  },
+)
+
+// GET /api/dashboard/portal-mids/pending/mids — Every pending MID (for copy)
+dashboardRoutes.get(
+  '/portal-mids/pending/mids',
+  zodValidator('query', pendingPortalMidValuesQuerySchema),
+  async (c) => {
+    const result = await listPendingPortalMidValues(c.req.valid('query'))
+    return c.json(result)
+  },
+)
+
+// GET /api/dashboard/agreements/awaiting-physical — Sent agreements whose
+// signed physical copy has not been received yet
+dashboardRoutes.get(
+  '/agreements/awaiting-physical',
+  zodValidator('query', awaitingPhysicalAgreementsQuerySchema),
+  async (c) => {
+    const result = await listAwaitingPhysicalAgreementsPage(
+      c.req.valid('query'),
+    )
     return c.json(result)
   },
 )

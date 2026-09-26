@@ -931,9 +931,6 @@ export async function enqueueCasesAfterSuccessfulClose(
     .returning({ id: caseFlowCloseJobs.id })
 }
 
-// Compatibility export for case modules that still share the legacy import set.
-export const triggerCasesAfterSuccessfulClose = enqueueCasesAfterSuccessfulClose
-
 const CASE_FLOW_JOB_ERROR_MAX_LENGTH = 1_000
 
 function formatCaseFlowJobError(error: unknown) {

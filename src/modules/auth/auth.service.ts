@@ -15,7 +15,7 @@ import {
 } from '../../lib/auth'
 import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
-import type { RoleType, SessionUser } from '../../types/auth'
+import type { RoleType } from '../../types/auth'
 import { getLinkDeadlineSettings } from '../configuration/configuration.service'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
@@ -266,8 +266,7 @@ export async function refreshSession(input: {
   }
 
   if (presentedToken.status === 'rotated') {
-    const rotatedAgoMs =
-      Date.now() - (presentedToken.revokedAt?.getTime() ?? 0)
+    const rotatedAgoMs = Date.now() - (presentedToken.revokedAt?.getTime() ?? 0)
 
     if (rotatedAgoMs > REFRESH_TOKEN_REUSE_GRACE_MS) {
       // Only the holder of a copy can present an already-rotated token after
@@ -304,10 +303,7 @@ export async function refreshSession(input: {
 
   return getDb().transaction(async (tx) => {
     const user = await tx.query.users.findFirst({
-      where: and(
-        eq(users.id, payload.userId),
-        eq(users.status, 'active'),
-      ),
+      where: and(eq(users.id, payload.userId), eq(users.status, 'active')),
     })
 
     if (!user) {
@@ -527,10 +523,7 @@ export async function setPasswordWithToken(input: {
     }
 
     const user = await tx.query.users.findFirst({
-      where: and(
-        eq(users.id, claimedToken.userId),
-        eq(users.status, 'active'),
-      ),
+      where: and(eq(users.id, claimedToken.userId), eq(users.status, 'active')),
       columns: { id: true },
     })
 
@@ -572,45 +565,6 @@ export async function setPasswordWithToken(input: {
   }
 
   return sanitizeUser(updatedUser)
-}
-
-export async function createManagedUser(
-  actor: SessionUser,
-  input: {
-    name: string
-    email: string
-    username: string
-    password: string
-    roleType: RoleType
-    gender?: 'male' | 'female'
-  },
-) {
-  if (!canCreateRole(actor.roleType, input.roleType)) {
-    throw new AppError(403, 'You cannot create a user with this role.')
-  }
-
-  await assertUniqueUser({
-    email: input.email,
-    username: input.username,
-  })
-
-  const passwordHash = await Bun.password.hash(input.password)
-
-  const [createdUser] = await getDb()
-    .insert(users)
-    .values({
-      name: input.name,
-      email: input.email,
-      username: input.username,
-      gender: input.gender ?? 'male',
-      passwordHash,
-      roleType: input.roleType,
-      status: 'active',
-      createdByUserId: actor.userId,
-    })
-    .returning()
-
-  return sanitizeUser(createdUser)
 }
 
 export async function revokeAllUserSessions(userId: string) {

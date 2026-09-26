@@ -14,7 +14,6 @@ export const QUEUE_WORKFLOW_TYPES = [
   'mid',
   'testing',
   'wordpress',
-  'card',
   'physical_agreement',
   'live',
   'sub_merchant_form',
@@ -25,10 +24,3 @@ export type QueueWorkflowType = (typeof QUEUE_WORKFLOW_TYPES)[number]
 export const QUEUE_LIFECYCLES = ['draft', 'active', 'inactive'] as const
 
 export type QueueLifecycle = (typeof QUEUE_LIFECYCLES)[number]
-
-/** Wire fields added/emphasized by plans 003–004 on queue DTOs. */
-export type QueueContractFields = {
-  workflowType: QueueWorkflowType
-  lifecycle: QueueLifecycle
-  revision: number
-}

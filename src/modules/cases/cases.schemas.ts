@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 import {
   paymentMethodSettingsSchema,
@@ -65,55 +65,39 @@ export function isValidStatusTransition(
 
 // ─── Request Schemas ────────────────────────────────────────────────────────
 
-export const createCaseSchema = z
-  .object({
-    merchantId: z.string().uuid(),
-    queueId: z.string().uuid(),
-    subMerchantId: z.string().uuid().optional(),
-  })
-  .strict()
+export const createCaseSchema = z.strictObject({
+  merchantId: z.uuid(),
+  queueId: z.uuid(),
+  subMerchantId: z.uuid().optional(),
+})
 
 export type CreateCaseInput = z.infer<typeof createCaseSchema>
 
-export const updateCaseStatusSchema = z
-  .object({
-    status: z.enum(caseStatusValues),
-  })
-  .strict()
+export const updateCaseStatusSchema = z.strictObject({
+  status: z.enum(caseStatusValues),
+})
 
 export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>
 
-export const assignCaseSchema = z
-  .object({
-    ownerId: z.string().uuid().nullable(),
-  })
-  .strict()
+export const assignCaseSchema = z.strictObject({
+  ownerId: z.uuid().nullable(),
+})
 
-export type AssignCaseInput = z.infer<typeof assignCaseSchema>
+export const bulkAssignCaseSchema = z.strictObject({
+  ids: z.array(z.uuid()).min(1),
+  ownerId: z.uuid().nullable(),
+})
 
-export const bulkAssignCaseSchema = z
-  .object({
-    ids: z.array(z.string().uuid()).min(1),
-    ownerId: z.string().uuid().nullable(),
-  })
-  .strict()
-
-export type BulkAssignCaseInput = z.infer<typeof bulkAssignCaseSchema>
-
-export const updateCasePrioritySchema = z
-  .object({
-    priority: z.enum(['normal', 'high']),
-  })
-  .strict()
-
-export type UpdateCasePriorityInput = z.infer<typeof updateCasePrioritySchema>
+export const updateCasePrioritySchema = z.strictObject({
+  priority: z.enum(['normal', 'high']),
+})
 
 export const listCasesQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(100).default(30),
   queueAccess: z.enum(['view', 'work']).default('view'),
   search: z.string().optional(),
-  queueId: z.string().uuid().optional(),
+  queueId: z.uuid().optional(),
   ownerId: z.string().optional(),
   status: z
     .string()
@@ -153,33 +137,13 @@ export const stageCategoryValues = [
 ] as const
 export type StageCategoryValue = (typeof stageCategoryValues)[number]
 
-/**
- * Maps stage category to the legacy status column for backward compat.
- */
-export function categoryToStatus(
-  category: StageCategoryValue,
-): CaseStatusValue {
-  switch (category) {
-    case 'new':
-      return 'new'
-    case 'in_progress':
-      return 'working'
-    case 'qc':
-      return 'qc'
-    case 'error':
-      return 'error'
-    case 'closed':
-      return 'closed'
-  }
-} // ─── Field Review Schemas ───────────────────────────────────────────────────
+// ─── Field Review Schemas ───────────────────────────────────────────────────
 
 export const fieldReviewStatusValues = [
   'pending',
   'approved',
   'rejected',
 ] as const
-export type FieldReviewStatusValue = (typeof fieldReviewStatusValues)[number]
-
 export const fieldReviewItemSchema = z.object({
   fieldName: z.string().min(1).max(120),
   status: z.enum(fieldReviewStatusValues),
@@ -187,26 +151,23 @@ export const fieldReviewItemSchema = z.object({
 })
 
 export const saveFieldReviewsSchema = z
-  .object({
+  .strictObject({
     reviews: z.array(fieldReviewItemSchema).min(1).max(200),
   })
-  .strict()
   .refine(
     (data) =>
       data.reviews.every(
         (r) =>
           r.status !== 'rejected' || (r.remarks && r.remarks.trim().length > 0),
       ),
-    { message: 'Remarks are required for rejected fields.' },
+    { error: 'Remarks are required for rejected fields.' },
   )
 
 export type SaveFieldReviewsInput = z.infer<typeof saveFieldReviewsSchema>
 
-export const saveDocumentReviewSubMerchantSchema = z
-  .object({
-    subMerchantIds: z.array(z.string().uuid()).min(1).max(30),
-  })
-  .strict()
+export const saveDocumentReviewSubMerchantSchema = z.strictObject({
+  subMerchantIds: z.array(z.uuid()).min(1).max(30),
+})
 
 export type SaveDocumentReviewSubMerchantInput = z.infer<
   typeof saveDocumentReviewSubMerchantSchema
@@ -214,38 +175,23 @@ export type SaveDocumentReviewSubMerchantInput = z.infer<
 
 // ─── Close Unsuccessful Schema ──────────────────────────────────────────────
 
-export const closeUnsuccessfulSchema = z
-  .object({
-    reason: z.string().min(1).max(2000),
-  })
-  .strict()
+export const closeUnsuccessfulSchema = z.strictObject({
+  reason: z.string().min(1).max(2000),
+})
 
 export type CloseUnsuccessfulInput = z.infer<typeof closeUnsuccessfulSchema>
 
 // ─── Comment Schemas ────────────────────────────────────────────────────────
 
-export const createCommentSchema = z
-  .object({
-    content: z.string().min(1).max(5000),
-    parentId: z.string().uuid().optional(),
-    mentions: z.array(z.string().uuid()).max(20).optional(),
-  })
-  .strict()
+export const createCommentSchema = z.strictObject({
+  content: z.string().min(1).max(5000),
+  parentId: z.uuid().optional(),
+  mentions: z.array(z.uuid()).max(20).optional(),
+})
 
 export type CreateCommentInput = z.infer<typeof createCommentSchema>
 
 // ─── Resubmission Schemas ───────────────────────────────────────────────────
-
-export const sendForResubmissionResponseSchema = z.object({
-  status: z.enum(['sent', 'failed']),
-  tokenExpiresAt: z.string().nullable(),
-  emailLogId: z.string().uuid(),
-  error: z.string().optional(),
-})
-
-export type SendForResubmissionResponse = z.infer<
-  typeof sendForResubmissionResponseSchema
->
 
 export const emailRecipientTypeValues = ['submitter', 'business'] as const
 export type EmailRecipientType = (typeof emailRecipientTypeValues)[number]
@@ -256,36 +202,21 @@ export const emailRecipientSelectionSchema = z.object({
 
 // ─── Sub-Merchant Form Schemas ───────────────────────────────────────────────
 
-export const selectSubMerchantFormSchema = z
-  .object({
-    subMerchantKey: z.uuid({ message: 'Select a valid sub-merchant.' }),
-  })
-  .strict()
+export const selectSubMerchantFormSchema = z.strictObject({
+  subMerchantKey: z.uuid({ error: 'Select a valid sub-merchant.' }),
+})
 
 export type SelectSubMerchantFormInput = z.infer<
   typeof selectSubMerchantFormSchema
 >
 
-export const sendAgreementEmailSchema = z
-  .object({
-    remarks: z.string().max(2000).optional().nullable(),
-    recipientEmailType:
-      emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
-  })
-  .strict()
-
-export type SendAgreementEmailInput = z.infer<typeof sendAgreementEmailSchema>
-
-export const agreementEmailResponseSchema = z.object({
-  status: z.enum(['sent', 'failed']),
-  emailLogId: z.string().uuid(),
-  tokenExpiresAt: z.string().nullable(),
-  error: z.string().optional(),
+export const sendAgreementEmailSchema = z.strictObject({
+  remarks: z.string().max(2000).optional().nullable(),
+  recipientEmailType:
+    emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
 })
 
-export type AgreementEmailResponse = z.infer<
-  typeof agreementEmailResponseSchema
->
+export type SendAgreementEmailInput = z.infer<typeof sendAgreementEmailSchema>
 
 export const merchantPortalRoleValues = [
   'merchant_admin',
@@ -302,12 +233,12 @@ export function buildInternalMerchantEmail(email: string) {
 }
 
 export const saveMidCreationDetailsSchema = z
-  .object({
+  .strictObject({
     portalMid: z.coerce.number().int().positive(),
     internalPortalMid: z.coerce.number().int().positive(),
-    email: z.string().trim().email().max(255),
+    email: z.string().trim().max(255).pipe(z.email()),
     branchCode: z.string().trim().min(1).max(100),
-    internalEmail: z.string().trim().email().max(255),
+    internalEmail: z.string().trim().max(255).pipe(z.email()),
     internalBranchCode: z.string().trim().min(1).max(100),
     merchantRole: z.enum(merchantPortalRoleValues),
     paymentMethods: paymentMethodSettingsSchema.min(
@@ -316,7 +247,6 @@ export const saveMidCreationDetailsSchema = z
     ),
     payoutMethods: payoutMethodSettingsSchema.min(1, 'Select a payout method.'),
   })
-  .strict()
   .transform((input) => ({
     ...input,
     internalEmail: buildInternalMerchantEmail(input.email),
@@ -326,56 +256,40 @@ export type SaveMidCreationDetailsInput = z.infer<
   typeof saveMidCreationDetailsSchema
 >
 
-export const sendMidCreationEmailSchema = emailRecipientSelectionSchema.strict()
+export const sendMidCreationEmailSchema = z.strictObject(
+  emailRecipientSelectionSchema.shape,
+)
 
 export type SendMidCreationEmailInput = z.infer<
   typeof sendMidCreationEmailSchema
 >
 
-export const sendLiveEmailSchema = z
-  .object({
-    recipientEmailType:
-      emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
-  })
-  .strict()
+export const sendLiveEmailSchema = z.strictObject({
+  recipientEmailType:
+    emailRecipientSelectionSchema.shape.recipientEmailType.optional(),
+})
 
 export type SendLiveEmailInput = z.infer<typeof sendLiveEmailSchema>
 
-export const midCreationEmailResponseSchema = z.object({
-  status: z.enum(['sent', 'failed']),
-  emailLogId: z.string().uuid(),
-  error: z.string().optional(),
+export const markTestingLimitsAppliedSchema = z.strictObject({
+  applied: z.literal(true),
 })
-
-export type MidCreationEmailResponse = z.infer<
-  typeof midCreationEmailResponseSchema
->
-
-export const markTestingLimitsAppliedSchema = z
-  .object({
-    applied: z.literal(true),
-  })
-  .strict()
 
 export type MarkTestingLimitsAppliedInput = z.infer<
   typeof markTestingLimitsAppliedSchema
 >
 
-export const markLiveLimitsAppliedSchema = z
-  .object({
-    applied: z.literal(true),
-  })
-  .strict()
+export const markLiveLimitsAppliedSchema = z.strictObject({
+  applied: z.literal(true),
+})
 
 export type MarkLiveLimitsAppliedInput = z.infer<
   typeof markLiveLimitsAppliedSchema
 >
 
-export const saveWordpressWebsiteSchema = z
-  .object({
-    clonedWebsiteLink: z.string().trim().url().max(2048),
-  })
-  .strict()
+export const saveWordpressWebsiteSchema = z.strictObject({
+  clonedWebsiteLink: z.string().trim().max(2048).pipe(z.url()),
+})
 
 export type SaveWordpressWebsiteInput = z.infer<
   typeof saveWordpressWebsiteSchema

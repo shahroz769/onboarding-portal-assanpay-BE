@@ -1,103 +1,95 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 const nullableHoursField = z.preprocess(
   (v) => (v === '' || v === null || v === undefined ? null : v),
   z.number().int().min(1).max(8760).nullable(),
 )
 
-const emailAddressSchema = z.string().email()
+const emailAddressSchema = z.email()
 
-export const linkDeadlineSettingsSchema = z
-  .object({
-    passwordResetHours: nullableHoursField,
-    newPasswordSetHours: nullableHoursField,
-    agreementLinkHours: nullableHoursField,
-    documentsReviewResubmissionHours: nullableHoursField,
-    goLiveAvailabilityHours: nullableHoursField,
-  })
-  .strict()
+export const linkDeadlineSettingsSchema = z.strictObject({
+  passwordResetHours: nullableHoursField,
+  newPasswordSetHours: nullableHoursField,
+  agreementLinkHours: nullableHoursField,
+  documentsReviewResubmissionHours: nullableHoursField,
+  goLiveAvailabilityHours: nullableHoursField,
+})
 
 export const emailSendingModeSettingsSchema = z
-  .object({
+  .strictObject({
     autoEnabled: z.boolean(),
     manualEnabled: z.boolean(),
   })
-  .strict()
   .refine((value) => value.autoEnabled || value.manualEnabled, {
-    message: 'At least one email sending mode must be enabled.',
+    error: 'At least one email sending mode must be enabled.',
     path: ['autoEnabled'],
   })
 
-export const merchantPortalSettingsSchema = z
-  .object({
-    loginUrl: z.string().trim().url().max(2048),
-    serverBaseUrl: z
-      .string()
-      .trim()
-      .max(2048)
-      .refine((value) => value === '' || z.url().safeParse(value).success, {
-        message: 'Enter a valid server base URL.',
-      })
-      .default(''),
-    serverCallbackIp: z
-      .string()
-      .trim()
-      .max(45)
-      .refine(
-        (value) =>
-          value === '' ||
-          z.ipv4().safeParse(value).success ||
-          z.ipv6().safeParse(value).success,
-        { message: 'Enter a valid IPv4 or IPv6 address.' },
-      )
-      .default(''),
-    officeAddress: z.string().trim().max(1000).default(''),
-    whatsappSupportNumber: z
-      .string()
-      .trim()
-      .max(32)
-      .regex(/^\d*$/, 'WhatsApp support number must contain numbers only.')
-      .default(''),
-    supportEmail: z
-      .string()
-      .trim()
-      .max(320)
-      .refine(
-        (value) => value === '' || emailAddressSchema.safeParse(value).success,
-        {
-          message: 'Enter a valid support email.',
-        },
-      )
-      .default(''),
-    legalEmail: z
-      .string()
-      .trim()
-      .max(320)
-      .refine(
-        (value) => value === '' || emailAddressSchema.safeParse(value).success,
-        {
-          message: 'Enter a valid legal email.',
-        },
-      )
-      .default(''),
-  })
-  .strict()
+export const merchantPortalSettingsSchema = z.strictObject({
+  loginUrl: z.string().trim().max(2048).pipe(z.url()),
+  serverBaseUrl: z
+    .string()
+    .trim()
+    .max(2048)
+    .refine((value) => value === '' || z.url().safeParse(value).success, {
+      error: 'Enter a valid server base URL.',
+    })
+    .default(''),
+  serverCallbackIp: z
+    .string()
+    .trim()
+    .max(45)
+    .refine(
+      (value) =>
+        value === '' ||
+        z.ipv4().safeParse(value).success ||
+        z.ipv6().safeParse(value).success,
+      { error: 'Enter a valid IPv4 or IPv6 address.' },
+    )
+    .default(''),
+  officeAddress: z.string().trim().max(1000).default(''),
+  whatsappSupportNumber: z
+    .string()
+    .trim()
+    .max(32)
+    .regex(/^\d*$/, 'WhatsApp support number must contain numbers only.')
+    .default(''),
+  supportEmail: z
+    .string()
+    .trim()
+    .max(320)
+    .refine(
+      (value) => value === '' || emailAddressSchema.safeParse(value).success,
+      {
+        error: 'Enter a valid support email.',
+      },
+    )
+    .default(''),
+  legalEmail: z
+    .string()
+    .trim()
+    .max(320)
+    .refine(
+      (value) => value === '' || emailAddressSchema.safeParse(value).success,
+      {
+        error: 'Enter a valid legal email.',
+      },
+    )
+    .default(''),
+})
 
-const methodIdentitySchema = z
-  .object({
-    id: z.string().trim().min(1).max(80),
-    label: z.string().trim().min(1).max(80),
-  })
-  .strict()
+const methodIdentitySchema = z.strictObject({
+  id: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(80),
+})
 
 const collectionMethodLimitSchema = z
-  .object({
+  .strictObject({
     min: z.coerce.number().min(0),
     max: z.coerce.number().min(0),
   })
-  .strict()
   .refine((value) => value.max >= value.min, {
-    message: 'Maximum must be greater than or equal to minimum.',
+    error: 'Maximum must be greater than or equal to minimum.',
     path: ['max'],
   })
 
@@ -144,7 +136,7 @@ export const payoutMethodSettingsSchema = uniqueMethodSettingsSchema(
 )
 
 export const limitsAndMdrSettingsSchema = z
-  .object({
+  .strictObject({
     testing: z.object({
       collectionMin: z.coerce.number().min(0),
       collectionMax: z.coerce.number().min(0),
@@ -164,27 +156,26 @@ export const limitsAndMdrSettingsSchema = z
       payout: z.coerce.number().min(0).max(100),
     }),
   })
-  .strict()
   .refine(
     (value) => value.testing.collectionMax >= value.testing.collectionMin,
     {
-      message: 'Testing collection max must be greater than or equal to min.',
+      error: 'Testing collection max must be greater than or equal to min.',
       path: ['testing', 'collectionMax'],
     },
   )
   .refine(
     (value) => value.testing.disbursementMax >= value.testing.disbursementMin,
     {
-      message: 'Testing disbursement max must be greater than or equal to min.',
+      error: 'Testing disbursement max must be greater than or equal to min.',
       path: ['testing', 'disbursementMax'],
     },
   )
   .refine((value) => value.live.collectionMax >= value.live.collectionMin, {
-    message: 'Live collection max must be greater than or equal to min.',
+    error: 'Live collection max must be greater than or equal to min.',
     path: ['live', 'collectionMax'],
   })
   .refine((value) => value.live.disbursementMax >= value.live.disbursementMin, {
-    message: 'Live disbursement max must be greater than or equal to min.',
+    error: 'Live disbursement max must be greater than or equal to min.',
     path: ['live', 'disbursementMax'],
   })
 
@@ -217,57 +208,52 @@ export const businessTypeSchema = z.enum([
   'trust_society_association',
 ])
 
-const caseFlowStartRuleInputSchema = z
-  .object({
-    id: z.string().uuid().optional(),
-    targetQueueId: z.string().uuid(),
-    order: z.coerce.number().int().min(1).default(1),
-    isActive: z.boolean().default(true),
-  })
-  .strict()
+const caseFlowStartRuleInputSchema = z.strictObject({
+  id: z.uuid().optional(),
+  targetQueueId: z.uuid(),
+  order: z.coerce.number().int().min(1).default(1),
+  isActive: z.boolean().default(true),
+})
 
 const caseFlowCloseTriggerInputSchema = z
-  .object({
-    id: z.string().uuid().optional(),
-    sourceQueueId: z.string().uuid(),
-    targetQueueId: z.string().uuid(),
+  .strictObject({
+    id: z.uuid().optional(),
+    sourceQueueId: z.uuid(),
+    targetQueueId: z.uuid(),
     order: z.coerce.number().int().min(1).default(1),
     isActive: z.boolean().default(true),
   })
-  .strict()
   .refine((value) => value.sourceQueueId !== value.targetQueueId, {
-    message: 'A queue cannot trigger itself.',
+    error: 'A queue cannot trigger itself.',
     path: ['targetQueueId'],
   })
 
 const caseFlowCloseBlockerInputSchema = z
-  .object({
-    id: z.string().uuid().optional(),
-    blockedQueueId: z.string().uuid(),
-    prerequisiteQueueId: z.string().uuid(),
+  .strictObject({
+    id: z.uuid().optional(),
+    blockedQueueId: z.uuid(),
+    prerequisiteQueueId: z.uuid(),
     isActive: z.boolean().default(true),
   })
-  .strict()
   .refine((value) => value.blockedQueueId !== value.prerequisiteQueueId, {
-    message: 'A queue cannot require itself before closing.',
+    error: 'A queue cannot require itself before closing.',
     path: ['prerequisiteQueueId'],
   })
 
 const caseFlowCreationRequirementInputSchema = z
-  .object({
-    id: z.string().uuid().optional(),
-    targetQueueId: z.string().uuid(),
-    prerequisiteQueueId: z.string().uuid(),
+  .strictObject({
+    id: z.uuid().optional(),
+    targetQueueId: z.uuid(),
+    prerequisiteQueueId: z.uuid(),
     isActive: z.boolean().default(true),
   })
-  .strict()
   .refine((value) => value.targetQueueId !== value.prerequisiteQueueId, {
-    message: 'A queue cannot require itself before creation.',
+    error: 'A queue cannot require itself before creation.',
     path: ['prerequisiteQueueId'],
   })
 
 export const updateCaseFlowConfigurationSchema = z
-  .object({
+  .strictObject({
     revision: z.coerce.number().int().min(1),
     changeNote: z.string().trim().max(1000).optional(),
     startRules: z.array(caseFlowStartRuleInputSchema),
@@ -277,7 +263,6 @@ export const updateCaseFlowConfigurationSchema = z
       .array(caseFlowCreationRequirementInputSchema)
       .default([]),
   })
-  .strict()
   .superRefine((value, ctx) => {
     addDuplicateIssue(
       value.startRules

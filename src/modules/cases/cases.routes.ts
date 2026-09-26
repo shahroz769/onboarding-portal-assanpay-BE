@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
@@ -118,8 +118,8 @@ function parseEmailRecipientType(
   return parsed.data.recipientEmailType
 }
 
-const uuidSchema = z.string().uuid()
-const closeTriggerBackfillSchema = z.object({ triggerId: z.string().uuid() })
+const uuidSchema = z.uuid()
+const closeTriggerBackfillSchema = z.object({ triggerId: z.uuid() })
 
 // All routes require authentication
 caseRoutes.use('*', requireAuth)

@@ -380,37 +380,8 @@ const baseText: CSSProperties = {
   color: brand.ink,
 }
 
-export function Lede({ children }: { children: ReactNode }) {
-  return (
-    <Text
-      style={{
-        ...baseText,
-        fontSize: '16px',
-        fontWeight: 600,
-        color: brand.ink,
-      }}
-    >
-      {children}
-    </Text>
-  )
-}
-
 export function Paragraph({ children }: { children: ReactNode }) {
   return <Text style={baseText}>{children}</Text>
-}
-
-export function Muted({ children }: { children: ReactNode }) {
-  return (
-    <Text
-      style={{
-        ...baseText,
-        fontSize: '13px',
-        color: brand.muted,
-      }}
-    >
-      {children}
-    </Text>
-  )
 }
 
 export function SectionLabel({ children }: { children: ReactNode }) {
@@ -618,7 +589,7 @@ export function ButtonRow({ children }: { children: ReactNode }) {
 
 export function LinkFallback({
   href,
-  label = "If the button doesn’t work",
+  label = 'If the button doesn’t work',
 }: {
   href: string
   label?: string

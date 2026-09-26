@@ -27,13 +27,7 @@ export const PRIVATE_KYC_REJECTED_PATH = [
   'KYC Documents',
   'Rejected Documents',
 ] as const
-export const PRIVATE_MERCHANT_RETURNS_PATH = [
-  'Merchant Returns',
-  'Agreement',
-] as const
-export const PRIVATE_INTERNAL_CASE_FILES_PATH = [
-  'Internal Case Files',
-] as const
+export const PRIVATE_INTERNAL_CASE_FILES_PATH = ['Internal Case Files'] as const
 export const PUBLIC_AGREEMENT_PATH = [
   'Merchant-Sent Documents',
   'Agreement',
@@ -57,7 +51,9 @@ export function buildCaseFolderName(
 ) {
   const safeMerchantName = sanitizeDrivePathPart(merchantName, 80)
   const baseName = `${caseNumber} - ${safeMerchantName || 'Merchant'}`
-  return queueName ? `${baseName} - ${sanitizeDrivePathPart(queueName, 60)}` : baseName
+  return queueName
+    ? `${baseName} - ${sanitizeDrivePathPart(queueName, 60)}`
+    : baseName
 }
 
 export function getSubmissionFolderName(index: number) {
@@ -211,8 +207,8 @@ async function readMerchantRootFolderId(
   })
 
   return visibility === 'public'
-    ? row?.googleDrivePublicFolderId ?? null
-    : row?.googleDrivePrivateFolderId ?? null
+    ? (row?.googleDrivePublicFolderId ?? null)
+    : (row?.googleDrivePrivateFolderId ?? null)
 }
 
 async function tryClaimMerchantRootProvisioning(input: {

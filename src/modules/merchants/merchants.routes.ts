@@ -14,16 +14,6 @@ import {
   terminateMerchantSchema,
   updatePrioritySchema,
 } from './merchants.schemas'
-import type {
-  BulkIdsInput,
-  BulkPriorityInput,
-  BulkTerminateMerchantsInput,
-  ListMerchantsQuery,
-  MerchantLimitsMdr,
-  PermanentlyDeleteMerchantInput,
-  TerminateMerchantInput,
-  UpdatePriorityInput,
-} from './merchants.schemas'
 import {
   bulkSoftDeleteMerchants,
   bulkTerminateMerchants,

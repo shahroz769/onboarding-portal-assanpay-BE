@@ -1,7 +1,8 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
+  agreementCaseDetails,
   caseHistory,
   cases,
   documentReviewDetails,
@@ -10,10 +11,20 @@ import {
   queues,
   users,
 } from '../../db/schema'
+import {
+  buildKeysetCondition,
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  keysetCursorExpression,
+} from '../cases/case-cursor'
 import type {
   ApplyPortalMidLimitsInput,
   DashboardQuery,
   DashboardRangeKey,
+  AwaitingPhysicalAgreementsQuery,
+  PendingPortalMidKind,
+  PendingPortalMidsQuery,
+  PendingPortalMidValuesQuery,
 } from './dashboard.schemas'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -198,14 +209,18 @@ function serializeTimestamp(value: Date | string | null) {
   return new Date(0).toISOString()
 }
 
-async function listPendingPortalMidLimitRows(
-  filterPortalMids?: number[],
-): Promise<PendingPortalMidLimitRow[]> {
-  if (filterPortalMids && filterPortalMids.length === 0) {
-    return []
-  }
+type PendingPortalMidOptions = {
+  filterPortalMids?: number[]
+  midKind?: PendingPortalMidKind
+}
 
-  const db = getDb()
+/**
+ * CTEs ending in `pending`: every portal/internal MID from a successful MID
+ * Creation case whose limits have not been applied yet. Shared by the paged
+ * list, the counts and the copy-all MID lists so they can never disagree.
+ */
+function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
+  const { filterPortalMids, midKind } = options
   const portalMidFilter =
     filterPortalMids && filterPortalMids.length > 0
       ? sql`and candidate_mid."portalMid" in (${sql.join(
@@ -213,8 +228,11 @@ async function listPendingPortalMidLimitRows(
           sql`, `,
         )})`
       : sql``
+  const midKindFilter = midKind
+    ? sql`and candidate_mid."midKind" = ${midKind}`
+    : sql``
 
-  const rows = await db.execute(sql<PendingPortalMidLimitRow>`
+  return sql`
     with latest_mid as (
       select distinct on (${cases.merchantId})
         ${cases.merchantId} as "merchantId",
@@ -237,23 +255,15 @@ async function listPendingPortalMidLimitRows(
     ),
     candidate_mid as (
       select
-        latest_mid."merchantId",
-        latest_mid."merchantName",
         latest_mid."caseId",
-        latest_mid."caseNumber",
         (latest_mid.details ->> 'portalMid')::int as "portalMid",
-        'portal'::text as "midKind",
-        latest_mid."savedAt"
+        'portal'::text as "midKind"
       from latest_mid
       union all
       select
-        latest_mid."merchantId",
-        latest_mid."merchantName",
         latest_mid."caseId",
-        latest_mid."caseNumber",
         (latest_mid.details ->> 'internalPortalMid')::int as "portalMid",
-        'internal'::text as "midKind",
-        latest_mid."savedAt"
+        'internal'::text as "midKind"
       from latest_mid
       where (latest_mid.details ->> 'internalPortalMid') ~ '^[0-9]+$'
         and (latest_mid.details ->> 'internalPortalMid')::int <> (latest_mid.details ->> 'portalMid')::int
@@ -266,7 +276,8 @@ async function listPendingPortalMidLimitRows(
         latest_mid."caseNumber",
         candidate_mid."portalMid",
         candidate_mid."midKind",
-        latest_mid."savedAt"
+        latest_mid."savedAt",
+        latest_mid."caseId"::text || ':' || candidate_mid."midKind" as "rowKey"
       from candidate_mid
       inner join latest_mid
         on latest_mid."caseId" = candidate_mid."caseId"
@@ -274,14 +285,41 @@ async function listPendingPortalMidLimitRows(
         on ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
       where ${portalMidLimitApplications.portalMid} is null
         ${portalMidFilter}
+        ${midKindFilter}
+    )
+  `
+}
+
+async function listPendingPortalMidLimitRows(
+  filterPortalMids?: number[],
+  page?: { after?: { portalMid: number; rowKey: string }; limit: number },
+): Promise<(PendingPortalMidLimitRow & { rowKey: string })[]> {
+  if (filterPortalMids && filterPortalMids.length === 0) {
+    return []
+  }
+
+  const db = getDb()
+  const afterFilter = page?.after
+    ? sql`where (pending."portalMid", pending."rowKey") > (${page.after.portalMid}::int, ${page.after.rowKey}::text)`
+    : sql``
+  const limitClause = page ? sql`limit ${page.limit}` : sql``
+
+  // Sub-merchant names are resolved only for the rows on this page.
+  const rows = await db.execute(sql<PendingPortalMidLimitRow>`
+    ${pendingPortalMidCtes({ filterPortalMids })},
+    page as (
+      select * from pending
+      ${afterFilter}
+      order by pending."portalMid" asc, pending."rowKey" asc
+      ${limitClause}
     ),
     latest_review_case as (
       select distinct on (${cases.merchantId})
         ${cases.merchantId} as "merchantId",
         ${cases.id} as "caseId"
-      from pending
+      from (select distinct "merchantId" from page) page_merchant
       inner join ${cases}
-        on ${cases.merchantId} = pending."merchantId"
+        on ${cases.merchantId} = page_merchant."merchantId"
       inner join ${documentReviewDetails}
         on ${documentReviewDetails.caseId} = ${cases.id}
       order by ${cases.merchantId}, ${documentReviewDetails.updatedAt} desc
@@ -296,21 +334,42 @@ async function listPendingPortalMidLimitRows(
       group by latest_review_case."merchantId"
     )
     select
-      pending."merchantId",
-      pending."merchantName",
+      page."merchantId",
+      page."merchantName",
       latest_submerchant."subMerchantName",
-      pending."caseId",
-      pending."caseNumber",
-      pending."portalMid",
-      pending."midKind" as "midKind",
-      pending."savedAt"
-    from pending
+      page."caseId",
+      page."caseNumber",
+      page."portalMid",
+      page."midKind" as "midKind",
+      page."savedAt",
+      page."rowKey"
+    from page
     left join latest_submerchant
-      on latest_submerchant."merchantId" = pending."merchantId"
-    order by "portalMid" asc
+      on latest_submerchant."merchantId" = page."merchantId"
+    order by page."portalMid" asc, page."rowKey" asc
   `)
 
-  return Array.from(rows) as PendingPortalMidLimitRow[]
+  return Array.from(rows) as (PendingPortalMidLimitRow & { rowKey: string })[]
+}
+
+async function countPendingPortalMidLimits() {
+  const db = getDb()
+  const [row] = Array.from(
+    await db.execute(sql<{ total: number; portal: number; internal: number }>`
+      ${pendingPortalMidCtes()}
+      select
+        count(*)::int as "total",
+        (count(*) filter (where pending."midKind" = 'portal'))::int as "portal",
+        (count(*) filter (where pending."midKind" = 'internal'))::int as "internal"
+      from pending
+    `),
+  ) as { total: number; portal: number; internal: number }[]
+
+  return {
+    total: row?.total ?? 0,
+    portal: row?.portal ?? 0,
+    internal: row?.internal ?? 0,
+  }
 }
 
 async function listAppliedPortalMidLimitRows(): Promise<
@@ -383,19 +442,193 @@ async function listAppliedPortalMidLimitRows(): Promise<
   return Array.from(rows) as AppliedPortalMidLimitRow[]
 }
 
+/** Dashboard summary: pending counts only; the list itself is paged. */
 export async function getPendingPortalMidLimits() {
-  const [pending, appliedRows] = await Promise.all([
-    listPendingPortalMidLimitRows(),
+  const [pendingCounts, appliedRows] = await Promise.all([
+    countPendingPortalMidLimits(),
     listAppliedPortalMidLimitRows(),
   ])
-  const portalMids = pending.map(toPendingPortalMidLimit)
   const appliedLimits = appliedRows.map(toAppliedPortalMidLimit)
 
   return {
-    pendingLimits: portalMids,
+    pendingCounts,
     appliedLimits,
-    csv: portalMids.map((item) => item.portalMid).join(','),
     appliedCsv: appliedLimits.map((item) => item.portalMid).join(','),
+  }
+}
+
+const PENDING_MID_CURSOR_SORT = {
+  sortBy: 'portalMid',
+  sortOrder: 'asc',
+  kind: 'number',
+} as const
+
+export async function listPendingPortalMidLimitsPage(
+  query: PendingPortalMidsQuery,
+) {
+  const cursor = query.cursor
+    ? decodeKeysetCursor(query.cursor, PENDING_MID_CURSOR_SORT)
+    : null
+  const [rows, counts] = await Promise.all([
+    listPendingPortalMidLimitRows(undefined, {
+      after: cursor
+        ? { portalMid: Number(cursor.value), rowKey: cursor.id }
+        : undefined,
+      limit: query.limit + 1,
+    }),
+    // Totals only on the first page; later pages keep the first response's.
+    cursor ? null : countPendingPortalMidLimits(),
+  ])
+  const hasMore = rows.length > query.limit
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows
+  const last = pageRows[pageRows.length - 1]
+
+  return {
+    data: pageRows.map(toPendingPortalMidLimit),
+    nextCursor:
+      hasMore && last
+        ? encodeKeysetCursor({
+            sortBy: PENDING_MID_CURSOR_SORT.sortBy,
+            sortOrder: PENDING_MID_CURSOR_SORT.sortOrder,
+            value: last.portalMid,
+            id: last.rowKey,
+          })
+        : null,
+    hasMore,
+    limit: query.limit,
+    counts,
+  }
+}
+
+/** Every pending MID (optionally one kind) straight from the DB, for copying. */
+export async function listPendingPortalMidValues(
+  query: PendingPortalMidValuesQuery,
+) {
+  const db = getDb()
+  const rows = Array.from(
+    await db.execute(sql<{ portalMid: number }>`
+      ${pendingPortalMidCtes({ midKind: query.midKind })}
+      select distinct pending."portalMid" as "portalMid"
+      from pending
+      order by pending."portalMid" asc
+    `),
+  ) as { portalMid: number }[]
+  const mids = rows.map((row) => row.portalMid)
+
+  return { mids, csv: mids.join(',') }
+}
+
+// ─── Agreements Awaiting Physical Copy ──────────────────────────────────────
+
+// Agreement cases where the agreement email went out and the case is waiting
+// on the client, but the signed physical copy has not been uploaded yet.
+function awaitingPhysicalAgreementConditions() {
+  return [
+    eq(queues.workflowType, 'agreement'),
+    eq(cases.status, 'awaiting_client'),
+    eq(agreementCaseDetails.emailStatus, 'sent'),
+    isNull(agreementCaseDetails.receivedAgreementFileId),
+    isNull(merchants.deletedAt),
+  ]
+}
+
+const AWAITING_AGREEMENT_SORT = {
+  sortBy: 'emailSentAt',
+  sortOrder: 'asc',
+  kind: 'date',
+} as const
+
+// Oldest sent first: the longest-waiting merchants need the follow-up most.
+const awaitingAgreementSentAt = sql<
+  Date | string
+>`coalesce(${agreementCaseDetails.emailSentAt}, ${cases.updatedAt})`
+
+async function countAwaitingPhysicalAgreements() {
+  const db = getDb()
+  const [row] = await db
+    .select({ value: count() })
+    .from(cases)
+    .innerJoin(queues, eq(cases.queueId, queues.id))
+    .innerJoin(agreementCaseDetails, eq(agreementCaseDetails.caseId, cases.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+    .where(and(...awaitingPhysicalAgreementConditions()))
+
+  return row?.value ?? 0
+}
+
+export async function listAwaitingPhysicalAgreementsPage(
+  query: AwaitingPhysicalAgreementsQuery,
+) {
+  const db = getDb()
+  const cursor = query.cursor
+    ? decodeKeysetCursor(query.cursor, AWAITING_AGREEMENT_SORT)
+    : null
+  const conditions = awaitingPhysicalAgreementConditions()
+
+  if (cursor) {
+    conditions.push(
+      buildKeysetCondition({
+        expression: awaitingAgreementSentAt,
+        idExpression: cases.id,
+        sortOrder: AWAITING_AGREEMENT_SORT.sortOrder,
+        kind: cursor.kind,
+        value: cursor.value,
+        id: cursor.id,
+      }),
+    )
+  }
+
+  const [rows, total] = await Promise.all([
+    db
+      .select({
+        caseId: cases.id,
+        caseNumber: cases.caseNumber,
+        merchantId: merchants.id,
+        merchantName: merchants.businessName,
+        emailRecipient: agreementCaseDetails.emailRecipient,
+        ownerName: users.name,
+        emailSentAt: awaitingAgreementSentAt,
+        cursorValue: keysetCursorExpression({
+          expression: awaitingAgreementSentAt,
+          kind: 'date',
+        }),
+      })
+      .from(cases)
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .innerJoin(
+        agreementCaseDetails,
+        eq(agreementCaseDetails.caseId, cases.id),
+      )
+      .innerJoin(merchants, eq(cases.merchantId, merchants.id))
+      .leftJoin(users, eq(cases.ownerId, users.id))
+      .where(and(...conditions))
+      .orderBy(asc(awaitingAgreementSentAt), asc(cases.id))
+      .limit(query.limit + 1),
+    // Totals only on the first page; later pages keep the first response's.
+    cursor ? null : countAwaitingPhysicalAgreements(),
+  ])
+
+  const hasMore = rows.length > query.limit
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows
+  const last = pageRows[pageRows.length - 1]
+
+  return {
+    data: pageRows.map(({ cursorValue: _cursorValue, ...row }) => ({
+      ...row,
+      emailSentAt: serializeTimestamp(row.emailSentAt),
+    })),
+    nextCursor:
+      hasMore && last
+        ? encodeKeysetCursor({
+            sortBy: AWAITING_AGREEMENT_SORT.sortBy,
+            sortOrder: AWAITING_AGREEMENT_SORT.sortOrder,
+            value: last.cursorValue,
+            id: last.caseId,
+          })
+        : null,
+    hasMore,
+    limit: query.limit,
+    total,
   }
 }
 
@@ -477,47 +710,49 @@ export async function getDashboard(query: DashboardQuery) {
 
   const [caseSummaryRows, merchantSummaryRows, dashboardTrendRows] =
     await Promise.all([
-    // Case snapshot, range, and SLA metrics in one grouped scan.
-    db
-      .select({
-        status: cases.status,
-        count: int(sql`count(*)`),
-        newInRange: int(
-          sql`count(*) filter (where ${cases.createdAt} >= ${fromIso} and ${cases.createdAt} <= ${toIso})`,
-        ),
-        closedInRange: int(
-          sql`count(*) filter (where ${cases.closedAt} >= ${fromIso} and ${cases.closedAt} <= ${toIso})`,
-        ),
-        breached: int(sql`count(*) filter (where ${cases.slaBreached} = true)`),
-        evaluated: int(
-          sql`count(*) filter (where ${cases.slaBreached} is not null)`,
-        ),
-        openOverSla: int(
-          sql`count(*) filter (where ${cases.status} not in ('closed','error') and now() > ${cases.createdAt} + (${queues.slaHours} * interval '1 hour'))`,
-        ),
-      })
-      .from(cases)
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .groupBy(cases.status),
+      // Case snapshot, range, and SLA metrics in one grouped scan.
+      db
+        .select({
+          status: cases.status,
+          count: int(sql`count(*)`),
+          newInRange: int(
+            sql`count(*) filter (where ${cases.createdAt} >= ${fromIso} and ${cases.createdAt} <= ${toIso})`,
+          ),
+          closedInRange: int(
+            sql`count(*) filter (where ${cases.closedAt} >= ${fromIso} and ${cases.closedAt} <= ${toIso})`,
+          ),
+          breached: int(
+            sql`count(*) filter (where ${cases.slaBreached} = true)`,
+          ),
+          evaluated: int(
+            sql`count(*) filter (where ${cases.slaBreached} is not null)`,
+          ),
+          openOverSla: int(
+            sql`count(*) filter (where ${cases.status} not in ('closed','error') and now() > ${cases.createdAt} + (${queues.slaHours} * interval '1 hour'))`,
+          ),
+        })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .groupBy(cases.status),
 
-    // Merchant snapshot, range, and submission windows in one grouped scan.
-    db
-      .select({
-        status: merchants.status,
-        count: int(sql`count(*)`),
-        submittedInRange: int(
-          sql`count(*) filter (where ${merchants.submittedAt} >= ${fromIso} and ${merchants.submittedAt} <= ${toIso})`,
-        ),
-        liveInRange: int(
-          sql`count(*) filter (where ${merchants.liveAt} >= ${fromIso} and ${merchants.liveAt} <= ${toIso})`,
-        ),
-      })
-      .from(merchants)
-      .where(liveMerchant)
-      .groupBy(merchants.status),
+      // Merchant snapshot, range, and submission windows in one grouped scan.
+      db
+        .select({
+          status: merchants.status,
+          count: int(sql`count(*)`),
+          submittedInRange: int(
+            sql`count(*) filter (where ${merchants.submittedAt} >= ${fromIso} and ${merchants.submittedAt} <= ${toIso})`,
+          ),
+          liveInRange: int(
+            sql`count(*) filter (where ${merchants.liveAt} >= ${fromIso} and ${merchants.liveAt} <= ${toIso})`,
+          ),
+        })
+        .from(merchants)
+        .where(liveMerchant)
+        .groupBy(merchants.status),
 
-    // All daily trends in one round trip.
-    db.execute(sql<DashboardTrendRow>`
+      // All daily trends in one round trip.
+      db.execute(sql<DashboardTrendRow>`
       select
         'submission'::text as "metric",
         to_char(${merchants.submittedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
@@ -556,8 +791,7 @@ export async function getDashboard(query: DashboardQuery) {
         and ${merchants.liveAt} < ${addDays(startOfDay(to), 1).toISOString()}
       group by "day"
     `),
-
-  ])
+    ])
   const portalMids = await getPendingPortalMidLimits()
 
   // ─── Shape Case Status Counts ─────────────────────────────────────────────

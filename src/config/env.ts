@@ -1,7 +1,7 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 const defaultCookieSecure = Bun.env.NODE_ENV === 'production' ? 'true' : 'false'
-const emailAddressSchema = z.string().email()
+const emailAddressSchema = z.email()
 const corsOriginSchema = z
   .string()
   .min(1)
@@ -11,7 +11,7 @@ const corsOriginSchema = z
       .map((origin) => origin.trim())
       .filter(Boolean),
   )
-  .pipe(z.array(z.string().url()).min(1))
+  .pipe(z.array(z.url()).min(1))
   .transform((origins) => origins.map((origin) => new URL(origin).origin))
 const domainSchema = z
   .string()
@@ -33,8 +33,8 @@ function normalizeEmailAddressOrDomain(value: string, ctx: z.RefinementCtx) {
 
 const envSchema = z.object({
   APP_PORT: z.coerce.number().int().positive().default(3000),
-  DATABASE_URL: z.string().url(),
-  DIRECT_DATABASE_URL: z.string().url().optional(),
+  DATABASE_URL: z.url(),
+  DIRECT_DATABASE_URL: z.url().optional(),
   DATABASE_POOL_MAX: z.coerce.number().int().positive().max(100).default(10),
   DATABASE_CONNECT_TIMEOUT_SECONDS: z.coerce
     .number()
@@ -118,7 +118,7 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((value) => value === 'true'),
-  GOOGLE_DRIVE_CLIENT_EMAIL: z.string().email().optional(),
+  GOOGLE_DRIVE_CLIENT_EMAIL: z.email().optional(),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID_PUBLIC: z.string().min(1).optional(),
@@ -132,8 +132,8 @@ const envSchema = z.object({
     .min(1)
     .transform(normalizeEmailAddressOrDomain)
     .optional(),
-  EMAIL_TEST_TO: z.string().email().optional(),
-  PUBLIC_APP_URL: z.string().url().default('http://localhost:5173'),
+  EMAIL_TEST_TO: z.email().optional(),
+  PUBLIC_APP_URL: z.url().default('http://localhost:5173'),
 })
 
 export const env = envSchema.parse(Bun.env)

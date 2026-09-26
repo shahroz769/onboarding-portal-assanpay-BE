@@ -109,18 +109,21 @@ app.get('/health/db', async (c) => {
     caseFlowJobs.failed > 0 ||
     caseFlowJobs.blocked > 0
 
-  return c.json({
-    status: !workerReady ? 'unhealthy' : hasProblemJobs ? 'degraded' : 'ok',
-    db: result[0]?.ok === 1,
-    caseFlowWorker: {
-      ready: workerReady,
-      running: caseFlowWorkerPromise !== null,
-      lastCycleAt: caseFlowWorkerLastCycleAt,
-      lastDurationMs: caseFlowWorkerLastDurationMs,
-      lastCycleSucceeded: caseFlowWorkerLastError === null,
-      ...caseFlowJobs,
+  return c.json(
+    {
+      status: !workerReady ? 'unhealthy' : hasProblemJobs ? 'degraded' : 'ok',
+      db: result[0]?.ok === 1,
+      caseFlowWorker: {
+        ready: workerReady,
+        running: caseFlowWorkerPromise !== null,
+        lastCycleAt: caseFlowWorkerLastCycleAt,
+        lastDurationMs: caseFlowWorkerLastDurationMs,
+        lastCycleSucceeded: caseFlowWorkerLastError === null,
+        ...caseFlowJobs,
+      },
     },
-  }, workerReady ? 200 : 503)
+    workerReady ? 200 : 503,
+  )
 })
 
 app.route('/api/auth', authRoutes)
@@ -138,7 +141,7 @@ app.route('/api/notifications', notificationRoutes)
 // needs the row to recognise a stolen copy for the token's whole lifetime.
 async function purgeExpiredRefreshTokens() {
   try {
-    const result = await getDb()
+    await getDb()
       .delete(refreshTokens)
       .where(
         or(

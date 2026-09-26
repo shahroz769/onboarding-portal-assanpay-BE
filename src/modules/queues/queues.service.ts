@@ -1,12 +1,7 @@
-import { and, asc, count, eq, ne, sql } from 'drizzle-orm'
+import { and, asc, count, eq, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
-import {
-  cases,
-  queueCaseSequences,
-  queues,
-  queueStages,
-} from '../../db/schema'
+import { cases, queueCaseSequences, queues, queueStages } from '../../db/schema'
 import type { Queue, QueueStage } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import {
@@ -69,7 +64,10 @@ function mapStageDto(stage: QueueStage) {
   }
 }
 
-async function loadQueueStages(db: Tx | ReturnType<typeof getDb>, queueId: string) {
+async function loadQueueStages(
+  db: Tx | ReturnType<typeof getDb>,
+  queueId: string,
+) {
   return db
     .select()
     .from(queueStages)
@@ -133,11 +131,9 @@ function assertValidStagesOrThrow(
 ) {
   const issues = validateStageDefinitions(stages)
   if (issues.length > 0) {
-    throw new AppError(
-      statusCode,
-      'Queue stage definition is invalid.',
-      { issues },
-    )
+    throw new AppError(statusCode, 'Queue stage definition is invalid.', {
+      issues,
+    })
   }
 }
 
@@ -193,7 +189,6 @@ export async function evaluateQueueActivationReadiness(
     mid: [],
     testing: [],
     wordpress: [],
-    card: [],
     physical_agreement: [],
     live: [],
     sub_merchant_form: [],
@@ -508,8 +503,7 @@ export async function updateQueueStatus(
   input: UpdateQueueStatusInput,
 ) {
   const lifecycle: QueueLifecycle =
-    input.lifecycle ??
-    isActiveToLifecycle(input.isActive ?? false)
+    input.lifecycle ?? isActiveToLifecycle(input.isActive ?? false)
 
   const db = getDb()
   return db.transaction(async (tx) => {
@@ -815,7 +809,9 @@ export async function reorderQueueStages(
     // queue_stages_order_positive check.
     await tx
       .update(queueStages)
-      .set({ order: sql`${queueStages.order} + ${STAGE_REORDER_PARKING_OFFSET}` })
+      .set({
+        order: sql`${queueStages.order} + ${STAGE_REORDER_PARKING_OFFSET}`,
+      })
       .where(eq(queueStages.queueId, queueId))
     for (let index = 0; index < input.stageIds.length; index += 1) {
       await tx
@@ -832,49 +828,6 @@ export async function reorderQueueStages(
   })
 }
 
-export async function getQueueById(id: string) {
-  const db = getDb()
-
-  const row = await db.query.queues.findFirst({
-    where: eq(queues.id, id),
-  })
-
-  if (!row) {
-    throw new AppError(404, 'Queue not found.')
-  }
-
-  return row
-}
-
-export async function getQueueBySlug(slug: string) {
-  const db = getDb()
-
-  const row = await db.query.queues.findFirst({
-    where: eq(queues.slug, slug),
-  })
-
-  if (!row) {
-    throw new AppError(404, 'Queue not found.')
-  }
-
-  return row
-}
-
-export async function getQueueByWorkflowType(
-  workflowType: Queue['workflowType'],
-) {
-  const db = getDb()
-
-  const row = await db.query.queues.findFirst({
-    where: and(
-      eq(queues.workflowType, workflowType),
-      ne(queues.lifecycle, 'inactive'),
-    ),
-  })
-
-  return row ?? null
-}
-
 export function listStageTemplates() {
   return (
     [
@@ -884,7 +837,6 @@ export function listStageTemplates() {
       'mid',
       'testing',
       'wordpress',
-      'card',
       'live',
       'sub_merchant_form',
     ] as const

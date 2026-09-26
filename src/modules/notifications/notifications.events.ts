@@ -53,7 +53,3 @@ export function publish(userId: string, event: NotificationStreamEvent): void {
     }
   }
 }
-
-export function subscriberCount(userId: string): number {
-  return subscribers.get(userId)?.size ?? 0
-}

@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
@@ -34,13 +34,13 @@ export const queueRoutes = new Hono<AppEnv>()
 
 const queueIdParam = zodValidator(
   'param',
-  z.object({ id: z.uuid({ message: 'Invalid queue id.' }) }),
+  z.object({ id: z.uuid({ error: 'Invalid queue id.' }) }),
 )
 const queueStageParam = zodValidator(
   'param',
   z.object({
-    id: z.uuid({ message: 'Invalid queue id.' }),
-    stageId: z.uuid({ message: 'Invalid stage id.' }),
+    id: z.uuid({ error: 'Invalid queue id.' }),
+    stageId: z.uuid({ error: 'Invalid stage id.' }),
   }),
 )
 
@@ -178,7 +178,7 @@ queueRoutes.delete(
   queueStageParam,
   zodValidator(
     'json',
-    z.object({ revision: z.coerce.number().int().min(1) }).strict(),
+    z.strictObject({ revision: z.coerce.number().int().min(1) }),
   ),
   async (c) => {
     const input = c.req.valid('json')

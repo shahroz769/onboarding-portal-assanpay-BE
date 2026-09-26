@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { roleTypes } from '../../types/auth'
 
@@ -10,7 +10,7 @@ function assanPayEmail() {
     .email()
     .transform((value) => value.toLowerCase())
     .refine((value) => value.endsWith(ASSANPAY_EMAIL_DOMAIN), {
-      message: ASSANPAY_EMAIL_MESSAGE,
+      error: ASSANPAY_EMAIL_MESSAGE,
     })
 }
 
@@ -103,5 +103,5 @@ export const setPasswordSchema = z
   })
   .refine((value) => value.password === value.confirmPassword, {
     path: ['confirmPassword'],
-    message: 'Passwords do not match.',
+    error: 'Passwords do not match.',
   })

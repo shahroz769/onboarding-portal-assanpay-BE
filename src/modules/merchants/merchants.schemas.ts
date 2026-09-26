@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { AppError } from '../../lib/errors'
 import {
@@ -47,11 +47,7 @@ export const merchantSpecificDocumentMap = {
     optional: ['authority_letter', 'taxpayer_registration_certificate'],
   },
   private_limited_company: {
-    required: [
-      'company_ntn',
-      'company_incorporation_certificate',
-      'form_a',
-    ],
+    required: ['company_ntn', 'company_incorporation_certificate', 'form_a'],
     optional: [
       'memorandum_articles',
       'form_ii',
@@ -101,10 +97,7 @@ export const merchantSpecificDocumentMap = {
       'trustees_authorized_signatories_cnic',
       'proof_of_address',
     ],
-    optional: [
-      'tax_exemption_certificate',
-      'other_supporting_documents',
-    ],
+    optional: ['tax_exemption_certificate', 'other_supporting_documents'],
   },
 } as const satisfies Record<
   (typeof merchantTypes)[number],
@@ -131,8 +124,6 @@ export const allDocumentTypes = [
 ] as const
 
 export type MerchantType = (typeof merchantTypes)[number]
-export type WebsiteCms = (typeof websiteCmsValues)[number]
-export type KinRelation = (typeof kinRelations)[number]
 export type MerchantDocumentType = (typeof allDocumentTypes)[number]
 
 const documentTypeSet = new Set<string>(allDocumentTypes)
@@ -145,14 +136,6 @@ export const allowedFileMimeTypes = [
   'image/jpeg',
   'image/png',
   'image/webp',
-] as const
-
-export const allowedFileExtensions = [
-  'pdf',
-  'jpg',
-  'jpeg',
-  'png',
-  'webp',
 ] as const
 
 const extensionToMimeType: Record<
@@ -205,7 +188,7 @@ const businessWebsiteSchema = z
   .transform((value) =>
     bareDomainPattern.test(value) ? `https://${value}` : value,
   )
-  .pipe(z.string().url('Business website must be a valid URL.'))
+  .pipe(z.url('Business website must be a valid URL.'))
 export const localMobileNumberSchema = z
   .string()
   .trim()
@@ -216,98 +199,89 @@ export const digitsOnlyPhoneNumberSchema = z
   .min(1, 'Business phone number is required.')
   .regex(/^\d+$/, 'Business phone number must contain numbers only.')
 
-export const scalarMerchantSchema = z
-  .object({
-    email: z
-      .string()
-      .trim()
-      .email('Submitter email must be a valid email.')
-      .transform(toLower),
-    activeWhatsappNumber: localMobileNumberSchema,
-    ownerFullName: trimmedStringSchema,
-    ownerPhone: localMobileNumberSchema,
-    businessName: trimmedStringSchema,
-    businessPhone: digitsOnlyPhoneNumberSchema,
-    businessEmail: z
-      .string()
-      .trim()
-      .email('Business email must be a valid email.')
-      .transform(toLower),
-    businessAddress: trimmedStringSchema,
-    businessWebsite: businessWebsiteSchema,
-    websiteCms: z.enum(websiteCmsValues),
-    businessDescription: trimmedStringSchema,
-    businessRegistrationDate: z
-      .string()
-      .trim()
-      .refine(
-        (value) => !Number.isNaN(Date.parse(value)),
-        'Business registration date is invalid.',
-      )
-      .refine((value) => {
-        const date = new Date(value)
-        const today = new Date()
-        today.setHours(23, 59, 59, 999)
-        return date <= today
-      }, 'Business registration date cannot be in the future.')
-      .transform((value) => new Date(value).toISOString().slice(0, 10)),
-    businessNature: trimmedStringSchema,
-    merchantType: z.enum(merchantTypes),
-    estimatedMonthlyTransactions: z.coerce
-      .number()
-      .int('Estimated monthly transactions must be a whole number.')
-      .positive('Estimated monthly transactions must be greater than zero.'),
-    estimatedMonthlyVolume: z.coerce
-      .number()
-      .positive('Estimated monthly volume must be greater than zero.')
-      .transform((value) => value.toFixed(2)),
-    accountTitle: trimmedStringSchema,
-    bankName: z.enum(bankNames),
-    branchName: trimmedStringSchema,
-    accountNumberIban: trimmedStringSchema,
-    swiftCode: z
-      .string()
-      .trim()
-      .optional()
-      .transform((value) => (value ? value : null)),
-    nextOfKinRelation: z.enum(kinRelations),
-  })
-  .strict()
+export const scalarMerchantSchema = z.strictObject({
+  email: z
+    .string()
+    .trim()
+    .pipe(z.email('Submitter email must be a valid email.'))
+    .transform(toLower),
+  activeWhatsappNumber: localMobileNumberSchema,
+  ownerFullName: trimmedStringSchema,
+  ownerPhone: localMobileNumberSchema,
+  businessName: trimmedStringSchema,
+  businessPhone: digitsOnlyPhoneNumberSchema,
+  businessEmail: z
+    .string()
+    .trim()
+    .pipe(z.email('Business email must be a valid email.'))
+    .transform(toLower),
+  businessAddress: trimmedStringSchema,
+  businessWebsite: businessWebsiteSchema,
+  websiteCms: z.enum(websiteCmsValues),
+  businessDescription: trimmedStringSchema,
+  businessRegistrationDate: z
+    .string()
+    .trim()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'Business registration date is invalid.',
+    )
+    .refine((value) => {
+      const date = new Date(value)
+      const today = new Date()
+      today.setHours(23, 59, 59, 999)
+      return date <= today
+    }, 'Business registration date cannot be in the future.')
+    .transform((value) => new Date(value).toISOString().slice(0, 10)),
+  businessNature: trimmedStringSchema,
+  merchantType: z.enum(merchantTypes),
+  estimatedMonthlyTransactions: z.coerce
+    .number()
+    .int('Estimated monthly transactions must be a whole number.')
+    .positive('Estimated monthly transactions must be greater than zero.'),
+  estimatedMonthlyVolume: z.coerce
+    .number()
+    .positive('Estimated monthly volume must be greater than zero.')
+    .transform((value) => value.toFixed(2)),
+  accountTitle: trimmedStringSchema,
+  bankName: z.enum(bankNames),
+  branchName: trimmedStringSchema,
+  accountNumberIban: trimmedStringSchema,
+  swiftCode: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value ? value : null)),
+  nextOfKinRelation: z.enum(kinRelations),
+})
 
-export const storedMerchantScalarSchema = z
-  .object({
-    submitterEmail: scalarMerchantSchema.shape.email,
-    activeWhatsappNumber: localMobileNumberSchema.nullable(),
-    ownerFullName: scalarMerchantSchema.shape.ownerFullName,
-    ownerPhone: scalarMerchantSchema.shape.ownerPhone,
-    businessName: scalarMerchantSchema.shape.businessName,
-    businessPhone: scalarMerchantSchema.shape.businessPhone,
-    businessEmail: scalarMerchantSchema.shape.businessEmail,
-    businessAddress: scalarMerchantSchema.shape.businessAddress,
-    businessWebsite: scalarMerchantSchema.shape.businessWebsite,
-    websiteCms: scalarMerchantSchema.shape.websiteCms,
-    businessDescription: scalarMerchantSchema.shape.businessDescription,
-    businessRegistrationDate:
-      scalarMerchantSchema.shape.businessRegistrationDate,
-    businessNature: scalarMerchantSchema.shape.businessNature,
-    merchantType: scalarMerchantSchema.shape.merchantType,
-    estimatedMonthlyTransactions:
-      scalarMerchantSchema.shape.estimatedMonthlyTransactions,
-    estimatedMonthlyVolume: scalarMerchantSchema.shape.estimatedMonthlyVolume,
-    accountTitle: scalarMerchantSchema.shape.accountTitle,
-    bankName: scalarMerchantSchema.shape.bankName,
-    branchName: scalarMerchantSchema.shape.branchName,
-    accountNumberIban: scalarMerchantSchema.shape.accountNumberIban,
-    swiftCode: scalarMerchantSchema.shape.swiftCode,
-    nextOfKinRelation: scalarMerchantSchema.shape.nextOfKinRelation,
-  })
-  .strict()
+export const storedMerchantScalarSchema = z.strictObject({
+  submitterEmail: scalarMerchantSchema.shape.email,
+  activeWhatsappNumber: localMobileNumberSchema.nullable(),
+  ownerFullName: scalarMerchantSchema.shape.ownerFullName,
+  ownerPhone: scalarMerchantSchema.shape.ownerPhone,
+  businessName: scalarMerchantSchema.shape.businessName,
+  businessPhone: scalarMerchantSchema.shape.businessPhone,
+  businessEmail: scalarMerchantSchema.shape.businessEmail,
+  businessAddress: scalarMerchantSchema.shape.businessAddress,
+  businessWebsite: scalarMerchantSchema.shape.businessWebsite,
+  websiteCms: scalarMerchantSchema.shape.websiteCms,
+  businessDescription: scalarMerchantSchema.shape.businessDescription,
+  businessRegistrationDate: scalarMerchantSchema.shape.businessRegistrationDate,
+  businessNature: scalarMerchantSchema.shape.businessNature,
+  merchantType: scalarMerchantSchema.shape.merchantType,
+  estimatedMonthlyTransactions:
+    scalarMerchantSchema.shape.estimatedMonthlyTransactions,
+  estimatedMonthlyVolume: scalarMerchantSchema.shape.estimatedMonthlyVolume,
+  accountTitle: scalarMerchantSchema.shape.accountTitle,
+  bankName: scalarMerchantSchema.shape.bankName,
+  branchName: scalarMerchantSchema.shape.branchName,
+  accountNumberIban: scalarMerchantSchema.shape.accountNumberIban,
+  swiftCode: scalarMerchantSchema.shape.swiftCode,
+  nextOfKinRelation: scalarMerchantSchema.shape.nextOfKinRelation,
+})
 
 export type MerchantFormValues = z.infer<typeof scalarMerchantSchema>
-export type StoredMerchantScalarValues = z.infer<
-  typeof storedMerchantScalarSchema
->
-
 export type UploadedMerchantDocument = {
   documentType: MerchantDocumentType
   file: File
@@ -456,12 +430,11 @@ const limitRangeSchema = z
     disbursementMax: z.coerce.number().min(0),
   })
   .refine((value) => value.collectionMax >= value.collectionMin, {
-    message: 'Collection maximum must be greater than or equal to the minimum.',
+    error: 'Collection maximum must be greater than or equal to the minimum.',
     path: ['collectionMax'],
   })
   .refine((value) => value.disbursementMax >= value.disbursementMin, {
-    message:
-      'Disbursement maximum must be greater than or equal to the minimum.',
+    error: 'Disbursement maximum must be greater than or equal to the minimum.',
     path: ['disbursementMax'],
   })
 
@@ -578,12 +551,10 @@ export const updatePrioritySchema = z.object({
 export type UpdatePriorityInput = z.infer<typeof updatePrioritySchema>
 
 export const bulkIdsSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.uuid()).min(1).max(100),
 })
-export type BulkIdsInput = z.infer<typeof bulkIdsSchema>
-
 export const bulkPrioritySchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.uuid()).min(1).max(100),
   priority: z.enum(priorityValues),
   note: z
     .string()
@@ -592,8 +563,6 @@ export const bulkPrioritySchema = z.object({
     .optional()
     .transform((v) => v || null),
 })
-export type BulkPriorityInput = z.infer<typeof bulkPrioritySchema>
-
 export const terminateMerchantSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
 })
@@ -607,9 +576,6 @@ export type PermanentlyDeleteMerchantInput = z.infer<
 >
 
 export const bulkTerminateMerchantsSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.uuid()).min(1).max(100),
   reason: z.string().trim().min(1).max(1000),
 })
-export type BulkTerminateMerchantsInput = z.infer<
-  typeof bulkTerminateMerchantsSchema
->

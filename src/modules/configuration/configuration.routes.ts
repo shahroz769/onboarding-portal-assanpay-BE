@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
@@ -102,9 +102,9 @@ configurationRoutes.get(
     'param',
     z.object({
       versionId: z.coerce
-        .number({ message: 'Invalid version.' })
-        .int({ message: 'Invalid version.' })
-        .min(1, { message: 'Invalid version.' }),
+        .number({ error: 'Invalid version.' })
+        .int({ error: 'Invalid version.' })
+        .min(1, { error: 'Invalid version.' }),
     }),
   ),
   async (c) => {
@@ -184,7 +184,7 @@ configurationRoutes.post(
     'param',
     z.object({
       businessType: z.enum(businessTypeSchema.options, {
-        message: 'Invalid business type.',
+        error: 'Invalid business type.',
       }),
     }),
   ),
@@ -226,7 +226,7 @@ configurationRoutes.patch(
   '/sub-merchants/:id',
   zodValidator(
     'param',
-    z.object({ id: z.uuid({ message: 'Invalid sub-merchant.' }) }),
+    z.object({ id: z.uuid({ error: 'Invalid sub-merchant.' }) }),
   ),
   async (c) => {
     const body = await c.req.parseBody()

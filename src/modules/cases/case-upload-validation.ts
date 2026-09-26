@@ -89,28 +89,6 @@ export async function validateAgreementFile(file: File) {
   })
 }
 
-export async function validatePhysicalAgreementFile(file: File) {
-  assertFileSizeLimit(file, 'Physical agreement copy')
-
-  const extension = getFileExtension(file.name)
-  const mimeType = file.type || 'application/octet-stream'
-  if (
-    !PHYSICAL_AGREEMENT_EXTENSIONS.has(extension) ||
-    !PHYSICAL_AGREEMENT_MIME_TYPES.has(mimeType)
-  ) {
-    throw new AppError(
-      400,
-      'Physical agreement copy must be a PDF, JPG, PNG, or WebP file.',
-    )
-  }
-
-  await assertFileContentSignature({
-    file,
-    expectedMimeType: mimeType,
-    label: 'Physical agreement copy',
-  })
-}
-
 export async function validateReceivedAgreementFile(file: File) {
   assertFileSizeLimit(file, 'Received agreement copy')
 

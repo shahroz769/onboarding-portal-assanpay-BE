@@ -20,33 +20,12 @@ export const QUEUE_STAGE_TEMPLATES = [
   'mid',
   'testing',
   'wordpress',
-  'card',
   'physical_agreement',
   'live',
   'sub_merchant_form',
 ] as const
 
 export type QueueStageTemplateName = (typeof QUEUE_STAGE_TEMPLATES)[number]
-
-/** Historical slug → workflow type. Migration / backfill only — not runtime dispatch. */
-export const LEGACY_QUEUE_SLUG_WORKFLOW_MAP = {
-  'documents-review': 'document_review',
-  agreement: 'agreement',
-  'merchant-id': 'mid',
-  testing: 'testing',
-  'wordpress-website': 'wordpress',
-  'dialogpay-card': 'card',
-  'physical-agreement': 'physical_agreement',
-  live: 'live',
-  'sub-merchant-form': 'sub_merchant_form',
-  'support-ticket': 'generic',
-} as const satisfies Record<string, QueueWorkflowType>
-
-export function getQueueWorkflowType(
-  queue: Pick<Queue, 'workflowType'> | { workflowType: QueueWorkflowType },
-): QueueWorkflowType {
-  return queue.workflowType
-}
 
 export function isQueueWorkflowType(
   queue: Pick<Queue, 'workflowType'> | { workflowType: QueueWorkflowType },
@@ -189,51 +168,6 @@ export function getStageTemplateDefinitions(
           name: 'Closed',
           slug: 'closed',
           order: 4,
-          category: 'closed',
-          isActive: true,
-        },
-      ]
-    case 'card':
-      return [
-        {
-          name: 'New',
-          slug: 'new',
-          order: 1,
-          category: 'new',
-          isActive: true,
-        },
-        {
-          name: 'Working',
-          slug: 'working',
-          order: 2,
-          category: 'in_progress',
-          isActive: true,
-        },
-        {
-          name: 'Merchant Pending',
-          slug: 'merchant_pending',
-          order: 3,
-          category: 'in_progress',
-          isActive: true,
-        },
-        {
-          name: 'Docs Upload',
-          slug: 'docs_upload',
-          order: 4,
-          category: 'in_progress',
-          isActive: true,
-        },
-        {
-          name: 'Docs Pending',
-          slug: 'docs_pending',
-          order: 5,
-          category: 'in_progress',
-          isActive: true,
-        },
-        {
-          name: 'Closed',
-          slug: 'closed',
-          order: 6,
           category: 'closed',
           isActive: true,
         },

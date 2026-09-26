@@ -1,12 +1,12 @@
 import type { ValidationTargets } from 'hono'
 import { validator } from 'hono/validator'
-import type { z } from 'zod'
+import type * as z from 'zod'
 
 import { AppError } from './errors'
 
 export function zodValidator<
   TTarget extends keyof ValidationTargets,
-  TSchema extends z.ZodTypeAny,
+  TSchema extends z.ZodType,
 >(target: TTarget, schema: TSchema) {
   return validator(target, (value) => {
     const parsed = schema.safeParse(value)

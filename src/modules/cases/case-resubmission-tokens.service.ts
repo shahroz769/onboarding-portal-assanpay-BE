@@ -1,6 +1,5 @@
 import { and, eq, isNull, or } from 'drizzle-orm'
 
-import { env } from '../../config/env'
 import { getDb } from '../../db/client'
 import { caseResubmissionTokens } from '../../db/schema'
 import { AppError } from '../../lib/errors'
@@ -104,12 +103,4 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
   }
 
   return { caseId: row.caseId, tokenId: row.id, expiresAt: row.expiresAt }
-}
-
-export async function consumeToken(tokenId: string): Promise<void> {
-  const db = getDb()
-  await db
-    .update(caseResubmissionTokens)
-    .set({ consumedAt: new Date() })
-    .where(eq(caseResubmissionTokens.id, tokenId))
 }

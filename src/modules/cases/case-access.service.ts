@@ -121,22 +121,3 @@ export async function assertOwnerCanWorkCases(
     )
   }
 }
-
-export async function assertCaseOwner(
-  caseId: string,
-  userId: string,
-  database: DbExecutor = getDb(),
-) {
-  const caseRow = await database.query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { ownerId: true },
-  })
-
-  if (!caseRow) throw new AppError(404, 'Case not found.')
-  if (caseRow.ownerId !== userId) {
-    throw new AppError(
-      403,
-      'Only the current case owner can work on this case.',
-    )
-  }
-}

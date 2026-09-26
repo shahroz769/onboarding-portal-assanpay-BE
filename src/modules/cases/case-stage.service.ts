@@ -1,196 +1,38 @@
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  ilike,
-  inArray,
-  isNull,
-  lt,
-  or,
-  sql,
-} from 'drizzle-orm'
+import { and, asc, eq, gt, inArray } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
   agreementCaseDetails,
-  caseComments,
-  caseLinks,
-  caseFiles,
   caseFieldReviews,
-  documentReviewDetails,
-  caseHistory,
-  caseResubmissionTokens,
   cases,
-  merchantDocuments,
   merchants,
-  portalMidLimitApplications,
   queues,
-  queueCaseSequences,
   queueStages,
-  subMerchantFormDetails,
-  subMerchantDraftTemplates,
-  users,
 } from '../../db/schema'
-import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { hashToken } from '../../lib/security'
-import { env } from '../../config/env'
-import type { SessionUser } from '../../types/auth'
-import { assertFileContentSignature } from '../../lib/storage/file-signatures'
-import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
-import { supersedeStorageObjects } from '../../lib/storage/ownership'
-import {
-  ensureQueueStages,
-  getVisibleStagesForQueue,
-  getStatusForStage,
-  resolveStageForCase,
-  resolveUniqueStageForStatus,
-} from '../queues/queue-stage-defaults'
-import {
-  isQueueWorkflowType,
-  type QueueWorkflowType,
-} from '../queues/queue-workflow'
-import {
-  notifyAssignment,
-  notifyOnComment,
-} from '../notifications/notifications.service'
-import { sendEmail } from '../email/email.service'
-import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
-import { AgreementEmail } from '../email/templates/agreement'
-import { MidCreationEmail } from '../email/templates/mid-creation'
-import { LiveActivationEmail } from '../email/templates/live-activation'
-import {
-  defaultPaymentMethodSettings,
-  defaultPayoutMethodSettings,
-  getConfiguredAgreementDraftForMerchantType,
-  getEmailSendingModeSettings,
-  getLimitsAndMdrSettings,
-  getLinkDeadlineSettings,
-  getMerchantPortalSettings,
-  getPaymentMethodSettings,
-  getPayoutMethodSettings,
-} from '../configuration/configuration.service'
-import { paymentMethodSettingsSchema } from '../configuration/configuration.schemas'
-import type { PaymentMethodSettings } from '../configuration/configuration.schemas'
-import { assertCreationRequirementsSatisfied } from './case-flow.service'
-import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
-import type { MerchantDocumentType } from '../merchants/merchants.schemas'
-import {
-  PRIVATE_INTERNAL_CASE_FILES_PATH,
-  PRIVATE_KYC_APPROVED_PATH,
-  PRIVATE_KYC_REJECTED_PATH,
-  PUBLIC_AGREEMENT_PATH,
-  buildCaseFolderName,
-  ensureMerchantFolderPath,
-  getRejectedRoundFolderName,
-} from '../merchants/merchant-drive-folders'
-import {
-  DOCUMENT_TYPE_LABELS,
-  MERCHANT_FIELD_LABELS,
-  getDocumentIdFromFieldName,
-  isDocumentFieldName,
-} from './field-labels'
-import { issueToken } from './case-resubmission-tokens.service'
-import { caseStatusValues, isValidStatusTransition } from './cases.schemas'
+import { resolveUniqueStageForStatus } from '../queues/queue-stage-defaults'
+import { isQueueWorkflowType } from '../queues/queue-workflow'
+import { isValidStatusTransition } from './cases.schemas'
 import type {
   CaseStatusValue,
   CloseUnsuccessfulInput,
-  CreateCaseInput,
-  CreateCommentInput,
-  ListCasesQuery,
-  MarkLiveLimitsAppliedInput,
-  MarkTestingLimitsAppliedInput,
-  MerchantPortalRole,
-  SaveDocumentReviewSubMerchantInput,
-  SaveFieldReviewsInput,
-  SaveMidCreationDetailsInput,
-  SaveWordpressWebsiteInput,
-  SelectSubMerchantFormInput,
-  SendAgreementEmailInput,
-  SendLiveEmailInput,
-  SendMidCreationEmailInput,
-  EmailRecipientType,
   UpdateCaseStatusInput,
 } from './cases.schemas'
-import {
-  AGREEMENT_CLIENT_FILE_KIND,
-  AGREEMENT_FINAL_FILE_KIND,
-} from './agreement.config'
-import {
-  SUB_MERCHANT_EMAIL_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_KIND,
-} from './sub-merchant-form.config'
 import { isCaseSlaBreached } from './case-sla'
-import {
-  assertCanViewCase,
-  assertCanWorkCase,
-  assertOwnerCanWorkCases,
-  getAgentQueueAccess,
-} from './case-access.service'
+import { assertCanWorkCase } from './case-access.service'
 import {
   loadQueueStageForCase,
   transitionCaseState,
 } from './case-transition.service'
 
-import type { DbTransaction } from './case-db'
 import {
-  AGREEMENT_EMAIL_PROOF_KIND,
-  AGREEMENT_FILE_EXTENSIONS,
-  AGREEMENT_FILE_MIME_TYPES,
-  AGREEMENT_WHATSAPP_PROOF_KIND,
-  DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS,
-  EMAIL_PROOF_MIME_TYPES,
-  LIVE_ACTIVATION_EMAIL_PROOF_KIND,
-  LIVE_ACTIVATION_WHATSAPP_PROOF_KIND,
-  MAX_PHYSICAL_AGREEMENT_BYTES,
-  MAX_SUB_MERCHANT_FINAL_FORM_BYTES,
-  MAX_WORDPRESS_SCREENSHOT_BYTES,
-  MID_CREATION_CREDENTIALS_SENT_ACTIONS,
-  MID_CREATION_EMAIL_PROOF_KIND,
-  MID_CREATION_WHATSAPP_PROOF_KIND,
-  PHYSICAL_AGREEMENT_EXTENSIONS,
-  PHYSICAL_AGREEMENT_FILE_KIND,
-  PHYSICAL_AGREEMENT_MIME_TYPES,
-  RESUBMISSION_EMAIL_PROOF_KIND,
-  RESUBMISSION_WHATSAPP_PROOF_KIND,
-  SUB_MERCHANT_FINAL_FORM_EXTENSIONS,
-  SUB_MERCHANT_FINAL_FORM_MIME_TYPES,
-  WORDPRESS_SCREENSHOT_EXTENSIONS,
-  WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
-  WORDPRESS_SCREENSHOT_MIME_TYPES,
-  WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
-  caseStatusValueSet,
-  type ManualCommunicationChannel,
-} from './case-constants'
-import {
-  assertTestingLimitsAppliedForCredentials,
-  buildPortalPassword,
   ensureInheritedSubMerchantFormDetails,
-  getCaseDetailMerchant,
-  getClientPayoutRateLabel,
   getDocumentReviewDetails,
-  getInternalPortalMidLimitsAppliedEntryForMerchant,
   getLatestDocumentReviewDetailsForMerchant,
-  getLatestWordpressWebsiteDetailsForMerchant,
   getLiveLimitsAppliedEntry,
   getMidCreationCredentials,
   getMidCreationCredentialsSentEntry,
-  getMidCreationPortalMid,
-  getPortalMidLimitApplication,
-  getPayoutMethodsForMerchantRole,
-  getSubMerchantFormDetails,
-  getTestingLimitsAppliedEntry,
-  getTestingLimitsAppliedEntryForMerchant,
   getWordpressWebsiteDetails,
-  isMerchantPortalRole,
-  normalizeMethodLabel,
-  parseLegacyMethodSettings,
-  type MidCreationCredentials,
-  DEFAULT_MERCHANT_PORTAL_ROLE,
-  ROLE_PAYOUT_METHOD_LABELS,
 } from './case-detail-lookups'
 
 export async function updateCaseStatus(
@@ -633,7 +475,6 @@ export async function advanceStage(caseId: string, userId: string) {
     }
   }
 
-  const newStatus = getStatusForStage(targetStage)
   const now = new Date()
 
   const extraFields: {

@@ -178,7 +178,6 @@ export const queueWorkflowTypeEnum = pgEnum('queue_workflow_type', [
   'mid',
   'testing',
   'wordpress',
-  'card',
   'physical_agreement',
   'live',
   'sub_merchant_form',
