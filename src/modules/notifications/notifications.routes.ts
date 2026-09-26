@@ -63,6 +63,11 @@ notificationRoutes.patch('/:id/read', async (c) => {
 notificationRoutes.get('/stream', (c) => {
   const auth = c.get('auth')
 
+  // Bun closes connections idle for idleTimeout (default 10s), which is shorter
+  // than the heartbeat and would drop the stream into a reconnect loop. Disable
+  // it for this request only; the heartbeat write detects dead connections.
+  ;(c.env as Bun.Server<unknown> | undefined)?.timeout?.(c.req.raw, 0)
+
   c.header('Content-Type', 'text/event-stream; charset=utf-8')
   c.header('Cache-Control', 'no-cache, no-transform')
   c.header('Content-Encoding', 'identity')

@@ -24,6 +24,22 @@ const roleCreationRules: Record<RoleType, RoleType[]> = {
   agent: [],
 }
 
+// A rotated refresh token presented again within this window is a benign
+// race (two tabs refreshing together, or a retry after a lost response) and is
+// only refused. Later than this it is treated as a stolen token.
+const REFRESH_TOKEN_REUSE_GRACE_MS = 30_000
+
+// Verified against when the account is unknown or has no password, so a
+// failed login costs the same argon2 work either way and response timing does
+// not reveal which accounts exist. Hashed lazily with Bun's defaults so its
+// parameters always match real password hashes.
+let dummyPasswordHash: Promise<string> | undefined
+
+function getDummyPasswordHash() {
+  dummyPasswordHash ??= Bun.password.hash(crypto.randomUUID())
+  return dummyPasswordHash
+}
+
 function getRefreshTokenExpiresAt() {
   const expiresAt = new Date()
   expiresAt.setDate(expiresAt.getDate() + env.REFRESH_TOKEN_TTL_DAYS)
@@ -170,6 +186,23 @@ export async function registerSuperAdmin(input: {
   return sanitizeUser(createdUser)
 }
 
+/**
+ * Rate-limit key for login attempts on one account. Matches the same user
+ * lookup as `login`, so the email and the username of an account share one
+ * budget; unknown identifiers fall back to the normalized identifier.
+ */
+export async function getLoginAccountKey(identifier: string) {
+  const user = await getDb().query.users.findFirst({
+    columns: { id: true },
+    where: and(
+      or(eq(users.email, identifier), eq(users.username, identifier)),
+      isNull(users.deletedAt),
+    ),
+  })
+
+  return user ? `user:${user.id}` : `account:${identifier.toLowerCase()}`
+}
+
 export async function login(input: {
   identifier: string
   password: string
@@ -187,20 +220,14 @@ export async function login(input: {
     ),
   })
 
-  if (!user) {
-    throw new AppError(401, 'Invalid email or password.')
-  }
-
-  if (!user.passwordHash) {
-    throw new AppError(401, 'Set your password before logging in.')
-  }
-
+  // Unknown accounts and accounts without a password get the same error and
+  // the same hashing cost as a wrong password, so neither leaks existence.
   const passwordMatches = await Bun.password.verify(
     input.password,
-    user.passwordHash,
+    user?.passwordHash ?? (await getDummyPasswordHash()),
   )
 
-  if (!passwordMatches) {
+  if (!user?.passwordHash || !passwordMatches) {
     throw new AppError(401, 'Invalid email or password.')
   }
 
@@ -229,6 +256,52 @@ export async function refreshSession(input: {
   })
 
   const hashedToken = await hashToken(input.refreshToken)
+
+  // Looked up outside the rotation transaction: the reuse response below must
+  // commit even though the request itself fails with 401.
+  const presentedToken = await getDb().query.refreshTokens.findFirst({
+    columns: { status: true, revokedAt: true, expiresAt: true },
+    where: and(
+      eq(refreshTokens.id, payload.sessionId),
+      eq(refreshTokens.userId, payload.userId),
+      eq(refreshTokens.tokenHash, hashedToken),
+    ),
+  })
+
+  if (!presentedToken) {
+    throw new AppError(401, 'Invalid refresh token.')
+  }
+
+  if (presentedToken.status === 'rotated') {
+    const rotatedAgoMs =
+      Date.now() - (presentedToken.revokedAt?.getTime() ?? 0)
+
+    if (rotatedAgoMs > REFRESH_TOKEN_REUSE_GRACE_MS) {
+      // Only the holder of a copy can present an already-rotated token after
+      // the grace window. Revoke everything, including the copy's own chain.
+      await revokeAllUserSessions(payload.userId)
+      console.warn(
+        '[auth] Refresh token reuse detected; revoked all sessions.',
+        JSON.stringify({
+          userId: payload.userId,
+          sessionId: payload.sessionId,
+          rotatedAgoMs,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+        }),
+      )
+    }
+
+    throw new AppError(401, 'Refresh token is expired or revoked.')
+  }
+
+  if (
+    presentedToken.status !== 'active' ||
+    presentedToken.expiresAt <= new Date()
+  ) {
+    throw new AppError(401, 'Refresh token is expired or revoked.')
+  }
+
   const nextSessionId = crypto.randomUUID()
   const nextRefreshToken = await signRefreshToken({
     sub: payload.userId,
@@ -258,6 +331,8 @@ export async function refreshSession(input: {
       ipAddress: input.ipAddress,
     })
 
+    // Still guarded on status='active': of two concurrent refreshes with the
+    // same token, only one can rotate it.
     const [rotatedToken] = await tx
       .update(refreshTokens)
       .set({

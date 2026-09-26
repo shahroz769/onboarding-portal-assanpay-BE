@@ -14,6 +14,7 @@ import {
   setPasswordSchema,
 } from './auth.schemas'
 import {
+  getLoginAccountKey,
   getPasswordTokenContext,
   login,
   logout,
@@ -40,10 +41,13 @@ function getCookieOptions() {
   }
 }
 
+// Counts failed attempts only: users behind one shared IP (an office NAT)
+// must not use up each other's budget by signing in normally.
 const authRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 15,
   standardHeaders: 'draft-6',
+  skipSuccessfulRequests: true,
   keyGenerator: getClientIp,
   handler: (c) =>
     c.json({ error: 'Too many attempts. Please try again later.' }, 429),
@@ -63,8 +67,8 @@ const loginAccountRateLimiter = rateLimiter({
         ? ('identifier' in body && body.identifier) ||
           ('email' in body && body.email)
         : null
-    return typeof account === 'string'
-      ? `account:${account.trim().toLowerCase()}`
+    return typeof account === 'string' && account.trim()
+      ? getLoginAccountKey(account.trim())
       : `ip:${getClientIp(c)}`
   },
   handler: (c) =>

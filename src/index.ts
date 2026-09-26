@@ -129,6 +129,8 @@ app.route('/api/configuration', configurationRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/notifications', notificationRoutes)
 
+// Rotated tokens are kept until they expire: refresh-token reuse detection
+// needs the row to recognise a stolen copy for the token's whole lifetime.
 async function purgeExpiredRefreshTokens() {
   try {
     const result = await getDb()
@@ -138,13 +140,6 @@ async function purgeExpiredRefreshTokens() {
           lt(refreshTokens.expiresAt, new Date()),
           and(
             eq(refreshTokens.status, 'revoked'),
-            lt(
-              refreshTokens.revokedAt,
-              new Date(Date.now() - 24 * 60 * 60 * 1000),
-            ),
-          ),
-          and(
-            eq(refreshTokens.status, 'rotated'),
             lt(
               refreshTokens.revokedAt,
               new Date(Date.now() - 24 * 60 * 60 * 1000),
