@@ -540,6 +540,13 @@
       "when": 1788739200000,
       "tag": "0077_rename_awaiting_client_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1788825600000,
+      "tag": "0078_sub_merchant_seller_code_unique",
+      "breakpoints": true
     }
   ]
 }

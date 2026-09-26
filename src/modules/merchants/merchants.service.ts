@@ -849,6 +849,22 @@ export async function terminateMerchant(
   return result
 }
 
+// Bulk endpoints are strict: an unknown or deleted id fails the whole request
+// (404) instead of being silently skipped, matching bulk case assignment.
+async function assertMerchantsExist(
+  db: Pick<ReturnType<typeof getDb>, 'select'>,
+  ids: string[],
+) {
+  const uniqueIds = [...new Set(ids)]
+  const rows = await db
+    .select({ id: merchants.id })
+    .from(merchants)
+    .where(and(inArray(merchants.id, uniqueIds), isNull(merchants.deletedAt)))
+  if (rows.length !== uniqueIds.length) {
+    throw new AppError(404, 'One or more merchants were not found.')
+  }
+}
+
 export async function bulkTerminateMerchants(
   ids: string[],
   actorId: string,
@@ -858,6 +874,7 @@ export async function bulkTerminateMerchants(
   const now = new Date()
 
   const result = await db.transaction(async (tx) => {
+    await assertMerchantsExist(tx, ids)
     const updatedRows = await tx
       .update(merchants)
       .set({ status: 'terminated', updatedAt: now })
@@ -889,6 +906,7 @@ export async function bulkTerminateMerchants(
 
 export async function bulkSoftDeleteMerchants(ids: string[]) {
   const db = getDb()
+  await assertMerchantsExist(db, ids)
 
   const result = await db
     .update(merchants)
@@ -913,6 +931,7 @@ export async function bulkUpdatePriority(
   const db = getDb()
 
   const result = await db.transaction(async (tx) => {
+    await assertMerchantsExist(tx, ids)
     const now = new Date()
     const updatedRows = await tx
       .update(merchants)

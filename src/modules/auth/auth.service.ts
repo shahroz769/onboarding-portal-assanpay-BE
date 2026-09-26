@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
+import { and, eq, gt, isNull, lt, or, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
@@ -412,6 +412,9 @@ export function canCreateRole(actorRole: RoleType, targetRole: RoleType) {
   return roleCreationRules[actorRole].includes(targetRole)
 }
 
+// Issuing does not invalidate earlier links: an undelivered email must not
+// burn a link the user may still hold. Call activatePasswordToken once the
+// email is accepted, or discardPasswordToken if it was not.
 export async function issuePasswordToken(input: {
   userId: string
   purpose: 'invite' | 'reset'
@@ -421,28 +424,49 @@ export async function issuePasswordToken(input: {
   const tokenHash = await hashToken(token)
   const expiresAt = await getPasswordTokenExpiresAt(input.purpose)
 
-  await getDb().transaction(async (tx) => {
-    await tx
-      .update(userPasswordTokens)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(userPasswordTokens.userId, input.userId),
-          eq(userPasswordTokens.purpose, input.purpose),
-          isNull(userPasswordTokens.consumedAt),
-        ),
-      )
-
-    await tx.insert(userPasswordTokens).values({
+  const [created] = await getDb()
+    .insert(userPasswordTokens)
+    .values({
       userId: input.userId,
       tokenHash,
       purpose: input.purpose,
       expiresAt,
       createdBy: input.createdBy ?? null,
     })
-  })
+    .returning({ id: userPasswordTokens.id })
 
-  return { token, expiresAt }
+  return { tokenId: created!.id, token, expiresAt }
+}
+
+/**
+ * Retires the user's older open links for the purpose. Only older ones, so two
+ * overlapping sends cannot retire each other's delivered link.
+ */
+export async function activatePasswordToken(input: {
+  tokenId: string
+  userId: string
+  purpose: 'invite' | 'reset'
+}) {
+  await getDb()
+    .update(userPasswordTokens)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(userPasswordTokens.userId, input.userId),
+        eq(userPasswordTokens.purpose, input.purpose),
+        isNull(userPasswordTokens.consumedAt),
+        lt(
+          userPasswordTokens.createdAt,
+          sql`(select ${userPasswordTokens.createdAt} from ${userPasswordTokens} where ${userPasswordTokens.id} = ${input.tokenId})`,
+        ),
+      ),
+    )
+}
+
+export async function discardPasswordToken(tokenId: string) {
+  await getDb()
+    .delete(userPasswordTokens)
+    .where(eq(userPasswordTokens.id, tokenId))
 }
 
 async function loadValidPasswordToken(token: string) {
@@ -538,6 +562,17 @@ export async function setPasswordWithToken(input: {
       .update(refreshTokens)
       .set({ status: 'revoked', revokedAt: new Date() })
       .where(eq(refreshTokens.userId, user.id))
+
+    // Any other invite/reset link still open for this user is now stale.
+    await tx
+      .update(userPasswordTokens)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(userPasswordTokens.userId, user.id),
+          isNull(userPasswordTokens.consumedAt),
+        ),
+      )
 
     return [updated]
   })

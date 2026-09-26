@@ -34,6 +34,7 @@ import {
 } from '../../db/schema'
 import type { Merchant } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { hashToken } from '../../lib/security'
 import { env } from '../../config/env'
 import type { SessionUser } from '../../types/auth'
 import { assertFileContentSignature } from '../../lib/storage/file-signatures'
@@ -560,6 +561,26 @@ export type AgreementEmailPreviewResult = {
   recipient: string
   subject: string
   body: string
+  tokenId: string
+}
+
+// Binds a manual confirmation to the exact email the agent previewed: any change
+// to the recipient, remarks or Final Agreement makes the old preview invalid.
+function buildAgreementPreviewToken(input: {
+  caseId: string
+  finalAgreementFileId: string
+  recipient: string
+  remarks: string | null
+}) {
+  return hashToken(
+    [
+      'agreement-email',
+      input.caseId,
+      input.finalAgreementFileId,
+      input.recipient,
+      input.remarks ?? '',
+    ].join('\n'),
+  )
 }
 
 export async function getAgreementEmailPreview(
@@ -626,6 +647,12 @@ export async function getAgreementEmailPreview(
     recipient: recipient.email,
     subject,
     body,
+    tokenId: await buildAgreementPreviewToken({
+      caseId,
+      finalAgreementFileId: details.finalAgreementFileId,
+      recipient: recipient.email,
+      remarks,
+    }),
   }
 }
 
@@ -634,6 +661,7 @@ export async function confirmAgreementEmailManual(
   userId: string,
   input: {
     remarks?: string | null
+    tokenId: string
     file: File
     channel?: ManualCommunicationChannel
     recipientEmailType?: EmailRecipientType
@@ -658,6 +686,20 @@ export async function confirmAgreementEmailManual(
   })
   if (!details?.finalAgreementFileId) {
     throw new AppError(400, 'Upload the Final Agreement before confirming.')
+  }
+
+  const remarks = input.remarks?.trim() || null
+  const expectedTokenId = await buildAgreementPreviewToken({
+    caseId,
+    finalAgreementFileId: details.finalAgreementFileId,
+    recipient: recipient.email,
+    remarks,
+  })
+  if (input.tokenId !== expectedTokenId) {
+    throw new AppError(
+      400,
+      'The email preview is out of date. Load the preview again before confirming.',
+    )
   }
 
   const awaitingStage = await db.query.queueStages.findFirst({
@@ -694,7 +736,6 @@ export async function confirmAgreementEmailManual(
     caseRow.queueName,
   )
 
-  const remarks = input.remarks?.trim() || null
   const now = new Date()
   await db.transaction(async (tx) => {
     await tx

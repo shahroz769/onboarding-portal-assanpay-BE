@@ -545,6 +545,9 @@ caseRoutes.post('/:id/sub-merchant-form/final-form', async (c) => {
   if (typeof subMerchantKey !== 'string' || !subMerchantKey.trim()) {
     throw new AppError(400, 'Sub-merchant selection is required.')
   }
+  if (!z.uuid().safeParse(subMerchantKey).success) {
+    throw new AppError(400, 'Select a valid sub-merchant.')
+  }
 
   const auth = c.get('auth')
   const id = c.req.param('id')
@@ -719,6 +722,7 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
     throw new AppError(400, 'Invalid multipart form payload.')
   })
   const file = formData.get('file')
+  const tokenId = formData.get('tokenId')
   const remarks = formData.get('remarks')
   const channel = parseManualCommunicationChannel(formData.get('channel'))
   const recipientEmailType = parseEmailRecipientType(
@@ -726,10 +730,13 @@ caseRoutes.post('/:id/agreement/send-mail/manual', async (c) => {
   )
   if (!(file instanceof File))
     throw new AppError(400, 'Screenshot file is required.')
+  if (typeof tokenId !== 'string' || !tokenId)
+    throw new AppError(400, 'tokenId is required.')
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await confirmAgreementEmailManual(id, auth.userId, {
     remarks: typeof remarks === 'string' ? remarks : null,
+    tokenId,
     file,
     channel,
     recipientEmailType,

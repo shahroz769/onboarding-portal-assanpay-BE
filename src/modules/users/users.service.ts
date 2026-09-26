@@ -24,7 +24,9 @@ import {
 import { AppError } from '../../lib/errors'
 import type { RoleType, SessionUser } from '../../types/auth'
 import {
+  activatePasswordToken,
   canCreateRole,
+  discardPasswordToken,
   issuePasswordToken,
   revokeAllUserSessions,
 } from '../auth/auth.service'
@@ -343,9 +345,17 @@ async function sendPasswordEmail(input: {
     },
   })
 
+  // Only a delivered link replaces the user's previous one.
   if (result.status === 'failed') {
+    await discardPasswordToken(issued.tokenId)
     throw new AppError(502, result.error ?? 'Failed to send password email.')
   }
+
+  await activatePasswordToken({
+    tokenId: issued.tokenId,
+    userId: input.userId,
+    purpose: input.purpose,
+  })
 
   return result
 }
@@ -447,13 +457,20 @@ export async function createUser(actor: SessionUser, input: UserMutationInput) {
     return created
   })
 
-  await sendPasswordEmail({
-    userId: createdUser.id,
-    email: createdUser.email,
-    name: createdUser.name,
-    purpose: 'invite',
-    actorId: actor.userId,
-  })
+  // An account whose invitation never went out is unusable and would block a
+  // retry with the same email/username, so remove it when the send fails.
+  try {
+    await sendPasswordEmail({
+      userId: createdUser.id,
+      email: createdUser.email,
+      name: createdUser.name,
+      purpose: 'invite',
+      actorId: actor.userId,
+    })
+  } catch (error) {
+    await getDb().delete(users).where(eq(users.id, createdUser.id))
+    throw error
+  }
 
   const [hydrated] = await hydrateUsers([createdUser])
   return hydrated
@@ -565,14 +582,18 @@ export async function bulkUpdateUserStatus(
     throw new AppError(400, 'You cannot deactivate your own account.')
   }
 
-  if (actor.roleType === 'admin') {
-    const targetUsers = await getDb().query.users.findMany({
-      where: inArray(users.id, uniqueIds),
-      columns: { roleType: true },
-    })
-    if (targetUsers.some((user) => user.roleType !== 'agent')) {
-      throw new AppError(403, 'Admins can only update agents.')
-    }
+  const targetUsers = await getDb().query.users.findMany({
+    where: and(inArray(users.id, uniqueIds), isNull(users.deletedAt)),
+    columns: { roleType: true },
+  })
+  if (targetUsers.length !== uniqueIds.length) {
+    throw new AppError(404, 'One or more selected users no longer exist.')
+  }
+  if (
+    actor.roleType === 'admin' &&
+    targetUsers.some((user) => user.roleType !== 'agent')
+  ) {
+    throw new AppError(403, 'Admins can only update agents.')
   }
 
   const updatedRows = await getDb().transaction(async (tx) => {

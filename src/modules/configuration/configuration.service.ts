@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -527,23 +527,56 @@ export async function createSubMerchantDraft(input: {
     throw new AppError(400, 'Seller Code is required.')
   }
 
+  // Check before uploading so a duplicate never leaves an orphaned Drive file.
+  const [conflict] = await getDb()
+    .select({
+      name: subMerchantDraftTemplates.name,
+      sellerCode: subMerchantDraftTemplates.sellerCode,
+    })
+    .from(subMerchantDraftTemplates)
+    .where(
+      or(
+        sql`lower(${subMerchantDraftTemplates.name}) = lower(${name})`,
+        sql`lower(${subMerchantDraftTemplates.sellerCode}) = lower(${sellerCode})`,
+      ),
+    )
+    .limit(1)
+  if (conflict) {
+    throw new AppError(
+      409,
+      conflict.sellerCode.toLowerCase() === sellerCode.toLowerCase()
+        ? 'A sub-merchant with this Seller Code already exists.'
+        : 'A sub-merchant with this name already exists.',
+    )
+  }
+
   const uploaded = await uploadConfigurationDraft({
     folderPath: ['Configuration', 'Sub-Merchants', name],
     file: input.file,
   })
 
-  await getDb().insert(subMerchantDraftTemplates).values({
-    name,
-    sellerCode,
-    originalName: uploaded.fileName,
-    mimeType: uploaded.mimeType,
-    sizeBytes: uploaded.sizeBytes,
-    googleDriveFileId: uploaded.fileId,
-    googleDriveWebViewLink: uploaded.webViewLink,
-    googleDriveDownloadLink: uploaded.downloadLink,
-    googleDriveFolderId: uploaded.folderId,
-    updatedAt: new Date(),
-  })
+  try {
+    await getDb().insert(subMerchantDraftTemplates).values({
+      name,
+      sellerCode,
+      originalName: uploaded.fileName,
+      mimeType: uploaded.mimeType,
+      sizeBytes: uploaded.sizeBytes,
+      googleDriveFileId: uploaded.fileId,
+      googleDriveWebViewLink: uploaded.webViewLink,
+      googleDriveDownloadLink: uploaded.downloadLink,
+      googleDriveFolderId: uploaded.folderId,
+      updatedAt: new Date(),
+    })
+  } catch (error) {
+    // A concurrent create won the unique index; drop this attempt's upload.
+    await new GoogleDriveStorageProvider()
+      .deleteFile(uploaded.fileId)
+      .catch((cleanupError) =>
+        console.error('[configuration] Draft cleanup failed:', cleanupError),
+      )
+    throw error
+  }
 
   return listSubMerchantDrafts()
 }

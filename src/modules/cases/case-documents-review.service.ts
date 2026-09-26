@@ -9,6 +9,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm'
+import { z } from 'zod'
 
 import { getDb } from '../../db/client'
 import {
@@ -93,6 +94,7 @@ import {
   MERCHANT_FIELD_LABELS,
   getDocumentIdFromFieldName,
   isDocumentFieldName,
+  isMerchantFieldName,
 } from './field-labels'
 import { issueToken } from './case-resubmission-tokens.service'
 import { caseStatusValues, isValidStatusTransition } from './cases.schemas'
@@ -291,6 +293,12 @@ export async function saveFieldReviews(
     columns: { slug: true, workflowType: true, slaHours: true },
   })
 
+  await assertReviewableFieldNames(
+    caseId,
+    caseData.merchantId,
+    input.reviews.map((review) => review.fieldName),
+  )
+
   const now = new Date()
   const reviewByFieldName = new Map(
     input.reviews.map((review) => [review.fieldName, review]),
@@ -357,6 +365,62 @@ export async function saveFieldReviews(
   })
 
   return { saved: reviewValues.length }
+}
+
+// A review for a name the merchant cannot resubmit would block closing the
+// case forever, so only merchant fields and this merchant's documents qualify.
+// Names already reviewed on the case stay writable so they can be cleared.
+async function assertReviewableFieldNames(
+  caseId: string,
+  merchantId: string,
+  fieldNames: string[],
+) {
+  const unknownNames = fieldNames.filter((name) => !isMerchantFieldName(name))
+  if (unknownNames.length === 0) return
+
+  const existingReviews = await getDb()
+    .select({ fieldName: caseFieldReviews.fieldName })
+    .from(caseFieldReviews)
+    .where(
+      and(
+        eq(caseFieldReviews.caseId, caseId),
+        inArray(caseFieldReviews.fieldName, unknownNames),
+      ),
+    )
+  const alreadyReviewed = new Set(
+    existingReviews.map((review) => review.fieldName),
+  )
+  const documentIds = new Set<string>()
+
+  for (const fieldName of unknownNames) {
+    if (alreadyReviewed.has(fieldName)) continue
+
+    const documentId = getDocumentIdFromFieldName(fieldName)
+    if (!documentId || !z.uuid().safeParse(documentId).success) {
+      throw new AppError(400, `Unknown review field "${fieldName}".`)
+    }
+    documentIds.add(documentId)
+  }
+
+  if (documentIds.size === 0) return
+
+  const documents = await getDb()
+    .select({ id: merchantDocuments.id })
+    .from(merchantDocuments)
+    .where(
+      and(
+        eq(merchantDocuments.merchantId, merchantId),
+        inArray(merchantDocuments.id, [...documentIds]),
+      ),
+    )
+  const found = new Set(documents.map((document) => document.id))
+  const missing = [...documentIds].find((id) => !found.has(id))
+  if (missing) {
+    throw new AppError(
+      400,
+      `Unknown review field "doc_${missing}": the document does not belong to this merchant.`,
+    )
+  }
 }
 
 // ─── Close Unsuccessful ─────────────────────────────────────────────────────
@@ -957,12 +1021,9 @@ export async function regenerateResubmissionLink(
 }
 
 export type ResubmissionContext = {
-  caseId: string
   caseNumber: string
   expiresAt: string
   merchantName: string
-  merchantId: string
-  ownerId: string | null
   merchantOwnerName: string
   rejections: Array<{
     fieldName: string
@@ -985,9 +1046,7 @@ export async function getResubmissionContext(
 
   const [caseRow] = await db
     .select({
-      id: cases.id,
       caseNumber: cases.caseNumber,
-      ownerId: cases.ownerId,
       merchantId: cases.merchantId,
     })
     .from(cases)
@@ -1085,13 +1144,11 @@ export async function getResubmissionContext(
     }
   })
 
+  // Served to unauthenticated merchants: keep internal row/user ids out.
   return {
-    caseId: caseRow.id,
     caseNumber: caseRow.caseNumber,
     expiresAt: expiresAt.toISOString(),
     merchantName: merchant.businessName,
-    merchantId: merchant.id,
-    ownerId: caseRow.ownerId,
     merchantOwnerName: merchant.ownerFullName,
     rejections,
   }

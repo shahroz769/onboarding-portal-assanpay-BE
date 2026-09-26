@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
+import { z } from 'zod'
 
 import { zodValidator } from '../../lib/validators'
 import { requireAuth } from '../../middleware/auth'
@@ -52,12 +53,19 @@ notificationRoutes.patch('/read-all', async (c) => {
 })
 
 // PATCH /api/notifications/:id/read
-notificationRoutes.patch('/:id/read', async (c) => {
-  const auth = c.get('auth')
-  const id = c.req.param('id')
-  const result = await markRead(auth.userId, id)
-  return c.json(result)
-})
+notificationRoutes.patch(
+  '/:id/read',
+  zodValidator(
+    'param',
+    z.object({ id: z.uuid({ message: 'Invalid notification id.' }) }),
+  ),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const result = await markRead(auth.userId, id)
+    return c.json(result)
+  },
+)
 
 // GET /api/notifications/stream — SSE
 notificationRoutes.get('/stream', (c) => {

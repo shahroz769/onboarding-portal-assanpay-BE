@@ -332,6 +332,9 @@ export const subMerchantDraftTemplates = pgTable(
       'sub_merchant_draft_templates_size_nonnegative',
       sql`${table.sizeBytes} >= 0`,
     ),
+    uniqueIndex('sub_merchant_draft_templates_seller_code_uniq').on(
+      sql`lower(${table.sellerCode})`,
+    ),
   ],
 )
 

@@ -4,6 +4,10 @@ If a contract change requires frontend work, use Desktop path `\Onboarding Porta
 
 The current DB is a test DB and can be used for read/write tests, verifications, etc
 
+## Hono Docs
+Always reference https://hono.dev/llms.txt for Hono specific things
+- [Full Docs](https://hono.dev/llms-full.txt) Full documentation of Hono. (without examples)
+
 - Stack: Bun, Hono, strict TypeScript, Drizzle, PostgreSQL.
 - Style: two spaces, single quotes, trailing commas, no semicolons.
 - Before handoff run `bun run typecheck`.

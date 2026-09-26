@@ -332,6 +332,14 @@ export async function parseMerchantFormData(
       throw new AppError(400, `Field "${key}" must be provided once.`)
     }
 
+    // Optional fields may be omitted, matching the JSON schema.
+    if (values.length === 0) {
+      if (scalarMerchantSchema.shape[key].safeParse(undefined).success) {
+        continue
+      }
+      throw new AppError(400, `Field "${key}" is required.`)
+    }
+
     const value = values[0]
 
     if (typeof value !== 'string') {

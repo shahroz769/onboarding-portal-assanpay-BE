@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { z } from 'zod'
 
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
@@ -26,6 +27,7 @@ import {
   updateCaseFlowConfiguration,
 } from './configuration.service'
 import {
+  businessTypeSchema,
   updateCaseFlowConfigurationSchema,
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
@@ -176,19 +178,30 @@ configurationRoutes.put(
   },
 )
 
-configurationRoutes.post('/agreements/:businessType/draft', async (c) => {
-  const body = await c.req.parseBody()
-  const file = body.file
-  if (!(file instanceof File)) {
-    return c.json({ message: 'Draft file is required.' }, 400)
-  }
+configurationRoutes.post(
+  '/agreements/:businessType/draft',
+  zodValidator(
+    'param',
+    z.object({
+      businessType: z.enum(businessTypeSchema.options, {
+        message: 'Invalid business type.',
+      }),
+    }),
+  ),
+  async (c) => {
+    const body = await c.req.parseBody()
+    const file = body.file
+    if (!(file instanceof File)) {
+      return c.json({ message: 'Draft file is required.' }, 400)
+    }
 
-  const result = await uploadAgreementDraft({
-    businessType: c.req.param('businessType'),
-    file,
-  })
-  return c.json(result)
-})
+    const result = await uploadAgreementDraft({
+      businessType: c.req.param('businessType'),
+      file,
+    })
+    return c.json(result)
+  },
+)
 
 configurationRoutes.post('/sub-merchants', async (c) => {
   const body = await c.req.parseBody()

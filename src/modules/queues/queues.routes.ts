@@ -42,6 +42,18 @@ import {
 
 export const queueRoutes = new Hono<AppEnv>()
 
+const queueIdParam = zodValidator(
+  'param',
+  z.object({ id: z.uuid({ message: 'Invalid queue id.' }) }),
+)
+const queueStageParam = zodValidator(
+  'param',
+  z.object({
+    id: z.uuid({ message: 'Invalid queue id.' }),
+    stageId: z.uuid({ message: 'Invalid stage id.' }),
+  }),
+)
+
 queueRoutes.use('*', requireAuth)
 
 queueRoutes.get('/', async (c) => {
@@ -55,10 +67,15 @@ queueRoutes.get('/templates', requireRoles('super_admin'), async (c) => {
   return c.json(listStageTemplates())
 })
 
-queueRoutes.get('/:id', requireRoles('super_admin'), async (c) => {
-  const result = await getQueueDetail(c.req.param('id'))
-  return c.json(result)
-})
+queueRoutes.get(
+  '/:id',
+  requireRoles('super_admin'),
+  queueIdParam,
+  async (c) => {
+    const result = await getQueueDetail(c.req.param('id'))
+    return c.json(result)
+  },
+)
 
 queueRoutes.post(
   '/',
@@ -74,6 +91,7 @@ queueRoutes.post(
 queueRoutes.patch(
   '/:id',
   requireRoles('super_admin'),
+  queueIdParam,
   zodValidator('json', updateQueueSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as UpdateQueueInput
@@ -85,6 +103,7 @@ queueRoutes.patch(
 queueRoutes.patch(
   '/:id/status',
   requireRoles('super_admin'),
+  queueIdParam,
   zodValidator('json', updateQueueStatusSchema),
   async (c) => {
     const id = c.req.param('id')
@@ -97,6 +116,7 @@ queueRoutes.patch(
 queueRoutes.patch(
   '/:id/sla',
   requireRoles('super_admin'),
+  queueIdParam,
   zodValidator('json', updateQueueSlaSchema),
   async (c) => {
     const id = c.req.param('id')
@@ -109,6 +129,7 @@ queueRoutes.patch(
 queueRoutes.post(
   '/:id/stages',
   requireRoles('super_admin'),
+  queueIdParam,
   zodValidator('json', createQueueStageSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as CreateQueueStageInput
@@ -120,6 +141,7 @@ queueRoutes.post(
 queueRoutes.patch(
   '/:id/stages/reorder',
   requireRoles('super_admin'),
+  queueIdParam,
   zodValidator('json', reorderQueueStagesSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as ReorderQueueStagesInput
@@ -131,6 +153,7 @@ queueRoutes.patch(
 queueRoutes.patch(
   '/:id/stages/:stageId',
   requireRoles('super_admin'),
+  queueStageParam,
   zodValidator('json', updateQueueStageSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as UpdateQueueStageInput
@@ -146,6 +169,7 @@ queueRoutes.patch(
 queueRoutes.post(
   '/:id/stages/:stageId/deactivate',
   requireRoles('super_admin'),
+  queueStageParam,
   zodValidator('json', deactivateQueueStageSchema),
   async (c) => {
     const input = c.req.valid('json' as never) as DeactivateQueueStageInput
@@ -161,6 +185,7 @@ queueRoutes.post(
 queueRoutes.delete(
   '/:id/stages/:stageId',
   requireRoles('super_admin'),
+  queueStageParam,
   zodValidator(
     'json',
     z.object({ revision: z.coerce.number().int().min(1) }).strict(),

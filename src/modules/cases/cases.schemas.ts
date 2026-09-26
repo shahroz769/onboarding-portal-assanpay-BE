@@ -258,7 +258,7 @@ export const emailRecipientSelectionSchema = z.object({
 
 export const selectSubMerchantFormSchema = z
   .object({
-    subMerchantKey: z.string().min(1).max(80),
+    subMerchantKey: z.uuid({ message: 'Select a valid sub-merchant.' }),
   })
   .strict()
 
