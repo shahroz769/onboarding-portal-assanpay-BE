@@ -179,6 +179,10 @@ export function MidCreationEmail({
   )
 }
 
+export function midCreationEmailSubject(merchantName: string) {
+  return `AssanPay merchant portal credentials for ${merchantName}`
+}
+
 MidCreationEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   portalEmail: 'merchant@example.com',

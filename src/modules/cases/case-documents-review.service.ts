@@ -18,7 +18,10 @@ import { env } from '../../config/env'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
 import { isQueueWorkflowType } from '../queues/queue-workflow'
 import { sendEmail } from '../email/email.service'
-import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
+import {
+  DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
+  DocumentResubmissionEmail,
+} from '../email/templates/document-resubmission'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -650,7 +653,7 @@ export async function sendForResubmission(
   const emailResult = await sendEmail({
     to: recipient.email,
     ...extraRecipients,
-    subject: 'Action required to update your onboarding submission',
+    subject: DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
     template: 'document-resubmission',
     react: DocumentResubmissionEmail({
       merchantName: row.merchantName,

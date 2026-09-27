@@ -13,7 +13,10 @@ import {
 import { AppError } from '../../lib/errors'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import { sendEmail } from '../email/email.service'
-import { AgreementEmail } from '../email/templates/agreement'
+import {
+  AgreementEmail,
+  agreementEmailSubject,
+} from '../email/templates/agreement'
 import {
   getConfiguredAgreementDraftForMerchantType,
   getMerchantPortalSettings,
@@ -329,7 +332,7 @@ export async function sendAgreementToClient(
   const emailResult = await sendEmail({
     to: recipient.email,
     ...extraRecipients,
-    subject: `AssanPay Agreement for ${caseRow.merchantName}`,
+    subject: agreementEmailSubject(caseRow.merchantName),
     template: 'agreement',
     react: AgreementEmail({
       merchantName: caseRow.merchantName,

@@ -4,7 +4,10 @@ import { getDb } from '../../db/client'
 import { caseHistory, cases, merchants, queues, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { sendEmail } from '../email/email.service'
-import { LiveActivationEmail } from '../email/templates/live-activation'
+import {
+  LiveActivationEmail,
+  liveActivationEmailSubject,
+} from '../email/templates/live-activation'
 import {
   getLimitsAndMdrSettings,
   getMerchantPortalSettings,
@@ -188,7 +191,7 @@ export async function sendLiveActivationEmail(
   const emailResult = await sendEmail({
     to: recipient.email,
     ...extraRecipients,
-    subject: `AssanPay account is live for ${caseRow.merchantName}`,
+    subject: liveActivationEmailSubject(caseRow.merchantName),
     template: 'live-activation',
     react: LiveActivationEmail({
       merchantName: caseRow.merchantName,

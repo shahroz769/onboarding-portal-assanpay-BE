@@ -104,3 +104,7 @@ export function LiveActivationEmail({
     </EmailShell>
   )
 }
+
+export function liveActivationEmailSubject(merchantName: string) {
+  return `AssanPay account is live for ${merchantName}`
+}

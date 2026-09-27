@@ -113,6 +113,9 @@ export function DocumentResubmissionEmail({
   )
 }
 
+export const DOCUMENT_RESUBMISSION_EMAIL_SUBJECT =
+  'Action required to update your onboarding submission'
+
 DocumentResubmissionEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   ownerName: 'Jane Owner',

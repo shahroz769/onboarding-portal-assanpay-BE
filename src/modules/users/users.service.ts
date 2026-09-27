@@ -38,7 +38,10 @@ import {
   keysetCursorExpression,
 } from '../cases/case-cursor'
 import { sendEmail } from '../email/email.service'
-import { UserPasswordEmail } from '../email/templates/user-password'
+import {
+  UserPasswordEmail,
+  userPasswordEmailSubject,
+} from '../email/templates/user-password'
 import type { ListUsersQuery } from './users.schemas'
 
 type QueueAccessInput = {
@@ -329,10 +332,7 @@ async function sendPasswordEmail(input: {
 
   const result = await sendEmail({
     to: input.email,
-    subject:
-      input.purpose === 'invite'
-        ? 'Set up your AssanPay onboarding portal account'
-        : 'Reset your AssanPay onboarding portal password',
+    subject: userPasswordEmailSubject(input.purpose),
     template: `user-password-${input.purpose}`,
     react: UserPasswordEmail({
       name: input.name,

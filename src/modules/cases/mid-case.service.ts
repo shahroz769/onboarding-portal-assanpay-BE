@@ -4,7 +4,10 @@ import { getDb } from '../../db/client'
 import { caseHistory, cases, merchants, queues } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { sendEmail } from '../email/email.service'
-import { MidCreationEmail } from '../email/templates/mid-creation'
+import {
+  MidCreationEmail,
+  midCreationEmailSubject,
+} from '../email/templates/mid-creation'
 import {
   getLimitsAndMdrSettings,
   getMerchantPortalSettings,
@@ -223,7 +226,7 @@ export async function sendMidCreationCredentialsEmail(
   const emailResult = await sendEmail({
     to: recipient.email,
     ...extraRecipients,
-    subject: `AssanPay merchant portal credentials for ${caseRow.merchantName}`,
+    subject: midCreationEmailSubject(caseRow.merchantName),
     template: 'mid-creation',
     react: MidCreationEmail({
       merchantName: caseRow.merchantName,

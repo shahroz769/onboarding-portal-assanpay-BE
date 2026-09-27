@@ -5,6 +5,7 @@ import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
 import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
+import { getEmailTemplatePreview } from '../email/email-template-catalog'
 import {
   getConfigurationOverview,
   getEmailRecipientSettings,
@@ -140,6 +141,10 @@ configurationRoutes.put(
 
 configurationRoutes.get('/email-recipients', async (c) => {
   return c.json(await getEmailRecipientSettings())
+})
+
+configurationRoutes.get('/email-templates/:key', async (c) => {
+  return c.json(await getEmailTemplatePreview(c.req.param('key')))
 })
 
 configurationRoutes.put(

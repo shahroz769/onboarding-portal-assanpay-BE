@@ -57,6 +57,14 @@ export function UserPasswordEmail({
   )
 }
 
+export function userPasswordEmailSubject(
+  purpose: UserPasswordEmailProps['purpose'],
+) {
+  return purpose === 'invite'
+    ? 'Set up your AssanPay onboarding portal account'
+    : 'Reset your AssanPay onboarding portal password'
+}
+
 UserPasswordEmail.PreviewProps = {
   name: 'Jane Owner',
   actionUrl: 'https://app.example.com/auth/invite/abc123',

@@ -64,6 +64,10 @@ import { validateEmailProofFile } from './case-upload-validation'
 import { loadAgreementCase } from './agreement-case.service'
 import { loadLiveCase } from './live-case.service'
 import { loadMidCreationCase } from './mid-case.service'
+import { agreementEmailSubject } from '../email/templates/agreement'
+import { DOCUMENT_RESUBMISSION_EMAIL_SUBJECT } from '../email/templates/document-resubmission'
+import { liveActivationEmailSubject } from '../email/templates/live-activation'
+import { midCreationEmailSubject } from '../email/templates/mid-creation'
 
 /** Who else a manual (Gmail) email should go to. */
 export type ManualEmailRecipients = {
@@ -177,7 +181,7 @@ export async function getResubmissionEmailPreview(
   const issued = await issueToken(caseId, userId)
 
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
-  const subject = 'Action required to update your onboarding submission'
+  const subject = DOCUMENT_RESUBMISSION_EMAIL_SUBJECT
   const body = buildResubmissionEmailBody({
     merchantName: row.merchantName,
     ownerName: row.merchantOwnerName,
@@ -478,7 +482,7 @@ export async function getAgreementEmailPreview(
   }
 
   const remarks = input.remarks?.trim() || null
-  const subject = `AssanPay Agreement for ${caseRow.merchantName}`
+  const subject = agreementEmailSubject(caseRow.merchantName)
   const body = buildAgreementEmailBody({
     merchantName: caseRow.merchantName,
     ownerName: caseRow.merchantOwnerName,
@@ -663,7 +667,7 @@ export async function getMidCreationEmailPreview(
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
-  const subject = `AssanPay merchant portal credentials for ${caseRow.merchantName}`
+  const subject = midCreationEmailSubject(caseRow.merchantName)
   const portalPassword = buildPortalPassword(
     credentials.email,
     caseRow.merchantNumber,
@@ -802,7 +806,7 @@ export async function getLiveActivationEmailPreview(
     },
     input.recipientEmailType,
   )
-  const subject = `AssanPay account is live for ${caseRow.merchantName}`
+  const subject = liveActivationEmailSubject(caseRow.merchantName)
 
   return {
     recipient: recipient.email,

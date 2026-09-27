@@ -107,6 +107,10 @@ export function AgreementEmail({
   )
 }
 
+export function agreementEmailSubject(merchantName: string) {
+  return `AssanPay Agreement for ${merchantName}`
+}
+
 AgreementEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   ownerName: 'Jane Owner',
