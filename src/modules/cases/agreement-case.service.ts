@@ -53,7 +53,7 @@ export type AgreementEmailResult = {
 export async function loadAgreementCase(
   caseId: string,
   userId: string,
-  options: { allowAwaitingClient?: boolean } = {},
+  options: { allowAwaitingMerchant?: boolean } = {},
 ) {
   const db = getDb()
   const [row] = await db
@@ -93,7 +93,7 @@ export async function loadAgreementCase(
   await assertCanWorkCase(caseId, userId)
   if (
     row.status !== 'working' &&
-    !(options.allowAwaitingClient && row.status === 'awaiting_client')
+    !(options.allowAwaitingMerchant && row.status === 'awaiting_merchant')
   ) {
     throw new AppError(400, 'The case must be in the working stage.')
   }
@@ -306,20 +306,20 @@ export async function sendAgreementToClient(
   const awaitingStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseRow.queueId),
-      eq(queueStages.slug, 'awaiting_client'),
+      eq(queueStages.slug, 'awaiting_merchant'),
     ),
   })
   if (!awaitingStage) {
     throw new AppError(
       500,
-      'No awaiting_client stage configured for this queue.',
+      'No awaiting_merchant stage configured for this queue.',
     )
   }
 
   const [reservedCase] = await db
     .update(cases)
     .set({
-      status: 'awaiting_client',
+      status: 'awaiting_merchant',
       currentStageId: awaitingStage.id,
       updatedAt: new Date(),
     })
@@ -420,9 +420,9 @@ export async function uploadReceivedAgreement(
 ) {
   const db = getDb()
   const caseRow = await loadAgreementCase(caseId, userId, {
-    allowAwaitingClient: true,
+    allowAwaitingMerchant: true,
   })
-  if (caseRow.status !== 'awaiting_client') {
+  if (caseRow.status !== 'awaiting_merchant') {
     throw new AppError(
       400,
       'The case must be awaiting the signed physical agreement.',
@@ -521,7 +521,7 @@ export async function uploadReceivedAgreement(
         currentStageId: workingStage.id,
         updatedAt: now,
       })
-      .where(and(eq(cases.id, caseId), eq(cases.status, 'awaiting_client')))
+      .where(and(eq(cases.id, caseId), eq(cases.status, 'awaiting_merchant')))
 
     await tx.insert(caseHistory).values({
       caseId,

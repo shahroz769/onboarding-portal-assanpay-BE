@@ -21,7 +21,6 @@ type QueueStageSeedInput = {
   id: string
   name: string
   slug: string
-  qcEnabled: boolean
   workflowType: QueueWorkflowType
 }
 
@@ -32,29 +31,16 @@ function getStatusForStage(
   const normalizedName = stage.name.trim().toLowerCase()
 
   if (
-    normalizedSlug === 'awaiting_client' ||
-    normalizedSlug === 'awaiting-client' ||
+    normalizedSlug === 'awaiting_merchant' ||
+    normalizedSlug === 'awaiting-merchant' ||
     normalizedName === 'awaiting client' ||
     normalizedName === 'awaiting merchant'
   ) {
-    return 'awaiting_client'
-  }
-
-  if (
-    normalizedSlug === 'pending' ||
-    normalizedSlug.includes('pending') ||
-    normalizedName === 'pending' ||
-    normalizedName.includes('pending')
-  ) {
-    return 'pending'
+    return 'awaiting_merchant'
   }
 
   if (normalizedSlug === 'working' || normalizedName === 'working') {
     return 'working'
-  }
-
-  if (normalizedSlug === 'error' || normalizedName === 'error') {
-    return 'error'
   }
 
   switch (stage.category) {
@@ -62,10 +48,6 @@ function getStatusForStage(
       return 'new'
     case 'in_progress':
       return 'working'
-    case 'qc':
-      return 'qc'
-    case 'error':
-      return 'error'
     case 'closed':
       return 'closed'
   }
@@ -209,13 +191,8 @@ export function getStageCategoryFromStatus(
     case 'new':
       return 'new'
     case 'working':
-    case 'pending':
-    case 'awaiting_client':
+    case 'awaiting_merchant':
       return 'in_progress'
-    case 'qc':
-      return 'qc'
-    case 'error':
-      return 'error'
     case 'closed':
       return 'closed'
   }

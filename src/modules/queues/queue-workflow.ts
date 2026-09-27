@@ -46,7 +46,7 @@ export type StageDefinitionInput = {
   name: string
   slug: string
   order: number
-  category: 'new' | 'in_progress' | 'qc' | 'error' | 'closed'
+  category: 'new' | 'in_progress' | 'closed'
   isActive?: boolean
   capabilities?: Record<string, unknown> | null
 }
@@ -159,7 +159,7 @@ export function getStageTemplateDefinitions(
         },
         {
           name: 'Awaiting Merchant',
-          slug: 'awaiting_client',
+          slug: 'awaiting_merchant',
           order: 3,
           category: 'in_progress',
           isActive: true,
@@ -181,21 +181,4 @@ export function getStageTemplateDefinitions(
     case 'sub_merchant_form':
       return baseNewWorkingClosed
   }
-}
-
-export function resolveStageDefinitionsForCreate(input: {
-  workflowType: QueueWorkflowType
-  stageTemplate?: QueueStageTemplateName
-  stages?: StageDefinitionInput[]
-}): StageDefinitionInput[] {
-  if (input.stages && input.stages.length > 0) {
-    return input.stages.map((stage) => ({
-      ...stage,
-      isActive: stage.isActive !== false,
-      capabilities: stage.capabilities ?? null,
-    }))
-  }
-
-  const template = input.stageTemplate ?? input.workflowType
-  return getStageTemplateDefinitions(template)
 }

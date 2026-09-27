@@ -116,7 +116,6 @@ Error responses:
     "slug": "documents-review",
     "workflowType": "document_review",
     "lifecycle": "active",
-    "qcEnabled": false,
     "slaHours": 24
   }
 }

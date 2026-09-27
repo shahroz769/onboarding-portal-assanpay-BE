@@ -10,7 +10,6 @@ import {
   isNull,
   lt,
   ne,
-  notInArray,
   or,
   sql,
   aliasedTable,
@@ -786,7 +785,7 @@ async function closeOpenCasesAsUnsuccessful(
     .where(
       and(
         inArray(cases.merchantId, input.merchantIds),
-        notInArray(cases.status, ['closed', 'error']),
+        ne(cases.status, 'closed'),
       ),
     )
     .returning({ id: cases.id })
@@ -1105,7 +1104,7 @@ function isMerchantCaseOpen(
   status: string,
   stageCategory: string | null,
 ) {
-  return status !== 'closed' && status !== 'error' && stageCategory !== 'closed'
+  return status !== 'closed' && stageCategory !== 'closed'
 }
 
 function withCaseSla<

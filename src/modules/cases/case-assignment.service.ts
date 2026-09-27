@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, notInArray } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import { caseHistory, cases, queues, queueStages, users } from '../../db/schema'
@@ -60,7 +60,6 @@ export async function bulkAssignCases(
     const closedCase = existingCases.find(
       (caseRecord) =>
         caseRecord.status === 'closed' ||
-        caseRecord.status === 'error' ||
         caseRecord.currentStageCategory === 'closed' ||
         Boolean(caseRecord.closeOutcome) ||
         Boolean(caseRecord.closedAt),
@@ -306,7 +305,6 @@ export async function assignCase(
 
   if (
     existingCase.status === 'closed' ||
-    existingCase.status === 'error' ||
     existingCase.currentStageCategory === 'closed' ||
     Boolean(existingCase.closeOutcome) ||
     Boolean(existingCase.closedAt)
@@ -464,7 +462,6 @@ export async function updateCasePriority(
 
   if (
     existing.status === 'closed' ||
-    existing.status === 'error' ||
     existing.closeOutcome != null ||
     existing.closedAt != null
   ) {
@@ -477,7 +474,7 @@ export async function updateCasePriority(
     .where(
       and(
         eq(cases.id, caseId),
-        notInArray(cases.status, ['closed', 'error']),
+        ne(cases.status, 'closed'),
         isNull(cases.closeOutcome),
         isNull(cases.closedAt),
       ),
@@ -529,7 +526,6 @@ export async function takeOwnership(caseId: string, userId: string) {
 
   if (
     caseData.status === 'closed' ||
-    caseData.status === 'error' ||
     Boolean(caseData.closeOutcome) ||
     Boolean(caseData.closedAt)
   ) {

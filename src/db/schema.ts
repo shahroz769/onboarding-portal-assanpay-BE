@@ -164,11 +164,8 @@ export const users = pgTable(
 export const caseStatusEnum = pgEnum('case_status', [
   'new',
   'working',
-  'pending',
-  'qc',
-  'error',
   'closed',
-  'awaiting_client',
+  'awaiting_merchant',
 ])
 
 export const queueWorkflowTypeEnum = pgEnum('queue_workflow_type', [
@@ -201,7 +198,6 @@ export const queues = pgTable(
       .notNull(),
     lifecycle: queueLifecycleEnum('lifecycle').default('inactive').notNull(),
     revision: integer('revision').default(1).notNull(),
-    qcEnabled: boolean('qc_enabled').default(false).notNull(),
     slaHours: integer('sla_hours').default(24).notNull(),
     /** Kept in sync with lifecycle: active ↔ true, draft/inactive ↔ false. */
     isActive: boolean('is_active').default(true).notNull(),
@@ -336,8 +332,6 @@ export const subMerchantDraftTemplates = pgTable(
 export const stageCategoryEnum = pgEnum('stage_category', [
   'new',
   'in_progress',
-  'qc',
-  'error',
   'closed',
 ])
 
@@ -744,7 +738,7 @@ export const cases = pgTable(
     ),
     casesOpenMerchantIdx: index('cases_open_merchant_idx')
       .on(table.merchantId, table.queueId)
-      .where(sql`${table.status} NOT IN ('closed', 'error')`),
+      .where(sql`${table.status} <> 'closed'`),
     casesSuccessfulFlowIdx: index('cases_successful_flow_idx')
       .on(table.merchantId, table.queueId)
       .where(

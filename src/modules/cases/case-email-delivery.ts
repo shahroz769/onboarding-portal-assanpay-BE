@@ -85,7 +85,7 @@ export async function getCaseEmailDelivery(
             recipient: latest.toEmail,
             cc: latest.ccEmails,
             status: latest.status,
-            awaitingMerchant: caseRow?.status === 'awaiting_client',
+            awaitingMerchant: caseRow?.status === 'awaiting_merchant',
           }),
   }
 }

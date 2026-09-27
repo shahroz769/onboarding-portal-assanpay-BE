@@ -92,7 +92,7 @@ export async function saveFieldReviews(
   }
   await assertCanWorkCase(caseId, userId)
 
-  if (caseData.status === 'awaiting_client') {
+  if (caseData.status === 'awaiting_merchant') {
     throw new AppError(
       400,
       'Rejection changes are locked while awaiting merchant resubmission.',
@@ -607,7 +607,7 @@ export async function sendForResubmission(
     rejectionReason: review.remarks,
   }))
 
-  // 4. Ensure queue stages are fully seeded, then resolve awaiting_client
+  // 4. Ensure queue stages are fully seeded, then resolve awaiting_merchant
   const stages = await ensureQueueStages(db, {
     id: row.queueId,
     name:
@@ -615,16 +615,15 @@ export async function sendForResubmission(
         ? 'Documents Review'
         : row.queueSlug,
     slug: row.queueSlug,
-    qcEnabled: false,
     workflowType: row.workflowType ?? 'document_review',
   })
   const awaitingStage =
-    stages.find((stage) => stage.slug === 'awaiting_client') ?? null
+    stages.find((stage) => stage.slug === 'awaiting_merchant') ?? null
 
   if (!awaitingStage) {
     throw new AppError(
       500,
-      'No awaiting_client stage configured for this queue.',
+      'No awaiting_merchant stage configured for this queue.',
     )
   }
 
@@ -632,7 +631,7 @@ export async function sendForResubmission(
   const [reservedCase] = await db
     .update(cases)
     .set({
-      status: 'awaiting_client',
+      status: 'awaiting_merchant',
       currentStageId: awaitingStage.id,
       updatedAt: reservedAt,
     })
@@ -705,7 +704,7 @@ export async function sendForResubmission(
     }
   }
 
-  // 7b. Email sent — record the rejection batch and move case to awaiting_client
+  // 7b. Email sent — record the rejection batch and move case to awaiting_merchant
   const sentAt = new Date()
   await db.transaction(async (tx) => {
     await tx.insert(caseHistory).values({
@@ -782,7 +781,7 @@ export async function regenerateResubmissionLink(
     )
   }
   await assertCanWorkCase(caseId, userId)
-  if (row.status !== 'awaiting_client') {
+  if (row.status !== 'awaiting_merchant') {
     throw new AppError(
       400,
       'The case must be awaiting the merchant to regenerate its resubmission link.',

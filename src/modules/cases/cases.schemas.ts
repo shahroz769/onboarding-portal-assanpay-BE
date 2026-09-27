@@ -8,11 +8,8 @@ import {
 export const caseStatusValues = [
   'new',
   'working',
-  'pending',
-  'qc',
-  'error',
   'closed',
-  'awaiting_client',
+  'awaiting_merchant',
 ] as const
 export type CaseStatusValue = (typeof caseStatusValues)[number]
 
@@ -25,42 +22,24 @@ export type CaseListStatusFilterValue =
 
 const caseListStatusFilterValueSet = new Set<string>(caseListStatusFilterValues)
 
-// Ordered index for transition validation
-const statusOrder: Record<CaseStatusValue, number> = {
-  new: 0,
-  working: 1,
-  pending: 2,
-  qc: 3,
-  error: 4,
-  closed: 5,
-  awaiting_client: 6,
+// Status transitions that may be requested directly. Working and Awaiting
+// Merchant can move back and forth for the resubmission loop.
+const allowedStatusTransitions: Record<
+  CaseStatusValue,
+  readonly CaseStatusValue[]
+> = {
+  new: ['working', 'awaiting_merchant', 'closed'],
+  working: ['new', 'awaiting_merchant', 'closed'],
+  awaiting_merchant: ['working', 'closed'],
+  closed: ['awaiting_merchant'],
 }
 
-/**
- * Validates that a status transition is allowed.
- * Forward transitions: any forward step is allowed.
- * Backward transitions: only one step back is allowed.
- * Special case: working <-> awaiting_client is always allowed (resubmission loop).
- */
+/** Validates that a status transition is allowed. */
 export function isValidStatusTransition(
   current: CaseStatusValue,
   next: CaseStatusValue,
 ): boolean {
-  if (current === next) return false
-
-  if (current === 'working' && next === 'awaiting_client') return true
-  if (current === 'awaiting_client' && next === 'working') return true
-
-  const currentIdx = statusOrder[current]
-  const nextIdx = statusOrder[next]
-
-  // Forward: any jump forward is allowed
-  if (nextIdx > currentIdx) return true
-
-  // Backward: only one step back is allowed
-  if (currentIdx - nextIdx === 1) return true
-
-  return false
+  return allowedStatusTransitions[current].includes(next)
 }
 
 // ─── Request Schemas ────────────────────────────────────────────────────────
@@ -139,8 +118,6 @@ export type ListCasesQuery = z.infer<typeof listCasesQuerySchema>
 export const stageCategoryValues = [
   'new',
   'in_progress',
-  'qc',
-  'error',
   'closed',
 ] as const
 export type StageCategoryValue = (typeof stageCategoryValues)[number]

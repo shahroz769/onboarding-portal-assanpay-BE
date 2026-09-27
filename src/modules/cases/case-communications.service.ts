@@ -124,7 +124,7 @@ export async function getResubmissionEmailPreview(
     throw new AppError(403, 'Only the case owner can send for resubmission.')
   }
   await assertCanWorkCase(caseId, userId)
-  if (row.status !== 'working' && row.status !== 'awaiting_client') {
+  if (row.status !== 'working' && row.status !== 'awaiting_merchant') {
     throw new AppError(
       400,
       'The case must be in the working or awaiting-merchant stage to send for resubmission.',
@@ -257,7 +257,7 @@ export async function confirmResubmissionEmailManual(
   await assertCanWorkCase(caseId, userId)
   if (
     row.status !== 'working' &&
-    !(channel === 'whatsapp' && row.status === 'awaiting_client')
+    !(channel === 'whatsapp' && row.status === 'awaiting_merchant')
   )
     throw new AppError(400, 'The case must be in the working stage.')
   const recipient = resolveMerchantEmailRecipient(
@@ -322,18 +322,17 @@ export async function confirmResubmissionEmailManual(
     id: row.queueId,
     name: 'Documents Review',
     slug: row.queueSlug,
-    qcEnabled: false,
     workflowType: row.workflowType ?? 'document_review',
   })
-  const awaitingStage = stages.find((s) => s.slug === 'awaiting_client') ?? null
+  const awaitingStage = stages.find((s) => s.slug === 'awaiting_merchant') ?? null
   if (!awaitingStage)
-    throw new AppError(500, 'No awaiting_client stage configured.')
+    throw new AppError(500, 'No awaiting_merchant stage configured.')
 
   if (row.status === 'working') {
     const [reservedCase] = await db
       .update(cases)
       .set({
-        status: 'awaiting_client',
+        status: 'awaiting_merchant',
         currentStageId: awaitingStage.id,
         updatedAt: new Date(),
       })
@@ -564,16 +563,16 @@ export async function confirmAgreementEmailManual(
   const awaitingStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseRow.queueId),
-      eq(queueStages.slug, 'awaiting_client'),
+      eq(queueStages.slug, 'awaiting_merchant'),
     ),
   })
   if (!awaitingStage)
-    throw new AppError(500, 'No awaiting_client stage configured.')
+    throw new AppError(500, 'No awaiting_merchant stage configured.')
 
   const [reservedCase] = await db
     .update(cases)
     .set({
-      status: 'awaiting_client',
+      status: 'awaiting_merchant',
       currentStageId: awaitingStage.id,
       updatedAt: new Date(),
     })

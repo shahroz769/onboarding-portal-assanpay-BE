@@ -32,23 +32,14 @@ import type {
 const CASE_STATUSES = [
   'new',
   'working',
-  'pending',
-  'qc',
-  'error',
   'closed',
-  'awaiting_client',
+  'awaiting_merchant',
 ] as const
 
 const MERCHANT_STATUSES = ['pending', 'testing', 'live', 'terminated'] as const
 
-// Open cases mirror the "My Open Cases" definition: not closed and not error.
-const OPEN_CASE_STATUSES = [
-  'new',
-  'working',
-  'pending',
-  'qc',
-  'awaiting_client',
-]
+// Open cases mirror the "My Open Cases" definition: not closed.
+const OPEN_CASE_STATUSES = ['new', 'working', 'awaiting_merchant']
 
 const MAX_TREND_DAYS = 120
 const DASHBOARD_TIME_ZONE = sql.raw("'Asia/Karachi'")
@@ -525,7 +516,7 @@ export async function listPendingPortalMidValues(
 function awaitingPhysicalAgreementConditions() {
   return [
     eq(queues.workflowType, 'agreement'),
-    eq(cases.status, 'awaiting_client'),
+    eq(cases.status, 'awaiting_merchant'),
     eq(agreementCaseDetails.emailStatus, 'sent'),
     isNull(agreementCaseDetails.receivedAgreementFileId),
     isNull(merchants.deletedAt),
@@ -728,7 +719,7 @@ export async function getDashboard(query: DashboardQuery) {
             sql`count(*) filter (where ${cases.slaBreached} is not null)`,
           ),
           openOverSla: int(
-            sql`count(*) filter (where ${cases.status} not in ('closed','error') and now() > ${cases.createdAt} + (${queues.slaHours} * interval '1 hour'))`,
+            sql`count(*) filter (where ${cases.status} <> 'closed' and now() > ${cases.createdAt} + (${queues.slaHours} * interval '1 hour'))`,
           ),
         })
         .from(cases)
@@ -902,11 +893,8 @@ export async function getDashboard(query: DashboardQuery) {
       open: openCases,
       new: caseStatusMap.get('new') ?? 0,
       working: caseStatusMap.get('working') ?? 0,
-      pending: caseStatusMap.get('pending') ?? 0,
-      qc: caseStatusMap.get('qc') ?? 0,
-      error: caseStatusMap.get('error') ?? 0,
       closed: caseStatusMap.get('closed') ?? 0,
-      awaitingClient: caseStatusMap.get('awaiting_client') ?? 0,
+      awaitingMerchant: caseStatusMap.get('awaiting_merchant') ?? 0,
       newInRange: caseRange.newInRange,
       closedInRange: caseRange.closedInRange,
       slaBreached: slaSummary.breached,

@@ -464,7 +464,6 @@ async function createConfiguredCase(
       slug: true,
       workflowType: true,
       lifecycle: true,
-      qcEnabled: true,
       isActive: true,
     },
   })
@@ -491,7 +490,6 @@ async function createConfiguredCase(
     id: queue.id,
     name: queue.name,
     slug: queue.slug,
-    qcEnabled: queue.qcEnabled,
     workflowType: queue.workflowType,
   })
   const initialStage = stages[0]

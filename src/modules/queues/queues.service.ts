@@ -5,29 +5,19 @@ import { cases, queueCaseSequences, queues, queueStages } from '../../db/schema'
 import type { Queue, QueueStage } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import {
-  getStageTemplateDefinitions,
   isActiveToLifecycle,
   lifecycleToIsActive,
-  resolveStageDefinitionsForCreate,
   validateStageDefinitions,
   type QueueActivationIssue,
   type QueueLifecycle,
-  type StageDefinitionInput,
 } from './queue-workflow'
 import type {
-  CreateQueueInput,
-  CreateQueueStageInput,
-  DeactivateQueueStageInput,
-  ReorderQueueStagesInput,
   UpdateQueueInput,
   UpdateQueueSlaInput,
-  UpdateQueueStageInput,
   UpdateQueueStatusInput,
 } from './queues.schemas'
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0]
-
-const STAGE_REORDER_PARKING_OFFSET = 1_000_000
 
 function mapQueueDto(queue: Queue, stages?: QueueStage[]) {
   return {
@@ -38,7 +28,6 @@ function mapQueueDto(queue: Queue, stages?: QueueStage[]) {
     workflowType: queue.workflowType,
     lifecycle: queue.lifecycle,
     revision: queue.revision,
-    qcEnabled: queue.qcEnabled,
     slaHours: queue.slaHours,
     isActive: queue.isActive,
     createdAt: queue.createdAt,
@@ -86,17 +75,6 @@ async function queueHasCases(
   return Number(row?.total ?? 0) > 0
 }
 
-async function stageIsReferenced(
-  db: Tx | ReturnType<typeof getDb>,
-  stageId: string,
-) {
-  const [row] = await db
-    .select({ total: count() })
-    .from(cases)
-    .where(eq(cases.currentStageId, stageId))
-  return Number(row?.total ?? 0) > 0
-}
-
 async function bumpQueueRevision(
   tx: Tx,
   queueId: string,
@@ -123,18 +101,6 @@ async function bumpQueueRevision(
   }
 
   return bumped
-}
-
-function assertValidStagesOrThrow(
-  stages: StageDefinitionInput[],
-  statusCode: 409 | 422 = 422,
-) {
-  const issues = validateStageDefinitions(stages)
-  if (issues.length > 0) {
-    throw new AppError(statusCode, 'Queue stage definition is invalid.', {
-      issues,
-    })
-  }
 }
 
 export async function evaluateQueueActivationReadiness(
@@ -231,7 +197,6 @@ export async function listQueues(options: { includeInactive?: boolean } = {}) {
       workflowType: queues.workflowType,
       lifecycle: queues.lifecycle,
       revision: queues.revision,
-      qcEnabled: queues.qcEnabled,
       slaHours: queues.slaHours,
       isActive: queues.isActive,
       createdAt: queues.createdAt,
@@ -262,67 +227,6 @@ export async function getQueueDetail(id: string) {
     ...mapQueueDto(queue, stages),
     activation: readiness,
   }
-}
-
-export async function createQueue(input: CreateQueueInput) {
-  if (input.workflowType === 'physical_agreement') {
-    throw new AppError(400, 'The Physical Agreement workflow has been retired.')
-  }
-
-  const db = getDb()
-  const stageDefinitions = resolveStageDefinitionsForCreate({
-    workflowType: input.workflowType,
-    stageTemplate: input.stageTemplate,
-    stages: input.stages,
-  })
-
-  assertValidStagesOrThrow(stageDefinitions)
-
-  const lifecycle = input.lifecycle ?? 'draft'
-  const isActive = lifecycleToIsActive(lifecycle)
-
-  return db.transaction(async (tx) => {
-    const [created] = await tx
-      .insert(queues)
-      .values({
-        name: input.name,
-        slug: input.slug,
-        prefix: input.prefix,
-        workflowType: input.workflowType,
-        lifecycle,
-        revision: 1,
-        qcEnabled: input.qcEnabled ?? false,
-        slaHours: input.slaHours ?? 24,
-        isActive,
-      })
-      .returning()
-
-    if (!created) {
-      throw new AppError(500, 'Failed to create queue.')
-    }
-
-    await tx.insert(queueCaseSequences).values({
-      queueId: created.id,
-      lastNumber: 0,
-    })
-
-    const insertedStages = await tx
-      .insert(queueStages)
-      .values(
-        stageDefinitions.map((stage) => ({
-          queueId: created.id,
-          name: stage.name,
-          slug: stage.slug,
-          order: stage.order,
-          category: stage.category,
-          isActive: stage.isActive !== false,
-          capabilities: stage.capabilities ?? null,
-        })),
-      )
-      .returning()
-
-    return mapQueueDto(created, insertedStages)
-  })
 }
 
 export async function updateQueue(id: string, input: UpdateQueueInput) {
@@ -370,9 +274,7 @@ export async function updateQueue(id: string, input: UpdateQueueInput) {
     }
 
     if (nextLifecycle === 'active') {
-      const candidateStages =
-        input.stages ??
-        (await loadQueueStages(tx, id)).map((stage) => ({
+      const candidateStages = (await loadQueueStages(tx, id)).map((stage) => ({
           name: stage.name,
           slug: stage.slug,
           order: stage.order,
@@ -408,71 +310,6 @@ export async function updateQueue(id: string, input: UpdateQueueInput) {
       }
     }
 
-    if (input.stages) {
-      assertValidStagesOrThrow(input.stages)
-      const currentStages = await loadQueueStages(tx, id)
-      const incomingBySlug = new Map(
-        input.stages.map((stage) => [stage.slug, stage]),
-      )
-
-      for (const current of currentStages) {
-        if (!incomingBySlug.has(current.slug)) {
-          if (await stageIsReferenced(tx, current.id)) {
-            throw new AppError(
-              409,
-              `Cannot remove stage "${current.slug}" because cases reference it. Deactivate it instead.`,
-            )
-          }
-        }
-      }
-
-      // Replace unreferenced stages transactionally: deactivate missing,
-      // update existing by slug, insert new.
-      for (const current of currentStages) {
-        const next = incomingBySlug.get(current.slug)
-        if (!next) {
-          if (await stageIsReferenced(tx, current.id)) {
-            await tx
-              .update(queueStages)
-              .set({ isActive: false })
-              .where(eq(queueStages.id, current.id))
-          } else {
-            await tx.delete(queueStages).where(eq(queueStages.id, current.id))
-          }
-          continue
-        }
-
-        await tx
-          .update(queueStages)
-          .set({
-            name: next.name,
-            order: next.order,
-            category: next.category,
-            isActive: next.isActive !== false,
-            capabilities: next.capabilities ?? null,
-          })
-          .where(eq(queueStages.id, current.id))
-      }
-
-      const existingSlugs = new Set(currentStages.map((stage) => stage.slug))
-      const toInsert = input.stages.filter(
-        (stage) => !existingSlugs.has(stage.slug),
-      )
-      if (toInsert.length > 0) {
-        await tx.insert(queueStages).values(
-          toInsert.map((stage) => ({
-            queueId: id,
-            name: stage.name,
-            slug: stage.slug,
-            order: stage.order,
-            category: stage.category,
-            isActive: stage.isActive !== false,
-            capabilities: stage.capabilities ?? null,
-          })),
-        )
-      }
-    }
-
     const bumped = await bumpQueueRevision(tx, id, input.revision)
 
     const [updated] = await tx
@@ -483,7 +320,6 @@ export async function updateQueue(id: string, input: UpdateQueueInput) {
         workflowType: input.workflowType ?? bumped.workflowType,
         lifecycle: nextLifecycle,
         isActive: lifecycleToIsActive(nextLifecycle),
-        qcEnabled: input.qcEnabled ?? bumped.qcEnabled,
         slaHours: input.slaHours ?? bumped.slaHours,
       })
       .where(eq(queues.id, id))
@@ -570,278 +406,4 @@ export async function updateQueueSla(id: string, input: UpdateQueueSlaInput) {
 
     return mapQueueDto(updated)
   })
-}
-
-export async function createQueueStage(
-  queueId: string,
-  input: CreateQueueStageInput,
-) {
-  const db = getDb()
-  return db.transaction(async (tx) => {
-    const existing = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    if (!existing) {
-      throw new AppError(404, 'Queue not found.')
-    }
-
-    const stages = await loadQueueStages(tx, queueId)
-    const nextStages: StageDefinitionInput[] = [
-      ...stages.map((stage) => ({
-        name: stage.name,
-        slug: stage.slug,
-        order: stage.order,
-        category: stage.category,
-        isActive: stage.isActive,
-        capabilities: stage.capabilities,
-      })),
-      {
-        name: input.name,
-        slug: input.slug,
-        order: input.order,
-        category: input.category,
-        isActive: input.isActive !== false,
-        capabilities: input.capabilities ?? null,
-      },
-    ]
-    assertValidStagesOrThrow(nextStages)
-
-    await bumpQueueRevision(tx, queueId, input.revision)
-
-    const [created] = await tx
-      .insert(queueStages)
-      .values({
-        queueId,
-        name: input.name,
-        slug: input.slug,
-        order: input.order,
-        category: input.category,
-        isActive: input.isActive !== false,
-        capabilities: input.capabilities ?? null,
-      })
-      .returning()
-
-    if (!created) {
-      throw new AppError(500, 'Failed to create stage.')
-    }
-
-    const queue = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    const allStages = await loadQueueStages(tx, queueId)
-    return mapQueueDto(queue!, allStages)
-  })
-}
-
-export async function updateQueueStage(
-  queueId: string,
-  stageId: string,
-  input: UpdateQueueStageInput,
-) {
-  const db = getDb()
-  return db.transaction(async (tx) => {
-    const existing = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    if (!existing) {
-      throw new AppError(404, 'Queue not found.')
-    }
-
-    const stage = await tx.query.queueStages.findFirst({
-      where: and(eq(queueStages.id, stageId), eq(queueStages.queueId, queueId)),
-    })
-    if (!stage) {
-      throw new AppError(404, 'Stage not found.')
-    }
-
-    const stages = await loadQueueStages(tx, queueId)
-    const nextStages = stages.map((item) =>
-      item.id === stageId
-        ? {
-            name: input.name ?? item.name,
-            slug: input.slug ?? item.slug,
-            order: input.order ?? item.order,
-            category: input.category ?? item.category,
-            isActive: input.isActive ?? item.isActive,
-            capabilities:
-              input.capabilities !== undefined
-                ? input.capabilities
-                : item.capabilities,
-          }
-        : {
-            name: item.name,
-            slug: item.slug,
-            order: item.order,
-            category: item.category,
-            isActive: item.isActive,
-            capabilities: item.capabilities,
-          },
-    )
-    assertValidStagesOrThrow(nextStages)
-
-    await bumpQueueRevision(tx, queueId, input.revision)
-
-    await tx
-      .update(queueStages)
-      .set({
-        name: input.name ?? stage.name,
-        slug: input.slug ?? stage.slug,
-        order: input.order ?? stage.order,
-        category: input.category ?? stage.category,
-        isActive: input.isActive ?? stage.isActive,
-        capabilities:
-          input.capabilities !== undefined
-            ? input.capabilities
-            : stage.capabilities,
-      })
-      .where(eq(queueStages.id, stageId))
-
-    const queue = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    const allStages = await loadQueueStages(tx, queueId)
-    return mapQueueDto(queue!, allStages)
-  })
-}
-
-export async function deactivateQueueStage(
-  queueId: string,
-  stageId: string,
-  input: DeactivateQueueStageInput,
-) {
-  return updateQueueStage(queueId, stageId, {
-    revision: input.revision,
-    isActive: false,
-  })
-}
-
-export async function deleteQueueStage(
-  queueId: string,
-  stageId: string,
-  revision: number,
-) {
-  const db = getDb()
-  return db.transaction(async (tx) => {
-    const existing = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    if (!existing) {
-      throw new AppError(404, 'Queue not found.')
-    }
-
-    const stage = await tx.query.queueStages.findFirst({
-      where: and(eq(queueStages.id, stageId), eq(queueStages.queueId, queueId)),
-    })
-    if (!stage) {
-      throw new AppError(404, 'Stage not found.')
-    }
-
-    if (await stageIsReferenced(tx, stageId)) {
-      throw new AppError(
-        409,
-        'Cannot delete a stage referenced by existing cases. Deactivate it instead.',
-      )
-    }
-
-    const remaining = (await loadQueueStages(tx, queueId))
-      .filter((item) => item.id !== stageId)
-      .map((item) => ({
-        name: item.name,
-        slug: item.slug,
-        order: item.order,
-        category: item.category,
-        isActive: item.isActive,
-        capabilities: item.capabilities,
-      }))
-
-    if (remaining.length > 0) {
-      assertValidStagesOrThrow(remaining)
-    } else if (existing.lifecycle === 'active') {
-      throw new AppError(
-        422,
-        'Cannot delete the last stage of an active queue.',
-      )
-    }
-
-    await bumpQueueRevision(tx, queueId, revision)
-    await tx.delete(queueStages).where(eq(queueStages.id, stageId))
-
-    const queue = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    const allStages = await loadQueueStages(tx, queueId)
-    return mapQueueDto(queue!, allStages)
-  })
-}
-
-export async function reorderQueueStages(
-  queueId: string,
-  input: ReorderQueueStagesInput,
-) {
-  const db = getDb()
-  return db.transaction(async (tx) => {
-    const existing = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    if (!existing) {
-      throw new AppError(404, 'Queue not found.')
-    }
-
-    const stages = await loadQueueStages(tx, queueId)
-    if (
-      stages.length !== input.stageIds.length ||
-      new Set(input.stageIds).size !== input.stageIds.length
-    ) {
-      throw new AppError(422, 'Reorder must include every stage exactly once.')
-    }
-
-    const stageById = new Map(stages.map((stage) => [stage.id, stage]))
-    for (const stageId of input.stageIds) {
-      if (!stageById.has(stageId)) {
-        throw new AppError(422, 'Reorder includes an unknown stage.')
-      }
-    }
-
-    await bumpQueueRevision(tx, queueId, input.revision)
-
-    // Two-phase update to avoid unique (queue_id, order) collisions. Stages are
-    // parked above their final range first; negative parking would violate the
-    // queue_stages_order_positive check.
-    await tx
-      .update(queueStages)
-      .set({
-        order: sql`${queueStages.order} + ${STAGE_REORDER_PARKING_OFFSET}`,
-      })
-      .where(eq(queueStages.queueId, queueId))
-    for (let index = 0; index < input.stageIds.length; index += 1) {
-      await tx
-        .update(queueStages)
-        .set({ order: index + 1 })
-        .where(eq(queueStages.id, input.stageIds[index]!))
-    }
-
-    const queue = await tx.query.queues.findFirst({
-      where: eq(queues.id, queueId),
-    })
-    const allStages = await loadQueueStages(tx, queueId)
-    return mapQueueDto(queue!, allStages)
-  })
-}
-
-export function listStageTemplates() {
-  return (
-    [
-      'generic',
-      'document_review',
-      'agreement',
-      'mid',
-      'testing',
-      'wordpress',
-      'live',
-      'sub_merchant_form',
-    ] as const
-  ).map((name) => ({
-    name,
-    stages: getStageTemplateDefinitions(name),
-  }))
 }

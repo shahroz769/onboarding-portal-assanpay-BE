@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray } from 'drizzle-orm'
+import { and, asc, eq, gt } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -160,7 +160,6 @@ export async function advanceStage(caseId: string, userId: string) {
     db.query.queues.findFirst({
       where: eq(queues.id, caseData.queueId),
       columns: {
-        qcEnabled: true,
         slug: true,
         workflowType: true,
         slaHours: true,
@@ -461,18 +460,6 @@ export async function advanceStage(caseId: string, userId: string) {
     }
 
     targetStage = nextStage
-    if (nextStage.category === 'qc' && !queue?.qcEnabled) {
-      const closedStage = await db.query.queueStages.findFirst({
-        where: and(
-          eq(queueStages.queueId, caseData.queueId),
-          eq(queueStages.category, 'closed'),
-        ),
-      })
-      if (!closedStage) {
-        throw new AppError(500, 'No closed stage configured.')
-      }
-      targetStage = closedStage
-    }
   }
 
   const now = new Date()
@@ -593,34 +580,20 @@ export async function closeUnsuccessful(
       caseData.currentStageId,
       caseData.queueId,
     )
-    if (
-      currentStage?.category === 'closed' ||
-      currentStage?.category === 'error'
-    ) {
+    if (currentStage?.category === 'closed') {
       throw new AppError(400, 'Case is already in a terminal stage.')
     }
   }
 
-  const terminalStages = await db.query.queueStages.findMany({
+  const terminalStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseData.queueId),
-      inArray(queueStages.category, ['closed', 'error']),
+      eq(queueStages.category, 'closed'),
     ),
   })
-  const closedStage = terminalStages.find(
-    (stage) => stage.category === 'closed',
-  )
-  const errorStage = terminalStages.find((stage) => stage.category === 'error')
-  const prefersClosedStage =
-    queue != null &&
-    (isQueueWorkflowType(queue, 'document_review') ||
-      isQueueWorkflowType(queue, 'agreement'))
-  const terminalStage = prefersClosedStage
-    ? (closedStage ?? errorStage)
-    : (errorStage ?? closedStage)
 
   if (!terminalStage) {
-    throw new AppError(500, 'No terminal stage configured for this queue.')
+    throw new AppError(500, 'No closed stage configured for this queue.')
   }
 
   const now = new Date()

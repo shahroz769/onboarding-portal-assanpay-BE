@@ -22,9 +22,9 @@ All routes require authentication. Mutations require `super_admin`.
   `sub_merchant_form`).
 - **lifecycle**: `draft` | `active` | `inactive`. API boundary uses lifecycle;
   DB `is_active` remains synced (`active` ↔ true).
-- **revision**: Optimistic concurrency for queue/stage mutations.
-- **stages**: Ordered persisted definitions with stable IDs. Referenced stages
-  may be renamed/deactivated but never hard-deleted while cases reference them.
+- **revision**: Optimistic concurrency for queue mutations.
+- **stages**: Ordered persisted definitions with stable IDs. Read-only through
+  the API; stages are defined and changed by developers through migrations.
 
 ## GET `/api/queues`
 
@@ -33,10 +33,6 @@ List queues. Default: lifecycle `active` only.
 Query:
 
 - `includeInactive=true` — include draft and inactive queues.
-
-## GET `/api/queues/templates`
-
-Return named stage templates used when creating queues.
 
 ## GET `/api/queues/:id`
 
@@ -51,7 +47,6 @@ Queue detail including stages and activation readiness:
   "workflowType": "generic",
   "lifecycle": "draft",
   "revision": 1,
-  "qcEnabled": false,
   "slaHours": 24,
   "isActive": false,
   "stages": [],
@@ -62,37 +57,22 @@ Queue detail including stages and activation readiness:
 }
 ```
 
-## POST `/api/queues`
+## Creating queues and changing stages
 
-Create a draft/inactive queue with a complete stage definition or named template.
-
-Body:
-
-```json
-{
-  "name": "Support",
-  "slug": "support",
-  "prefix": "SP",
-  "workflowType": "generic",
-  "lifecycle": "draft",
-  "slaHours": 24,
-  "stageTemplate": "generic"
-}
-```
-
-Notes:
-
-- Creating with `lifecycle: "active"` is rejected; activate after readiness checks.
-- Unknown workflows still receive stages (template for `workflowType`).
-- Response includes persisted stages.
+There is no API for creating queues or for creating, editing, reordering,
+deactivating, or deleting stages. Developers add new queues and stage changes
+through a forward-only migration in `drizzle/` (with a journal entry). A new
+queue needs its `queues` row, its `queue_case_sequences` row, and its
+`queue_stages`, plus any backend/frontend code its `workflowType` needs.
+See `drizzle/0050_ensure_live_queue.sql` for the pattern.
 
 ## PATCH `/api/queues/:id`
 
-Transactional update. Requires `revision`.
+Transactional update of queue fields (not stages). Requires `revision`.
 
 - Prefix and workflow type are immutable once cases exist (409).
 - Activating (`lifecycle: "active"`) runs readiness checks; incomplete defs → 422
-  with `issues`, no partial write.
+  with `issues`, no partial write. Readiness is checked against the stored stages.
 - Stale revision → 409 with current `revision`.
 
 ## PATCH `/api/queues/:id/status`
@@ -103,18 +83,9 @@ Set lifecycle (`lifecycle`) or legacy `isActive`. Optional `revision`.
 
 Update SLA hours. Optional `revision`.
 
-## Stage endpoints
-
-- `POST /api/queues/:id/stages` — create stage (`revision` required)
-- `PATCH /api/queues/:id/stages/:stageId` — update stage
-- `POST /api/queues/:id/stages/:stageId/deactivate` — deactivate
-- `DELETE /api/queues/:id/stages/:stageId` — hard-delete only when unreferenced;
-  referenced stages → 409 (deactivate instead)
-- `PATCH /api/queues/:id/stages/reorder` — `{ revision, stageIds: uuid[] }`
-
 ## Validation rules
 
-Active stage graph must have:
+Activation requires the stored stage graph to have:
 
 - exactly one active initial (`category: new`)
 - at least one active terminal (`category: closed`)

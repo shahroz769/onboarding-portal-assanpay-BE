@@ -173,7 +173,7 @@ export async function transitionCaseState(
           : Promise.resolve(null),
         tx.query.queues.findFirst({
           where: eq(queues.id, locked.queueId),
-          columns: { id: true, slug: true, slaHours: true, qcEnabled: true },
+          columns: { id: true, slug: true, slaHours: true },
         }),
       ])
 
@@ -204,19 +204,14 @@ export async function transitionCaseState(
       }
 
       if (input.applyTerminalTimestamps !== false) {
-        const becomingTerminal =
-          derivedStatus === 'closed' || derivedStatus === 'error'
-        const leavingTerminal =
-          (locked.status === 'closed' || locked.status === 'error') &&
-          !becomingTerminal
+        const becomingTerminal = derivedStatus === 'closed'
+        const leavingTerminal = locked.status === 'closed' && !becomingTerminal
 
         if (
           becomingTerminal &&
           input.extraFields?.closedAt === undefined &&
           (input.targetStage.category === 'closed' ||
-            input.targetStage.category === 'error' ||
-            derivedStatus === 'closed' ||
-            derivedStatus === 'error')
+            derivedStatus === 'closed')
         ) {
           if (!updateData.closedAt) {
             updateData.closedAt = now

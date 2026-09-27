@@ -17,7 +17,7 @@ GET /api/configuration/case-flow returns the current version and version history
 
 ## Shared queue definitions
 
-Queue retirement and changes to workflow type, QC settings, slug, or stage semantics are blocked while referenced by the current version or an unfinished flow (pending/testing merchants, open cases, or unfinished jobs). This includes queues a merchant has not reached yet. Use a new queue for incompatible changes. Presentation labels and operational settings such as SLA remain editable. Queue deletion also respects historical rule foreign keys. Historical graph labels come from the publication snapshot; this feature does not version document templates or arbitrary application business logic.
+Queue retirement and changes to workflow type, slug, or stage semantics are blocked while referenced by the current version or an unfinished flow (pending/testing merchants, open cases, or unfinished jobs). This includes queues a merchant has not reached yet. Use a new queue for incompatible changes. Presentation labels and operational settings such as SLA remain editable. Queue deletion also respects historical rule foreign keys. Historical graph labels come from the publication snapshot; this feature does not version document templates or arbitrary application business logic.
 
 ## Verification
 

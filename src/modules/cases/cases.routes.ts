@@ -479,7 +479,7 @@ caseRoutes.patch(
   },
 )
 
-// POST /api/cases/:id/send-for-resubmission — Email client + move to awaiting_client
+// POST /api/cases/:id/send-for-resubmission — Email client + move to awaiting_merchant
 caseRoutes.post(
   '/:id/send-for-resubmission',
   zodValidator('json', emailRecipientSelectionSchema),

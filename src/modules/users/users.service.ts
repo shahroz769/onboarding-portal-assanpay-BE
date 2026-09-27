@@ -272,7 +272,7 @@ async function assertOwnedCasesStayWorkable(
     .where(
       and(
         eq(cases.ownerId, userId),
-        notInArray(cases.status, ['closed', 'error']),
+        ne(cases.status, 'closed'),
         workQueueIds.length > 0
           ? notInArray(cases.queueId, workQueueIds)
           : undefined,

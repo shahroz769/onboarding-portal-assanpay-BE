@@ -101,7 +101,6 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
         slug: true,
         workflowType: true,
         lifecycle: true,
-        qcEnabled: true,
         isActive: true,
       },
     })
@@ -174,7 +173,6 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       id: queue.id,
       name: queue.name,
       slug: queue.slug,
-      qcEnabled: queue.qcEnabled ?? false,
       workflowType: queue.workflowType,
     })
     const initialStage = stages[0]
@@ -716,7 +714,6 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
           id: queue.id,
           name: queue.name,
           slug: queue.slug,
-          qcEnabled: queue.qcEnabled,
           workflowType: queue.workflowType,
         })
 
@@ -833,7 +830,6 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       slug: queue.slug,
       workflowType: queue.workflowType,
       lifecycle: queue.lifecycle,
-      qcEnabled: queue.qcEnabled,
       slaHours: queue.slaHours,
     },
     merchant: merchantForDetail,
