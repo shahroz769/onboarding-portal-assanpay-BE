@@ -34,8 +34,7 @@ userRoutes.get(
   requireRoles('super_admin', 'admin'),
   async (c) => {
     const query = c.req.valid('query')
-    const users = await listUsers(query)
-    return c.json({ users })
+    return c.json(await listUsers(query))
   },
 )
 

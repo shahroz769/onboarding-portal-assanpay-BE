@@ -81,7 +81,7 @@ An access change that would leave an agent owning open cases in queues they can 
 
 Purpose:
 
-- Lists non-deleted users, newest first
+- Lists non-deleted users, newest first, one keyset page at a time
 
 Allowed roles: `super_admin`, `admin`
 
@@ -90,14 +90,23 @@ Query params (all optional):
 - `search`: matches name, email or username (case-insensitive)
 - `roleType`: comma-separated roles, e.g. `admin,agent`
 - `status`: comma-separated statuses, e.g. `active`
+- `cursor`: `nextCursor` from the previous page; omit for the first page
+- `limit`: page size, 1–100 (default `30`)
 
 Success response: `200`
 
 ```json
 {
-  "users": [{ "...": "Common User Object" }]
+  "users": [{ "...": "Common User Object" }],
+  "nextCursor": "eyJ...",
+  "hasMore": true,
+  "limit": 30,
+  "total": 42
 }
 ```
+
+`total` is the filtered count, returned on the first page only (`null` on
+later pages). `nextCursor` is `null` on the last page.
 
 ## GET `/api/users/directory`
 

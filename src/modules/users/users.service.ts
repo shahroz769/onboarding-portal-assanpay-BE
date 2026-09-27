@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   ilike,
@@ -30,6 +31,12 @@ import {
   issuePasswordToken,
   revokeAllUserSessions,
 } from '../auth/auth.service'
+import {
+  buildKeysetCondition,
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  keysetCursorExpression,
+} from '../cases/case-cursor'
 import { sendEmail } from '../email/email.service'
 import { UserPasswordEmail } from '../email/templates/user-password'
 import type { ListUsersQuery } from './users.schemas'
@@ -356,7 +363,15 @@ async function sendPasswordEmail(input: {
   return result
 }
 
-export async function listUsers(query: ListUsersQuery = {}) {
+// Users list newest first, with the id as a tiebreaker for the keyset cursor.
+const USER_LIST_SORT = {
+  sortBy: 'createdAt',
+  sortOrder: 'desc',
+  kind: 'date',
+  expression: users.createdAt,
+} as const
+
+export async function listUsers(query: ListUsersQuery) {
   const conditions: SQL[] = []
 
   if (query.search) {
@@ -382,12 +397,74 @@ export async function listUsers(query: ListUsersQuery = {}) {
     conditions.push(inArray(users.status, statuses))
   }
 
-  const result = await getDb().query.users.findMany({
-    where: and(...conditions),
-    orderBy: (table) => [desc(table.createdAt)],
-  })
+  const cursor = query.cursor
+    ? decodeKeysetCursor(query.cursor, USER_LIST_SORT)
+    : null
 
-  return hydrateUsers(result)
+  // Count the filtered set only on the first page; later pages reuse it.
+  const total = cursor
+    ? null
+    : await getDb()
+        .select({ value: count() })
+        .from(users)
+        .where(and(...conditions))
+        .then((result) => result[0]?.value ?? 0)
+
+  if (cursor) {
+    conditions.push(
+      buildKeysetCondition({
+        expression: USER_LIST_SORT.expression,
+        idExpression: users.id,
+        sortOrder: USER_LIST_SORT.sortOrder,
+        kind: cursor.kind,
+        value: cursor.value,
+        id: cursor.id,
+      }),
+    )
+  }
+
+  const pageKeys = await getDb()
+    .select({
+      id: users.id,
+      cursorValue: keysetCursorExpression(USER_LIST_SORT),
+    })
+    .from(users)
+    .where(and(...conditions))
+    .orderBy(desc(users.createdAt), desc(users.id))
+    .limit(query.limit + 1)
+
+  const hasMore = pageKeys.length > query.limit
+  const keys = hasMore ? pageKeys.slice(0, query.limit) : pageKeys
+  const last = keys.at(-1)
+  const nextCursor =
+    hasMore && last
+      ? encodeKeysetCursor({
+          sortBy: USER_LIST_SORT.sortBy,
+          sortOrder: USER_LIST_SORT.sortOrder,
+          value: last.cursorValue,
+          id: last.id,
+        })
+      : null
+
+  const rows =
+    keys.length > 0
+      ? await getDb().query.users.findMany({
+          where: inArray(
+            users.id,
+            keys.map((key) => key.id),
+          ),
+        })
+      : []
+  const rowById = new Map(rows.map((row) => [row.id, row]))
+  const pageRows = keys.flatMap((key) => rowById.get(key.id) ?? [])
+
+  return {
+    users: await hydrateUsers(pageRows),
+    nextCursor,
+    hasMore,
+    limit: query.limit,
+    total,
+  }
 }
 
 export async function listActiveUserDirectory() {

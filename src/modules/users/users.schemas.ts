@@ -41,6 +41,8 @@ export const listUsersQuerySchema = z.object({
   search: z.string().trim().optional(),
   roleType: z.string().trim().optional(),
   status: z.string().trim().optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
 })
 
 export const updateUserSchema = z
