@@ -54,6 +54,7 @@ export function AgreementEmail({
       <Panel tone="plain">
         <SectionLabel>Devtects delivery address</SectionLabel>
         <Text
+          className="ap-ink"
           style={{
             margin: 0,
             whiteSpace: 'pre-line',
@@ -85,6 +86,7 @@ export function AgreementEmail({
         <Panel tone="warning">
           <SectionLabel>Reviewer remarks</SectionLabel>
           <Text
+            className="ap-ink"
             style={{
               margin: 0,
               fontFamily: fontStack.body,

@@ -362,7 +362,8 @@ const definitions: EmailTemplateDefinition[] = [
 
 const TOKEN_PATTERN = /\{\{([\w.]+)\}\}/g
 
-// The portal's light-theme --primary; emails always render light.
+// The portal's light-theme --primary. The portal preview swaps it for the
+// dark-theme one when the portal is dark.
 const TOKEN_STYLE =
   'background-color:rgba(74,109,101,0.12);color:rgb(74,109,101);border-radius:4px;padding:0 3px;font-weight:600;white-space:nowrap;'
 

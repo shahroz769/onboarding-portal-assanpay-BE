@@ -73,6 +73,7 @@ export function DocumentResubmissionEmail({
                 </td>
                 <td style={{ paddingLeft: '14px', verticalAlign: 'top' }}>
                   <Text
+                    className="ap-ink"
                     style={{
                       margin: 0,
                       fontFamily: fontStack.body,
@@ -86,6 +87,7 @@ export function DocumentResubmissionEmail({
                   </Text>
                   {item.remarks ? (
                     <Text
+                      className="ap-ink-soft"
                       style={{
                         margin: '4px 0 0',
                         fontFamily: fontStack.body,
