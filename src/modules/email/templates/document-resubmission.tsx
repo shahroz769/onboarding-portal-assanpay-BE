@@ -4,7 +4,6 @@ import {
   ButtonRow,
   CTAButton,
   EmailShell,
-  ExpiryNote,
   LinkFallback,
   Panel,
   Paragraph,
@@ -23,7 +22,6 @@ export type DocumentResubmissionEmailProps = {
   ownerName: string
   rejections: DocumentResubmissionEmailRejection[]
   resubmissionUrl: string
-  expiresAt: string
 }
 
 export function DocumentResubmissionEmail({
@@ -31,7 +29,6 @@ export function DocumentResubmissionEmail({
   ownerName,
   rejections,
   resubmissionUrl,
-  expiresAt,
 }: DocumentResubmissionEmailProps) {
   return (
     <EmailShell
@@ -43,8 +40,8 @@ export function DocumentResubmissionEmail({
       <Paragraph>Hi {ownerName},</Paragraph>
       <Paragraph>
         Please review the notes below and update the requested items using the
-        secure link. Once everything looks good, we’ll continue the review
-        right away.
+        secure link. Once everything looks good, we’ll continue the review right
+        away.
       </Paragraph>
 
       <Panel tone="cream">
@@ -111,7 +108,6 @@ export function DocumentResubmissionEmail({
         <CTAButton href={resubmissionUrl}>Update submission</CTAButton>
       </ButtonRow>
 
-      <ExpiryNote expiresAt={expiresAt} />
       <LinkFallback href={resubmissionUrl} />
     </EmailShell>
   )
@@ -128,7 +124,6 @@ DocumentResubmissionEmail.PreviewProps = {
     },
   ],
   resubmissionUrl: 'https://app.example.com/onboarding-form/resubmit/abc123',
-  expiresAt: 'on April 29, 2026',
 } satisfies DocumentResubmissionEmailProps
 
 export default DocumentResubmissionEmail

@@ -7,6 +7,7 @@ export const notificationTypeValues = [
   'comment_reply',
   'comment_thread',
   'case_resubmitted',
+  'case_email_undelivered',
 ] as const
 
 export type NotificationType = (typeof notificationTypeValues)[number]

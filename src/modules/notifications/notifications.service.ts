@@ -186,18 +186,30 @@ export async function createBulkNotifications(rows: CreateNotificationInput[]) {
 
   const inserted = await db.insert(notifications).values(rows).returning()
 
-  // Resolve actor names for stream payloads (single query)
+  // Resolve actor names and case numbers for stream payloads (one query
+  // each), so a streamed notification has the same shape as a list item.
   const actorIds = Array.from(
     new Set(inserted.map((r) => r.actorId).filter((v): v is string => !!v)),
   )
-  const actorMap = new Map<string, string>()
-  if (actorIds.length > 0) {
-    const actors = await db
-      .select({ id: users.id, name: users.name })
-      .from(users)
-      .where(inArray(users.id, actorIds))
-    for (const a of actors) actorMap.set(a.id, a.name)
-  }
+  const caseIds = Array.from(
+    new Set(inserted.map((r) => r.caseId).filter((v): v is string => !!v)),
+  )
+  const [actors, caseRows] = await Promise.all([
+    actorIds.length > 0
+      ? db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, actorIds))
+      : [],
+    caseIds.length > 0
+      ? db
+          .select({ id: cases.id, caseNumber: cases.caseNumber })
+          .from(cases)
+          .where(inArray(cases.id, caseIds))
+      : [],
+  ])
+  const actorMap = new Map(actors.map((a) => [a.id, a.name]))
+  const caseNumberMap = new Map(caseRows.map((c) => [c.id, c.caseNumber]))
 
   for (const row of inserted) {
     const event: NotificationStreamEvent = {
@@ -206,11 +218,13 @@ export async function createBulkNotifications(rows: CreateNotificationInput[]) {
       title: row.title,
       body: row.body,
       caseId: row.caseId,
+      caseNumber: row.caseId ? (caseNumberMap.get(row.caseId) ?? null) : null,
       commentId: row.commentId,
       actorId: row.actorId,
       actorName: row.actorId ? (actorMap.get(row.actorId) ?? null) : null,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
       isRead: row.isRead,
+      readAt: row.readAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
     }
     publish(row.userId, event)
@@ -417,6 +431,46 @@ type ResubmissionNotifyInput = {
  * Notify the case owner that the merchant has submitted updated details.
  * Best-effort: callers should wrap with try/catch to avoid breaking primary flow.
  */
+type UndeliveredEmailNotifyInput = {
+  caseId: string
+  caseNumber: string
+  ownerId: string
+  templateLabel: string
+  recipient: string
+  status: string
+}
+
+/** Tells the case owner a merchant email bounced or otherwise failed. */
+export async function notifyOnUndeliveredEmail(
+  input: UndeliveredEmailNotifyInput,
+) {
+  const copy = buildNotificationCopy({
+    type: 'case_email_undelivered',
+    caseNumber: input.caseNumber,
+    templateLabel: input.templateLabel,
+    recipient: input.recipient,
+    status: input.status,
+  })
+
+  await createBulkNotifications([
+    {
+      userId: input.ownerId,
+      actorId: null,
+      type: 'case_email_undelivered',
+      caseId: input.caseId,
+      commentId: null,
+      title: copy.title,
+      body: copy.body,
+      metadata: {
+        caseNumber: input.caseNumber,
+        templateLabel: input.templateLabel,
+        recipient: input.recipient,
+        status: input.status,
+      },
+    },
+  ])
+}
+
 export async function notifyOnResubmission(input: ResubmissionNotifyInput) {
   const copy = buildNotificationCopy({
     type: 'case_resubmitted',

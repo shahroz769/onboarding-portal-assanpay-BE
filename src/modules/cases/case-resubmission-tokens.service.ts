@@ -8,13 +8,11 @@ import { hashToken } from '../../lib/security'
 export type IssuedToken = {
   token: string
   tokenId: string
-  expiresAt: Date
 }
 
 export type ValidatedToken = {
   caseId: string
   tokenId: string
-  expiresAt: Date
 }
 
 function generateTokenString(): string {
@@ -23,19 +21,15 @@ function generateTokenString(): string {
   return Buffer.from(bytes).toString('base64url')
 }
 
+// Resubmission links never expire; a link stays valid until it is used or a
+// newer link is issued for the same case.
 export async function issueToken(
   caseId: string,
   createdByUserId: string,
-  ttlHours?: number | null,
 ): Promise<IssuedToken> {
   const db = getDb()
   const tokenString = generateTokenString()
   const tokenHash = await hashToken(tokenString)
-  const expiresAt =
-    ttlHours == null
-      ? new Date(Date.UTC(9999, 11, 31)) // no expiry
-      : new Date(Date.now() + ttlHours * 60 * 60 * 1000)
-
   const tokenId = await db.transaction(async (tx) => {
     // A case may have only one usable resubmission link. Superseding older
     // previews also prevents a link from a previous rejection round from
@@ -56,7 +50,6 @@ export async function issueToken(
         caseId,
         token: null,
         tokenHash,
-        expiresAt,
         createdBy: createdByUserId,
       })
       .returning({ id: caseResubmissionTokens.id })
@@ -68,7 +61,7 @@ export async function issueToken(
     return row.id
   })
 
-  return { token: tokenString, tokenId, expiresAt }
+  return { token: tokenString, tokenId }
 }
 
 export async function validateToken(token: string): Promise<ValidatedToken> {
@@ -78,7 +71,6 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
     .select({
       id: caseResubmissionTokens.id,
       caseId: caseResubmissionTokens.caseId,
-      expiresAt: caseResubmissionTokens.expiresAt,
       consumedAt: caseResubmissionTokens.consumedAt,
     })
     .from(caseResubmissionTokens)
@@ -98,9 +90,5 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
     throw new AppError(410, 'This resubmission link has already been used.')
   }
 
-  if (row.expiresAt.getTime() <= Date.now()) {
-    throw new AppError(410, 'This resubmission link has expired.')
-  }
-
-  return { caseId: row.caseId, tokenId: row.id, expiresAt: row.expiresAt }
+  return { caseId: row.caseId, tokenId: row.id }
 }

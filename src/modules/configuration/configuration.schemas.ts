@@ -1,19 +1,6 @@
 import * as z from 'zod'
 
-const nullableHoursField = z.preprocess(
-  (v) => (v === '' || v === null || v === undefined ? null : v),
-  z.number().int().min(1).max(8760).nullable(),
-)
-
 const emailAddressSchema = z.email()
-
-export const linkDeadlineSettingsSchema = z.strictObject({
-  passwordResetHours: nullableHoursField,
-  newPasswordSetHours: nullableHoursField,
-  agreementLinkHours: nullableHoursField,
-  documentsReviewResubmissionHours: nullableHoursField,
-  goLiveAvailabilityHours: nullableHoursField,
-})
 
 export const emailSendingModeSettingsSchema = z
   .strictObject({
@@ -23,6 +10,46 @@ export const emailSendingModeSettingsSchema = z
   .refine((value) => value.autoEnabled || value.manualEnabled, {
     error: 'At least one email sending mode must be enabled.',
     path: ['autoEnabled'],
+  })
+
+// Extra recipients on case emails sent through Resend. Resend allows 50
+// recipients per email; these caps keep every send well under that.
+const recipientEmailListSchema = (max: number) =>
+  z
+    // 254 characters is the longest address SMTP accepts (RFC 5321).
+    .array(z.string().trim().toLowerCase().max(254).pipe(z.email()))
+    .max(max)
+    .refine((emails) => new Set(emails).size === emails.length, {
+      error: 'Each address can only be listed once.',
+    })
+
+export const emailRecipientSettingsSchema = z.strictObject({
+  /** CC the portal user who sends the email. */
+  ccSender: z.boolean(),
+  /** CC the merchant's other address (submitter ⇄ business email). */
+  ccOtherMerchantEmail: z.boolean(),
+  cc: recipientEmailListSchema(20),
+  bcc: recipientEmailListSchema(20),
+  /** Where merchant replies go; empty uses the server default. */
+  replyTo: recipientEmailListSchema(5),
+})
+
+/**
+ * What a save must satisfy. Stricter than the stored shape: settings saved
+ * before this rule still load, but new saves can't list an address as both a
+ * visible and a hidden copy.
+ */
+export const emailRecipientSettingsInputSchema =
+  emailRecipientSettingsSchema.superRefine((value, ctx) => {
+    const cc = new Set(value.cc)
+    const overlap = value.bcc.find((email) => cc.has(email))
+    if (overlap) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['bcc'],
+        message: `${overlap} is already in CC.`,
+      })
+    }
   })
 
 export const merchantPortalSettingsSchema = z.strictObject({
@@ -339,9 +366,11 @@ function addDuplicateIdIssue(
 }
 
 export type LimitsAndMdrSettings = z.infer<typeof limitsAndMdrSettingsSchema>
-export type LinkDeadlineSettings = z.infer<typeof linkDeadlineSettingsSchema>
 export type EmailSendingModeSettings = z.infer<
   typeof emailSendingModeSettingsSchema
+>
+export type EmailRecipientSettings = z.infer<
+  typeof emailRecipientSettingsSchema
 >
 export type MerchantPortalSettings = z.infer<
   typeof merchantPortalSettingsSchema

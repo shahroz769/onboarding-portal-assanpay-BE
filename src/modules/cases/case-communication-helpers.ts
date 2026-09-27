@@ -1,7 +1,13 @@
+import { eq } from 'drizzle-orm'
+
+import { env } from '../../config/env'
 import { getDb } from '../../db/client'
-import { caseFiles } from '../../db/schema'
+import { caseFiles, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { getEmailSendingModeSettings } from '../configuration/configuration.service'
+import {
+  getEmailRecipientSettings,
+  getEmailSendingModeSettings,
+} from '../configuration/configuration.service'
 import {
   DOCUMENT_TYPE_LABELS,
   MERCHANT_FIELD_LABELS,
@@ -25,19 +31,6 @@ export function getRejectionLabel(
     return 'Uploaded document'
   }
   return MERCHANT_FIELD_LABELS[fieldName] ?? fieldName
-}
-
-export function formatExpiryDate(date: Date): string {
-  if (date.getFullYear() >= 9999) return 'no expiry'
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'long',
-    timeZone: 'UTC',
-  }).format(date)
-}
-
-export function formatExpiryLine(expiresAt: string): string {
-  if (expiresAt.trim().toLowerCase() === 'no expiry') return ''
-  return `\n\nThis link expires ${expiresAt}.`
 }
 
 export type ServerIntegrationDetails = {
@@ -108,6 +101,58 @@ export function resolveMerchantEmailRecipient(
   }
 
   return { email, recipientEmailType }
+}
+
+/**
+ * CC, BCC and reply-to for a case email, from Configuration → Email sending:
+ * the sender (the portal user sending it), the merchant's other address
+ * (business ⇄ submitter, whichever isn't the recipient), then the extra
+ * addresses. Duplicates and the recipient itself are dropped.
+ */
+export async function resolveCaseEmailRecipients(input: {
+  actorId: string
+  merchant: { submitterEmail: string | null; businessEmail: string | null }
+  recipient: { email: string; recipientEmailType: EmailRecipientType }
+}) {
+  const [settings, actor] = await Promise.all([
+    getEmailRecipientSettings(),
+    getDb().query.users.findFirst({
+      where: eq(users.id, input.actorId),
+      columns: { email: true },
+    }),
+  ])
+  const otherMerchantEmail =
+    input.recipient.recipientEmailType === 'business'
+      ? input.merchant.submitterEmail
+      : input.merchant.businessEmail
+
+  const taken = new Set([input.recipient.email.trim().toLowerCase()])
+  const pick = (candidates: Array<string | null | undefined>) => {
+    const picked: string[] = []
+    for (const candidate of candidates) {
+      const email = candidate?.trim().toLowerCase()
+      if (!email || taken.has(email)) continue
+      taken.add(email)
+      picked.push(email)
+    }
+    return picked
+  }
+
+  const cc = pick([
+    settings.ccSender ? actor?.email : null,
+    settings.ccOtherMerchantEmail ? otherMerchantEmail : null,
+    ...settings.cc,
+  ])
+  const bcc = pick(settings.bcc)
+  // Same fallback as sendEmail, so manual previews list the reply-to the
+  // automatic email would use.
+  const replyTo =
+    settings.replyTo.length > 0
+      ? settings.replyTo
+      : env.EMAIL_REPLY_TO
+        ? [env.EMAIL_REPLY_TO]
+        : []
+  return { cc, bcc, replyTo }
 }
 
 export async function uploadEmailProofFile(
@@ -182,10 +227,8 @@ export function buildResubmissionEmailBody(params: {
   ownerName: string
   rejections: Array<{ label: string; remarks: string | null }>
   resubmissionUrl: string
-  expiresAt: string
 }): string {
-  const { merchantName, ownerName, rejections, resubmissionUrl, expiresAt } =
-    params
+  const { merchantName, ownerName, rejections, resubmissionUrl } = params
   const itemLines = rejections
     .map((r) => `• ${r.label}${r.remarks ? `\n  ${r.remarks}` : ''}`)
     .join('\n')
@@ -197,7 +240,7 @@ Items to update:
 ${itemLines}
 
 Please use the secure link below to update your submission:
-${resubmissionUrl}${formatExpiryLine(expiresAt)}
+${resubmissionUrl}
 
 If you have any questions, please reply to this email.
 

@@ -87,6 +87,7 @@ Server-Sent Events stream of live notifications for the current user.
 
 - `event: ready` — emitted on connect (`data: ok`).
 - `event: notification` — `data:` is a JSON-encoded notification object (same shape as list items).
+- `event: case-email-status` — `data:` is `{ caseId, emailLogId, status }`, sent to the case owner whenever a case email's delivery status changes. A refresh signal only: it isn't stored, has no `id`, and doesn't count as a notification.
 - `event: ping` — every 25s (heartbeat to defeat proxy timeouts).
 
 The connection unsubscribes automatically on client disconnect.
@@ -102,5 +103,6 @@ Notifications are created automatically by other endpoints:
 | `PATCH /api/cases/:id/assign`   | `case_assigned`, `case_unassigned`                                                | New owner (assigned), previous owner (unassigned). Excludes the actor.                                          |
 | `POST  /api/cases/bulk-assign`  | `case_assigned`, `case_unassigned`                                                | Same rules per case.                                                                                            |
 | `POST  /api/cases/:id/comments` | `comment_mention` > `comment_reply` > `comment_thread` (precedence per recipient) | @-mentioned users; parent comment author on reply; prior commenters in the thread. Excludes the comment author. |
+| `POST  /api/webhooks/resend`    | `case_email_undelivered`                                                          | Case owner, when a merchant email bounces, is marked as spam, is suppressed or fails.                          |
 
 Notification creation is best-effort — failures are logged and do **not** roll back the originating action.

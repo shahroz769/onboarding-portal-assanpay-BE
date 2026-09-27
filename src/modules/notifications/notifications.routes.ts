@@ -18,7 +18,7 @@ export const notificationRoutes = new Hono<AppEnv>()
 const NOTIFICATION_STREAM_HEARTBEAT_MS = 25_000
 
 type NotificationStreamMessage = {
-  event: 'notification' | 'ping' | 'ready'
+  event: 'notification' | 'case-email-status' | 'ping' | 'ready'
   data: string
   id?: string
 }
@@ -101,12 +101,18 @@ notificationRoutes.get('/stream', (c) => {
         wake()
       }
 
-      const unsubscribe = subscribe(auth.userId, (event) => {
-        enqueue({
-          event: 'notification',
-          data: JSON.stringify(event),
-          id: event.id,
-        })
+      const unsubscribe = subscribe(auth.userId, (message) => {
+        enqueue(
+          message.event === 'notification'
+            ? {
+                event: 'notification',
+                data: JSON.stringify(message.data),
+                id: message.data.id,
+              }
+            : // Signals carry no id: they aren't stored, so there's nothing
+              // to resume from after a reconnect.
+              { event: message.event, data: JSON.stringify(message.data) },
+        )
       })
 
       const cleanup = () => {

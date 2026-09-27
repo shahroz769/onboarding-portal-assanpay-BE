@@ -73,6 +73,14 @@ export const createCaseSchema = z.strictObject({
 
 export type CreateCaseInput = z.infer<typeof createCaseSchema>
 
+export const bulkCreateCaseSchema = z.strictObject({
+  merchantIds: z.array(z.uuid()).min(1).max(200),
+  queueId: z.uuid(),
+  subMerchantId: z.uuid().optional(),
+})
+
+export type BulkCreateCaseInput = z.infer<typeof bulkCreateCaseSchema>
+
 export const updateCaseStatusSchema = z.strictObject({
   status: z.enum(caseStatusValues),
 })

@@ -161,3 +161,42 @@ Notes:
 - A successfully closed Agreement case creates the Live case automatically.
 - Merchants are not sent a Go-Live link and do not request Live activation.
 - Queues not referenced by these rules can still be manually triggered.
+
+## GET `/api/configuration/email-recipients`
+
+Purpose:
+
+- Extra recipients on case emails sent through Resend (agreement,
+  resubmission request, portal credentials, live activation). Staff password
+  emails are not affected.
+
+Authorization: `super_admin`, `admin`
+
+Success response: `200`
+
+```json
+{
+  "ccSender": true,
+  "ccOtherMerchantEmail": true,
+  "cc": ["ops@example.com"],
+  "bcc": ["archive@example.com"],
+  "replyTo": []
+}
+```
+
+- `ccSender`: CC the portal user who sends the email.
+- `ccOtherMerchantEmail`: CC the merchant's other address (sending to the
+  business email copies the submitter email, and the other way round).
+- `cc` / `bcc`: up to 20 addresses each; `replyTo`: up to 5 (empty uses
+  `EMAIL_REPLY_TO`). Duplicates and the recipient itself are dropped when
+  sending. With `EMAIL_TEST_TO` set, CC and BCC are dropped (kept in the
+  email log metadata) so test sends only reach the test inbox.
+- Manual (Gmail) email previews return the same `cc`, `bcc` and `replyTo`.
+
+## PUT `/api/configuration/email-recipients`
+
+Authorization: `super_admin`, `admin`
+
+Request body: the object above. Addresses are trimmed and lower-cased; each
+list rejects invalid, over-long (more than 254 characters) or repeated addresses, and
+an address can't be in both `cc` and `bcc` (`400`). Returns the saved object.

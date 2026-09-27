@@ -19,7 +19,6 @@ import { env } from '../../config/env'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
 import {
   getLimitsAndMdrSettings,
-  getLinkDeadlineSettings,
   getMerchantPortalSettings,
 } from '../configuration/configuration.service'
 import { getDocumentIdFromFieldName, isDocumentFieldName } from './field-labels'
@@ -54,10 +53,10 @@ import {
   buildLiveActivationEmailBody,
   buildMidCreationMessageBody,
   buildResubmissionEmailBody,
-  formatExpiryDate,
   getMerchantIntegrationGuideLabel,
   getRejectionLabel,
   resolveCustomWebsiteServerIntegration,
+  resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
   uploadEmailProofFile,
 } from './case-communication-helpers'
@@ -66,12 +65,18 @@ import { loadAgreementCase } from './agreement-case.service'
 import { loadLiveCase } from './live-case.service'
 import { loadMidCreationCase } from './mid-case.service'
 
-export type ResubmissionEmailPreviewResult = {
+/** Who else a manual (Gmail) email should go to. */
+export type ManualEmailRecipients = {
+  cc: string[]
+  bcc: string[]
+  replyTo: string[]
+}
+
+export type ResubmissionEmailPreviewResult = ManualEmailRecipients & {
   recipient: string
   subject: string
   body: string
   tokenId: string
-  tokenExpiresAt: string
 }
 
 export async function getResubmissionEmailPreview(
@@ -169,12 +174,7 @@ export async function getResubmissionEmailPreview(
     remarks: review.remarks,
   }))
 
-  const linkDeadlines = await getLinkDeadlineSettings()
-  const issued = await issueToken(
-    caseId,
-    userId,
-    linkDeadlines.documentsReviewResubmissionHours,
-  )
+  const issued = await issueToken(caseId, userId)
 
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const subject = 'Action required to update your onboarding submission'
@@ -183,15 +183,23 @@ export async function getResubmissionEmailPreview(
     ownerName: row.merchantOwnerName,
     rejections,
     resubmissionUrl,
-    expiresAt: formatExpiryDate(issued.expiresAt),
   })
 
   return {
     recipient: recipient.email,
+    // CC / BCC / reply-to from Configuration → Email sending, to add in
+    // Gmail the same way the automatic email would.
+    ...(await resolveCaseEmailRecipients({
+      actorId: userId,
+      merchant: {
+        submitterEmail: row.merchantSubmitterEmail,
+        businessEmail: row.merchantBusinessEmail,
+      },
+      recipient,
+    })),
     subject,
     body,
     tokenId: issued.tokenId,
-    tokenExpiresAt: issued.expiresAt.toISOString(),
   }
 }
 
@@ -266,7 +274,7 @@ export async function confirmResubmissionEmailManual(
       isNull(caseResubmissionTokens.consumedAt),
     ),
   })
-  if (!tokenRow) throw new AppError(400, 'Invalid or expired preview token.')
+  if (!tokenRow) throw new AppError(400, 'Invalid preview token.')
 
   const rejectedReviews = await db
     .select({
@@ -373,7 +381,6 @@ export async function confirmResubmissionEmailManual(
           : 'resubmission_email_sent_manual',
       details: {
         tokenId: input.tokenId,
-        expiresAt: tokenRow.expiresAt.toISOString(),
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
         rejectedFieldDetails,
@@ -395,7 +402,7 @@ export async function confirmResubmissionEmailManual(
 
 // ─── Agreement email preview & manual confirm ────────────────────────────────
 
-export type AgreementEmailPreviewResult = {
+export type AgreementEmailPreviewResult = ManualEmailRecipients & {
   recipient: string
   subject: string
   body: string
@@ -483,6 +490,16 @@ export async function getAgreementEmailPreview(
 
   return {
     recipient: recipient.email,
+    // CC / BCC / reply-to from Configuration → Email sending, to add in
+    // Gmail the same way the automatic email would.
+    ...(await resolveCaseEmailRecipients({
+      actorId: userId,
+      merchant: {
+        submitterEmail: caseRow.merchantSubmitterEmail,
+        businessEmail: caseRow.merchantBusinessEmail,
+      },
+      recipient,
+    })),
     subject,
     body,
     tokenId: await buildAgreementPreviewToken({
@@ -611,7 +628,7 @@ export async function confirmAgreementEmailManual(
 
 // ─── Mid-creation email preview & manual confirm ─────────────────────────────
 
-export type MidCreationEmailPreviewResult = {
+export type MidCreationEmailPreviewResult = ManualEmailRecipients & {
   recipient: string
   subject: string
   body: string
@@ -672,6 +689,16 @@ export async function getMidCreationEmailPreview(
 
   return {
     recipient: recipient.email,
+    // CC / BCC / reply-to from Configuration → Email sending, to add in
+    // Gmail the same way the automatic email would.
+    ...(await resolveCaseEmailRecipients({
+      actorId: userId,
+      merchant: {
+        submitterEmail: caseRow.merchantSubmitterEmail,
+        businessEmail: caseRow.merchantBusinessEmail,
+      },
+      recipient,
+    })),
     subject,
     body,
     tokenId: caseId,
@@ -749,7 +776,7 @@ export async function confirmMidCreationEmailManual(
   return { status: 'sent', fileId: savedFile.id }
 }
 
-export type LiveActivationEmailPreviewResult = {
+export type LiveActivationEmailPreviewResult = ManualEmailRecipients & {
   recipient: string
   subject: string
   body: string
@@ -779,6 +806,16 @@ export async function getLiveActivationEmailPreview(
 
   return {
     recipient: recipient.email,
+    // CC / BCC / reply-to from Configuration → Email sending, to add in
+    // Gmail the same way the automatic email would.
+    ...(await resolveCaseEmailRecipients({
+      actorId: userId,
+      merchant: {
+        submitterEmail: caseRow.merchantSubmitterEmail,
+        businessEmail: caseRow.merchantBusinessEmail,
+      },
+      recipient,
+    })),
     subject,
     body: buildLiveActivationEmailBody({
       merchantName: caseRow.merchantName,

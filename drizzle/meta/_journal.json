@@ -568,6 +568,20 @@
       "when": 1789084800000,
       "tag": "0081_drop_card_workflow_type",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1789171200000,
+      "tag": "0082_email_delivery_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1789257600000,
+      "tag": "0083_drop_resubmission_token_expiry",
+      "breakpoints": true
     }
   ]
 }

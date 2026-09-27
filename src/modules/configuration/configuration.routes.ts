@@ -7,15 +7,15 @@ import { zodValidator } from '../../lib/validators'
 import type { AppEnv } from '../../types/auth'
 import {
   getConfigurationOverview,
+  getEmailRecipientSettings,
   getEmailSendingModeSettings,
   getLimitsAndMdrSettings,
-  getLinkDeadlineSettings,
   getMerchantPortalSettings,
   getPaymentMethodSettings,
   getPayoutMethodSettings,
+  updateEmailRecipientSettings,
   updateEmailSendingModeSettings,
   updateLimitsAndMdrSettings,
-  updateLinkDeadlineSettings,
   updateMerchantPortalSettings,
   updatePaymentMethodSettings,
   updatePayoutMethodSettings,
@@ -30,9 +30,9 @@ import {
 import {
   businessTypeSchema,
   updateCaseFlowConfigurationSchema,
+  emailRecipientSettingsInputSchema,
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
-  linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
   paymentMethodSettingsSchema,
   payoutMethodSettingsSchema,
@@ -88,10 +88,6 @@ configurationRoutes.get('/merchant-portal', async (c) => {
   return c.json(await getMerchantPortalSettings())
 })
 
-configurationRoutes.get('/link-deadlines', async (c) => {
-  return c.json(await getLinkDeadlineSettings())
-})
-
 configurationRoutes.get('/case-flow', async (c) => {
   return c.json(await getCaseFlowConfiguration())
 })
@@ -134,20 +130,24 @@ configurationRoutes.put(
 )
 
 configurationRoutes.put(
-  '/link-deadlines',
-  zodValidator('json', linkDeadlineSettingsSchema),
-  async (c) => {
-    const input = c.req.valid('json')
-    return c.json(await updateLinkDeadlineSettings(input))
-  },
-)
-
-configurationRoutes.put(
   '/email-sending-mode',
   zodValidator('json', emailSendingModeSettingsSchema),
   async (c) => {
     const input = c.req.valid('json')
     return c.json(await updateEmailSendingModeSettings(input))
+  },
+)
+
+configurationRoutes.get('/email-recipients', async (c) => {
+  return c.json(await getEmailRecipientSettings())
+})
+
+configurationRoutes.put(
+  '/email-recipients',
+  zodValidator('json', emailRecipientSettingsInputSchema),
+  async (c) => {
+    const input = c.req.valid('json')
+    return c.json(await updateEmailRecipientSettings(input))
   },
 )
 

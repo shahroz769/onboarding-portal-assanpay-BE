@@ -11,6 +11,10 @@ import {
   assertCloseBlockersSatisfied,
   enqueueCasesAfterSuccessfulClose,
 } from './case-flow.service'
+import {
+  assertCaseEmailDelivered,
+  refreshStaleCaseEmailDelivery,
+} from './case-email-delivery'
 import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { isCaseSlaBreached } from './case-sla'
 
@@ -127,6 +131,16 @@ export async function transitionCaseState(
   let outcome = 'success'
   let closeJobsEnqueued = false
 
+  // A successful close checks the latest email's delivery (below). If its
+  // webhook never came, ask Resend first, outside the transaction so the
+  // case row isn't locked during the call.
+  if (
+    getStatusForStage(input.targetStage) === 'closed' &&
+    input.extraFields?.closeOutcome !== 'unsuccessful'
+  ) {
+    await refreshStaleCaseEmailDelivery(input.caseId)
+  }
+
   try {
     const result = await db.transaction(async (tx) => {
       const locked = await lockCaseRow(tx, input.caseId)
@@ -230,6 +244,17 @@ export async function transitionCaseState(
           merchantId: locked.merchantId,
           queueId: locked.queueId,
         })
+      }
+
+      // A successful close needs the case's latest merchant email delivered
+      // (or replaced by a manual Gmail / WhatsApp send). Unsuccessful closes
+      // don't depend on the merchant receiving anything.
+      const closingSuccessfully =
+        derivedStatus === 'closed' &&
+        locked.status !== 'closed' &&
+        updateData.closeOutcome !== 'unsuccessful'
+      if (closingSuccessfully) {
+        await assertCaseEmailDelivered(tx, locked.id)
       }
 
       if (input.beforeUpdate) {

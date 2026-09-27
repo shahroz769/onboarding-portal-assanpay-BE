@@ -54,10 +54,7 @@ const DOCUMENT_ACTION_PREFIX = '__document_action__:'
 resubmissionRoutes.get('/:token', async (c) => {
   const token = c.req.param('token')
   const validated = await validateToken(token)
-  const context = await getResubmissionContext(
-    validated.caseId,
-    validated.expiresAt,
-  )
+  const context = await getResubmissionContext(validated.caseId)
   return c.json(context)
 })
 
@@ -288,10 +285,7 @@ resubmissionRoutes.post('/:token', async (c) => {
           `${DOCUMENT_TYPE_LABELS[existing.documentType]} must be uploaded again.`,
         )
       }
-      assertFileSizeLimit(
-        file,
-        DOCUMENT_TYPE_LABELS[existing.documentType],
-      )
+      assertFileSizeLimit(file, DOCUMENT_TYPE_LABELS[existing.documentType])
       const mimeType = normalizeMimeType(file)
       await assertFileContentSignature({
         file,

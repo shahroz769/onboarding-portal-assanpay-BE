@@ -344,6 +344,6 @@ Possible errors:
 
 ## Password Links
 
-- Invite and reset links point to `<PUBLIC_APP_URL>/set-password/<token>` and expire per the link-deadline configuration.
+- Invite and reset links point to `<PUBLIC_APP_URL>/set-password/<token>` and expire after 72 hours (invites) or 24 hours (password resets).
 - A new link replaces the user's previous link of the same kind only once its email has been sent successfully.
 - Setting a password consumes every open link for that user.

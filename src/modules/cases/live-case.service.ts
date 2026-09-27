@@ -22,6 +22,7 @@ import {
 } from './case-detail-lookups'
 import {
   assertAutoEmailEnabled,
+  resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
 import type { MidCreationEmailResult } from './mid-case.service'
@@ -173,9 +174,20 @@ export async function sendLiveActivationEmail(
     },
     input.recipientEmailType,
   )
+  // Resolved before the case changes state, so a lookup failure leaves it
+  // untouched.
+  const extraRecipients = await resolveCaseEmailRecipients({
+    actorId: userId,
+    merchant: {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    recipient,
+  })
 
   const emailResult = await sendEmail({
     to: recipient.email,
+    ...extraRecipients,
     subject: `AssanPay account is live for ${caseRow.merchantName}`,
     template: 'live-activation',
     react: LiveActivationEmail({
@@ -208,6 +220,9 @@ export async function sendLiveActivationEmail(
     details: {
       emailLogId: emailResult.emailLogId,
       recipient: recipient.email,
+      cc: emailResult.cc,
+      bcc: emailResult.bcc,
+      replyTo: emailResult.replyTo,
       recipientEmailType: recipient.recipientEmailType,
       error: emailResult.error ?? null,
     },

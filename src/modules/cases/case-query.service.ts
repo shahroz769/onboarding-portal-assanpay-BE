@@ -45,6 +45,7 @@ import { assertCreationRequirementsSatisfied } from './case-flow.service'
 import { caseListStatusFilterValues, caseStatusValues } from './cases.schemas'
 import type {
   CaseListStatusFilterValue,
+  BulkCreateCaseInput,
   CaseStatusValue,
   CreateCaseInput,
   ListCasesQuery,
@@ -59,6 +60,10 @@ import {
   keysetCursorExpression,
   parseCsvValues,
 } from './case-cursor'
+import {
+  getCaseEmailDelivery,
+  refreshStaleCaseEmailDelivery,
+} from './case-email-delivery'
 import { generateCaseNumber } from './case-number'
 import {
   ensureInheritedSubMerchantFormDetails,
@@ -238,6 +243,37 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       updatedAt: created.updatedAt,
     }
   })
+}
+
+// Each merchant gets its own transaction so one rejected merchant (for example
+// an existing live case) does not roll back the cases created for the others.
+export async function bulkCreateCases(
+  input: BulkCreateCaseInput,
+  actorId?: string,
+) {
+  const merchantIds = [...new Set(input.merchantIds)]
+  const created: Awaited<ReturnType<typeof createCase>>[] = []
+  const failed: { merchantId: string; error: string }[] = []
+
+  for (const merchantId of merchantIds) {
+    try {
+      created.push(
+        await createCase(
+          {
+            merchantId,
+            queueId: input.queueId,
+            subMerchantId: input.subMerchantId,
+          },
+          actorId,
+        ),
+      )
+    } catch (error) {
+      if (!(error instanceof AppError) || error.statusCode >= 500) throw error
+      failed.push({ merchantId, error: error.message })
+    }
+  }
+
+  return { created, failed }
 }
 
 // ─── List Cases ─────────────────────────────────────────────────────────────
@@ -480,6 +516,9 @@ export async function listCaseOwners() {
 export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const db = getDb()
   await assertCanViewCase(caseId, actor)
+  // Asks Resend about an email stuck waiting for its webhook; runs alongside
+  // the queries below and is awaited before emailDelivery is read.
+  const staleDeliveryCheck = refreshStaleCaseEmailDelivery(caseId)
 
   // Get case with joins
   const caseRow = await db
@@ -798,6 +837,10 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       slaHours: queue.slaHours,
     },
     merchant: merchantForDetail,
+    // The latest merchant email's delivery, and whether it blocks closing.
+    emailDelivery: await staleDeliveryCheck.then(() =>
+      getCaseEmailDelivery(db, caseId),
+    ),
     documents,
     fieldReviews,
     subMerchantForm: subMerchantFormRecord

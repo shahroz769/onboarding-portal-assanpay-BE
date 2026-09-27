@@ -21,6 +21,7 @@ import {
 import { setCaseFlowCloseJobDrainHandler } from './modules/cases/case-flow-worker'
 import { configurationRoutes } from './modules/configuration/configuration.routes'
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes'
+import { resendWebhookRoutes } from './modules/email/resend-webhook.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
 import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
@@ -136,6 +137,7 @@ app.route('/api/cases', caseRoutes)
 app.route('/api/configuration', configurationRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/notifications', notificationRoutes)
+app.route('/api/webhooks/resend', resendWebhookRoutes)
 
 // Rotated tokens are kept until they expire: refresh-token reuse detection
 // needs the row to recognise a stolen copy for the token's whole lifetime.

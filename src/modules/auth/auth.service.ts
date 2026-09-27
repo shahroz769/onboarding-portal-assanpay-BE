@@ -16,7 +16,7 @@ import {
 import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
 import type { RoleType } from '../../types/auth'
-import { getLinkDeadlineSettings } from '../configuration/configuration.service'
+import { LINK_DEADLINE_HOURS } from '../configuration/configuration.service'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
   super_admin: ['admin', 'agent'],
@@ -47,14 +47,10 @@ function getRefreshTokenExpiresAt() {
 }
 
 async function getPasswordTokenExpiresAt(purpose: 'invite' | 'reset') {
-  const linkDeadlines = await getLinkDeadlineSettings()
   const hours =
     purpose === 'invite'
-      ? linkDeadlines.newPasswordSetHours
-      : linkDeadlines.passwordResetHours
-  if (hours == null) {
-    return new Date(Date.UTC(9999, 11, 31)) // no expiry
-  }
+      ? LINK_DEADLINE_HOURS.newPasswordSet
+      : LINK_DEADLINE_HOURS.passwordReset
   const expiresAt = new Date()
   expiresAt.setHours(expiresAt.getHours() + hours)
   return expiresAt

@@ -21,9 +21,10 @@ import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchan
 import {
   BUSINESS_TYPE_OPTIONS,
   businessTypeSchema,
+  emailRecipientSettingsInputSchema,
+  emailRecipientSettingsSchema,
   emailSendingModeSettingsSchema,
   limitsAndMdrSettingsSchema,
-  linkDeadlineSettingsSchema,
   merchantPortalSettingsSchema,
   paymentMethodSettingsSchema,
   payoutMethodSettingsSchema,
@@ -35,9 +36,9 @@ import {
 } from './case-flow-graph'
 import type {
   BusinessType,
+  EmailRecipientSettings,
   EmailSendingModeSettings,
   LimitsAndMdrSettings,
-  LinkDeadlineSettings,
   MerchantPortalSettings,
   PaymentMethodSettings,
   PayoutMethodSettings,
@@ -45,8 +46,8 @@ import type {
 } from './configuration.schemas'
 
 const LIMITS_AND_MDR_KEY = 'limits-and-mdr'
-const LINK_DEADLINES_KEY = 'link-deadlines'
 const EMAIL_SENDING_MODE_KEY = 'email-sending-mode'
+const EMAIL_RECIPIENTS_KEY = 'email-recipients'
 const MERCHANT_PORTAL_KEY = 'merchant-portal'
 const PAYMENT_METHODS_KEY = 'payment-methods'
 const PAYOUT_METHODS_KEY = 'payout-methods'
@@ -95,17 +96,23 @@ export const defaultLimitsAndMdrSettings: LimitsAndMdrSettings = {
   },
 }
 
-export const defaultLinkDeadlineSettings: LinkDeadlineSettings = {
-  passwordResetHours: 72,
-  newPasswordSetHours: 72,
-  agreementLinkHours: 72,
-  documentsReviewResubmissionHours: 72,
-  goLiveAvailabilityHours: 72,
-}
+// Link expiry windows are fixed; they are no longer configurable.
+export const LINK_DEADLINE_HOURS = {
+  passwordReset: 24,
+  newPasswordSet: 72,
+} as const
 
 export const defaultEmailSendingModeSettings: EmailSendingModeSettings = {
   autoEnabled: true,
   manualEnabled: true,
+}
+
+export const defaultEmailRecipientSettings: EmailRecipientSettings = {
+  ccSender: true,
+  ccOtherMerchantEmail: true,
+  cc: [],
+  bcc: [],
+  replyTo: [],
 }
 
 export const defaultMerchantPortalSettings: MerchantPortalSettings = {
@@ -287,20 +294,6 @@ export async function updateLimitsAndMdrSettings(input: LimitsAndMdrSettings) {
   return value
 }
 
-export function getLinkDeadlineSettings() {
-  return readSetting(
-    LINK_DEADLINES_KEY,
-    defaultLinkDeadlineSettings,
-    linkDeadlineSettingsSchema,
-  )
-}
-
-export async function updateLinkDeadlineSettings(input: LinkDeadlineSettings) {
-  const value = linkDeadlineSettingsSchema.parse(input)
-  await writeSetting(LINK_DEADLINES_KEY, value)
-  return value
-}
-
 export function getEmailSendingModeSettings() {
   return readSetting(
     EMAIL_SENDING_MODE_KEY,
@@ -314,6 +307,22 @@ export async function updateEmailSendingModeSettings(
 ) {
   const value = emailSendingModeSettingsSchema.parse(input)
   await writeSetting(EMAIL_SENDING_MODE_KEY, value)
+  return value
+}
+
+export function getEmailRecipientSettings() {
+  return readSetting(
+    EMAIL_RECIPIENTS_KEY,
+    defaultEmailRecipientSettings,
+    emailRecipientSettingsSchema,
+  )
+}
+
+export async function updateEmailRecipientSettings(
+  input: EmailRecipientSettings,
+) {
+  const value = emailRecipientSettingsInputSchema.parse(input)
+  await writeSetting(EMAIL_RECIPIENTS_KEY, value)
   return value
 }
 
@@ -373,7 +382,6 @@ export async function updatePayoutMethodSettings(input: PayoutMethodSettings) {
 export async function getConfigurationOverview() {
   const [
     limitsAndMdr,
-    linkDeadlines,
     emailSendingMode,
     merchantPortal,
     paymentMethods,
@@ -382,7 +390,6 @@ export async function getConfigurationOverview() {
     subMerchants,
   ] = await Promise.all([
     getLimitsAndMdrSettings(),
-    getLinkDeadlineSettings(),
     getEmailSendingModeSettings(),
     getMerchantPortalSettings(),
     getPaymentMethodSettings(),
@@ -393,7 +400,6 @@ export async function getConfigurationOverview() {
 
   return {
     limitsAndMdr,
-    linkDeadlines,
     emailSendingMode,
     merchantPortal,
     paymentMethods,

@@ -9,6 +9,7 @@ import type { AppEnv } from '../../types/auth'
 import {
   assignCaseSchema,
   bulkAssignCaseSchema,
+  bulkCreateCaseSchema,
   closeUnsuccessfulSchema,
   createCaseSchema,
   createCommentSchema,
@@ -32,6 +33,7 @@ import type {
   EmailRecipientType,
 } from './cases.schemas'
 import {
+  bulkCreateCases,
   createCase,
   getCaseDetail,
   listCaseOwners,
@@ -147,6 +149,18 @@ caseRoutes.post(
     const auth = c.get('auth')
     const result = await createCase(input, auth.userId)
     return c.json(result, 201)
+  },
+)
+
+// POST /api/cases/bulk-create — Create one case per merchant (super admin, admin)
+caseRoutes.post(
+  '/bulk-create',
+  requireRoles('super_admin', 'admin'),
+  zodValidator('json', bulkCreateCaseSchema),
+  async (c) => {
+    const input = c.req.valid('json')
+    const auth = c.get('auth')
+    return c.json(await bulkCreateCases(input, auth.userId))
   },
 )
 

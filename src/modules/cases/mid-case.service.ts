@@ -27,6 +27,7 @@ import {
   assertAutoEmailEnabled,
   getMerchantIntegrationGuideLabel,
   resolveCustomWebsiteServerIntegration,
+  resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
 
@@ -193,6 +194,16 @@ export async function sendMidCreationCredentialsEmail(
     },
     input.recipientEmailType,
   )
+  // Resolved before the case changes state, so a lookup failure leaves it
+  // untouched.
+  const extraRecipients = await resolveCaseEmailRecipients({
+    actorId: userId,
+    merchant: {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    recipient,
+  })
 
   const [limitsAndMdr, merchantPortal] = await Promise.all([
     getLimitsAndMdrSettings(),
@@ -211,6 +222,7 @@ export async function sendMidCreationCredentialsEmail(
 
   const emailResult = await sendEmail({
     to: recipient.email,
+    ...extraRecipients,
     subject: `AssanPay merchant portal credentials for ${caseRow.merchantName}`,
     template: 'mid-creation',
     react: MidCreationEmail({
@@ -257,6 +269,9 @@ export async function sendMidCreationCredentialsEmail(
     details: {
       emailLogId: emailResult.emailLogId,
       recipient: recipient.email,
+      cc: emailResult.cc,
+      bcc: emailResult.bcc,
+      replyTo: emailResult.replyTo,
       recipientEmailType: recipient.recipientEmailType,
       portalMid: credentials.portalMid,
       error: emailResult.error ?? null,

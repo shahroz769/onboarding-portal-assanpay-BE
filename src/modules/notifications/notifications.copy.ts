@@ -2,6 +2,13 @@ import type { NotificationType } from './notifications.schemas'
 
 const SNIPPET_LENGTH = 140
 
+const UNDELIVERED_STATUS_TEXT: Record<string, string> = {
+  bounced: 'bounced',
+  complained: 'was marked as spam',
+  suppressed: 'was blocked by the suppression list',
+  failed: 'failed to send',
+}
+
 /** Strip @mention syntax (`@[Name](uuid)` or plain `@name`) and clip to length. */
 export function buildCommentSnippet(content: string): string {
   const stripped = content
@@ -36,10 +43,19 @@ type CaseResubmittedCopy = {
   fieldCount: number
 }
 
+type CaseEmailUndeliveredCopy = {
+  type: Extract<NotificationType, 'case_email_undelivered'>
+  caseNumber: string
+  templateLabel: string
+  recipient: string
+  status: string
+}
+
 export type NotificationCopy =
   | CaseAssignedCopy
   | CommentCopy
   | CaseResubmittedCopy
+  | CaseEmailUndeliveredCopy
 
 export function buildNotificationCopy(input: NotificationCopy): {
   title: string
@@ -75,6 +91,11 @@ export function buildNotificationCopy(input: NotificationCopy): {
       return {
         title: `Case ${input.caseNumber} — merchant submitted updated details`,
         body: `${input.clientName ?? 'The merchant'} resubmitted ${input.fieldCount} field${input.fieldCount === 1 ? '' : 's'} for your review.`,
+      }
+    case 'case_email_undelivered':
+      return {
+        title: `Email not delivered on ${input.caseNumber}`,
+        body: `The ${input.templateLabel} email to ${input.recipient} ${UNDELIVERED_STATUS_TEXT[input.status] ?? 'was not delivered'}. Send it again or send it manually before closing the case; if the case is awaiting the merchant, move it back to Working first.`,
       }
   }
 }

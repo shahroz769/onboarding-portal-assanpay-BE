@@ -28,6 +28,7 @@ import { assertCanWorkCase } from './case-access.service'
 import type { DbTransaction } from './case-db'
 import {
   assertAutoEmailEnabled,
+  resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
 import {
@@ -256,6 +257,16 @@ export async function sendAgreementToClient(
     },
     input.recipientEmailType,
   )
+  // Resolved before the case changes state, so a lookup failure leaves it
+  // untouched.
+  const extraRecipients = await resolveCaseEmailRecipients({
+    actorId: userId,
+    merchant: {
+      submitterEmail: caseRow.merchantSubmitterEmail,
+      businessEmail: caseRow.merchantBusinessEmail,
+    },
+    recipient,
+  })
 
   const details = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
@@ -317,6 +328,7 @@ export async function sendAgreementToClient(
 
   const emailResult = await sendEmail({
     to: recipient.email,
+    ...extraRecipients,
     subject: `AssanPay Agreement for ${caseRow.merchantName}`,
     template: 'agreement',
     react: AgreementEmail({
@@ -374,6 +386,9 @@ export async function sendAgreementToClient(
       details: {
         emailLogId: emailResult.emailLogId,
         recipient: recipient.email,
+        cc: emailResult.cc,
+        bcc: emailResult.bcc,
+        replyTo: emailResult.replyTo,
         recipientEmailType: recipient.recipientEmailType,
         remarks,
         error: emailResult.error ?? null,

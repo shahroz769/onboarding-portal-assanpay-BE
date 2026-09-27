@@ -19,7 +19,6 @@ import { ensureQueueStages } from '../queues/queue-stage-defaults'
 import { isQueueWorkflowType } from '../queues/queue-workflow'
 import { sendEmail } from '../email/email.service'
 import { DocumentResubmissionEmail } from '../email/templates/document-resubmission'
-import { getLinkDeadlineSettings } from '../configuration/configuration.service'
 import { getRequiredDocumentTypes } from '../merchants/merchants.schemas'
 import type { MerchantDocumentType } from '../merchants/merchants.schemas'
 import {
@@ -48,8 +47,8 @@ import { DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS } from './case-constants'
 import { getCaseFileStorage } from './case-storage'
 import {
   assertAutoEmailEnabled,
-  formatExpiryDate,
   getRejectionLabel,
+  resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
 import type {
@@ -542,6 +541,16 @@ export async function sendForResubmission(
     },
     input.recipientEmailType,
   )
+  // Resolved before the case changes state, so a lookup failure leaves it
+  // untouched.
+  const extraRecipients = await resolveCaseEmailRecipients({
+    actorId: userId,
+    merchant: {
+      submitterEmail: row.merchantSubmitterEmail,
+      businessEmail: row.merchantBusinessEmail,
+    },
+    recipient,
+  })
 
   // 2. Load rejected field reviews
   const rejectedReviews = await db
@@ -632,12 +641,7 @@ export async function sendForResubmission(
   }
 
   // 5. Issue token
-  const linkDeadlines = await getLinkDeadlineSettings()
-  const issued = await issueToken(
-    caseId,
-    userId,
-    linkDeadlines.documentsReviewResubmissionHours,
-  )
+  const issued = await issueToken(caseId, userId)
 
   const preparedAt = new Date()
 
@@ -645,6 +649,7 @@ export async function sendForResubmission(
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const emailResult = await sendEmail({
     to: recipient.email,
+    ...extraRecipients,
     subject: 'Action required to update your onboarding submission',
     template: 'document-resubmission',
     react: DocumentResubmissionEmail({
@@ -652,7 +657,6 @@ export async function sendForResubmission(
       ownerName: row.merchantOwnerName,
       rejections,
       resubmissionUrl,
-      expiresAt: formatExpiryDate(issued.expiresAt),
     }),
     caseId,
     merchantId: row.merchantId,
@@ -693,7 +697,6 @@ export async function sendForResubmission(
 
     return {
       status: 'failed',
-      tokenExpiresAt: null,
       emailLogId: emailResult.emailLogId,
       error: emailResult.error,
     }
@@ -723,12 +726,14 @@ export async function sendForResubmission(
       action: 'resubmission_email_sent',
       details: {
         tokenId: issued.tokenId,
-        expiresAt: issued.expiresAt.toISOString(),
         rejectedFields: rejectedFieldNames,
         rejectedFieldLabels,
         rejectedFieldDetails,
         emailLogId: emailResult.emailLogId,
         recipient: recipient.email,
+        cc: emailResult.cc,
+        bcc: emailResult.bcc,
+        replyTo: emailResult.replyTo,
         recipientEmailType: recipient.recipientEmailType,
       },
       createdAt: sentAt,
@@ -737,7 +742,6 @@ export async function sendForResubmission(
 
   return {
     status: 'sent',
-    tokenExpiresAt: issued.expiresAt.toISOString(),
     emailLogId: emailResult.emailLogId,
   }
 }
@@ -827,12 +831,7 @@ export async function regenerateResubmissionLink(
     rejectionReason: review.remarks,
   }))
 
-  const linkDeadlines = await getLinkDeadlineSettings()
-  const issued = await issueToken(
-    caseId,
-    userId,
-    linkDeadlines.documentsReviewResubmissionHours,
-  )
+  const issued = await issueToken(caseId, userId)
   const url = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
 
   await db.insert(caseHistory).values({
@@ -841,7 +840,6 @@ export async function regenerateResubmissionLink(
     action: 'resubmission_link_regenerated',
     details: {
       tokenId: issued.tokenId,
-      expiresAt: issued.expiresAt.toISOString(),
       rejectedFields: rejectedFieldNames,
       rejectedFieldLabels,
       rejectedFieldDetails,
@@ -850,14 +848,12 @@ export async function regenerateResubmissionLink(
 
   return {
     url,
-    expiresAt: issued.expiresAt.toISOString(),
     rejectedFieldCount: rejectedReviews.length,
   }
 }
 
 export type ResubmissionContext = {
   caseNumber: string
-  expiresAt: string
   merchantName: string
   merchantOwnerName: string
   rejections: Array<{
@@ -875,7 +871,6 @@ export type ResubmissionContext = {
 
 export async function getResubmissionContext(
   caseId: string,
-  expiresAt: Date,
 ): Promise<ResubmissionContext> {
   const db = getDb()
 
@@ -982,7 +977,6 @@ export async function getResubmissionContext(
   // Served to unauthenticated merchants: keep internal row/user ids out.
   return {
     caseNumber: caseRow.caseNumber,
-    expiresAt: expiresAt.toISOString(),
     merchantName: merchant.businessName,
     merchantOwnerName: merchant.ownerFullName,
     rejections,

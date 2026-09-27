@@ -1143,12 +1143,20 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'comment_reply',
   'comment_thread',
   'case_resubmitted',
+  'case_email_undelivered',
 ])
 
+// 'sent' means Resend accepted the email; Resend webhooks move it on to
+// delivered / delivery_delayed / bounced / complained / suppressed / failed.
 export const emailLogStatusEnum = pgEnum('email_log_status', [
   'queued',
   'sent',
   'failed',
+  'delivered',
+  'delivery_delayed',
+  'bounced',
+  'complained',
+  'suppressed',
 ])
 
 export const caseResubmissionTokens = pgTable(
@@ -1160,7 +1168,6 @@ export const caseResubmissionTokens = pgTable(
       .references(() => cases.id, { onDelete: 'cascade' }),
     token: varchar('token', { length: 86 }).unique(),
     tokenHash: varchar('token_hash', { length: 64 }).unique(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
@@ -1201,6 +1208,14 @@ export const emailLog = pgTable(
     status: emailLogStatusEnum('status').default('queued').notNull(),
     errorMsg: text('error_msg'),
     metadata: jsonb('metadata'),
+    ccEmails: text('cc_emails').array().default([]).notNull(),
+    bccEmails: text('bcc_emails').array().default([]).notNull(),
+    replyTo: text('reply_to').array().default([]).notNull(),
+    /** Provider detail for the last status, e.g. a bounce reason. */
+    statusDetail: text('status_detail'),
+    statusUpdatedAt: timestamp('status_updated_at', { withTimezone: true }),
+    /** Sent while Resend webhooks were configured, so delivery is known. */
+    deliveryTracked: boolean('delivery_tracked').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1215,6 +1230,7 @@ export const emailLog = pgTable(
     ),
     emailLogStatusIdx: index('email_log_status_idx').on(table.status),
     emailLogCreatedAtIdx: index('email_log_created_at_idx').on(table.createdAt),
+    emailLogResendIdIdx: index('email_log_resend_id_idx').on(table.resendId),
   }),
 )
 

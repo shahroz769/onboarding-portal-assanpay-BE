@@ -123,6 +123,9 @@ const envSchema = z.object({
   GOOGLE_DRIVE_PARENT_FOLDER_ID: z.string().min(1).optional(),
   GOOGLE_DRIVE_PARENT_FOLDER_ID_PUBLIC: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
+  // Signing secret of the Resend webhook pointed at /api/webhooks/resend.
+  // Without it the endpoint rejects events and delivery isn't tracked.
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   EMAIL_FROM: z
     .string()
     .min(1)
