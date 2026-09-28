@@ -77,6 +77,7 @@ import {
   getTestingLimitsAppliedEntryForMerchant,
   getWordpressWebsiteDetails,
 } from './case-detail-lookups'
+import { getPortalPasswordCodeStatus } from './portal-password-code.service'
 
 export async function createCase(input: CreateCaseInput, actorId?: string) {
   const db = getDb()
@@ -581,6 +582,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     caseDocumentReviewDetail,
     merchantDocumentReviewDetail,
     midCreationCredentials,
+    portalPasswordCode,
     limitsAndMdr,
     paymentMethods,
     payoutMethods,
@@ -689,6 +691,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       : Promise.resolve(null),
     needsMidCredentials
       ? getMidCreationCredentials(caseData.merchantId)
+      : Promise.resolve(null),
+    workflowType === 'mid' || workflowType === 'testing'
+      ? getPortalPasswordCodeStatus(caseData.merchantId)
       : Promise.resolve(null),
     workflowType === 'mid' ? getLimitsAndMdrSettings() : Promise.resolve(null),
     workflowType === 'mid' ? getPaymentMethodSettings() : Promise.resolve([]),
@@ -934,6 +939,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             midCreationCredentials.internalBranchCode.trim(),
           )
         : Boolean(midCreationCredentials),
+      portalPasswordCode,
       portalMid: isQueueWorkflowType(queue, 'mid')
         ? (midCreationCredentials?.portalMid ?? null)
         : null,

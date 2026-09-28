@@ -98,6 +98,16 @@ const envSchema = z.object({
     .default(10),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
+  // Base64-encoded 32-byte AES-256-GCM key for merchant portal password codes
+  // held until the credentials email is sent. Without it codes cannot be
+  // generated or read. Rotating it makes unsent codes unreadable.
+  PORTAL_PASSWORD_ENCRYPTION_KEY: z
+    .string()
+    .trim()
+    .refine((value) => Buffer.from(value, 'base64').length === 32, {
+      message: 'Expected a base64-encoded 32-byte key.',
+    })
+    .optional(),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   ALLOW_SUPER_ADMIN_REGISTRATION: z

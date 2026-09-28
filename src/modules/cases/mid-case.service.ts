@@ -33,6 +33,11 @@ import {
   resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
+import {
+  consumePortalPasswordCode,
+  getPortalPasswordCodeStatus,
+  requireActivePortalPasswordCode,
+} from './portal-password-code.service'
 
 export async function saveMidCreationDetails(
   caseId: string,
@@ -43,6 +48,7 @@ export async function saveMidCreationDetails(
   const [caseRow] = await db
     .select({
       id: cases.id,
+      merchantId: cases.merchantId,
       ownerId: cases.ownerId,
       status: cases.status,
       currentStageId: cases.currentStageId,
@@ -81,6 +87,15 @@ export async function saveMidCreationDetails(
 
   if (!currentStage || currentStage.category !== 'in_progress') {
     throw new AppError(400, 'MID details can only be saved in working.')
+  }
+
+  // The merchant account is created with the code's password, so saving
+  // without one would leave nothing to send.
+  if (!(await getPortalPasswordCodeStatus(caseRow.merchantId))) {
+    throw new AppError(
+      400,
+      'Generate the portal password code before saving MID details.',
+    )
   }
 
   const configuredPayoutMethods = await getPayoutMethodsForMerchantRole(
@@ -212,9 +227,12 @@ export async function sendMidCreationCredentialsEmail(
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
+  const passwordCode = await requireActivePortalPasswordCode(
+    caseRow.merchantId,
+  )
   const portalPassword = buildPortalPassword(
     credentials.email,
-    caseRow.merchantNumber,
+    passwordCode.code,
   )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
   const serverIntegration = resolveCustomWebsiteServerIntegration(
@@ -288,6 +306,8 @@ export async function sendMidCreationCredentialsEmail(
       error: emailResult.error,
     }
   }
+
+  await consumePortalPasswordCode(passwordCode.id)
 
   return {
     status: 'sent',

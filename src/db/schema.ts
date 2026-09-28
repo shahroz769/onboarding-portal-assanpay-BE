@@ -1185,6 +1185,50 @@ export const caseResubmissionTokens = pgTable(
   }),
 )
 
+// Random code behind the merchant portal temporary password. The case owner
+// reveals it to set the password on the admin portal, and the credentials
+// email reads it back, so it is encrypted rather than hashed. The ciphertext
+// is cleared once the email is sent; the row stays as an audit record.
+export const merchantPortalPasswordCodes = pgTable(
+  'merchant_portal_password_codes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    caseId: uuid('case_id').references(() => cases.id, {
+      onDelete: 'set null',
+    }),
+    codeCiphertext: text('code_ciphertext'),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+  },
+  (table) => ({
+    merchantPortalPasswordCodesMerchantIdx: index(
+      'merchant_portal_password_codes_merchant_idx',
+    ).on(table.merchantId, table.createdAt),
+    merchantPortalPasswordCodesCaseIdx: index(
+      'merchant_portal_password_codes_case_idx',
+    ).on(table.caseId),
+    merchantPortalPasswordCodesCreatedByIdx: index(
+      'merchant_portal_password_codes_created_by_idx',
+    ).on(table.createdBy),
+    merchantPortalPasswordCodesOneActiveIdx: uniqueIndex(
+      'merchant_portal_password_codes_one_active_idx',
+    )
+      .on(table.merchantId)
+      .where(
+        sql`${table.consumedAt} is null and ${table.supersededAt} is null`,
+      ),
+  }),
+)
+
 export const emailLog = pgTable(
   'email_log',
   {
@@ -1576,6 +1620,8 @@ export type NewCaseLink = typeof caseLinks.$inferInsert
 export type Notification = typeof notifications.$inferSelect
 export type NewNotification = typeof notifications.$inferInsert
 export type CaseResubmissionToken = typeof caseResubmissionTokens.$inferSelect
+export type MerchantPortalPasswordCode =
+  typeof merchantPortalPasswordCodes.$inferSelect
 export type NewCaseResubmissionToken =
   typeof caseResubmissionTokens.$inferInsert
 export type EmailLog = typeof emailLog.$inferSelect

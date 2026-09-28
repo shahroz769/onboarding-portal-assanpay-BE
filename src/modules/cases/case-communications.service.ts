@@ -64,6 +64,10 @@ import { validateEmailProofFile } from './case-upload-validation'
 import { loadAgreementCase } from './agreement-case.service'
 import { loadLiveCase } from './live-case.service'
 import { loadMidCreationCase } from './mid-case.service'
+import {
+  consumePortalPasswordCode,
+  requireActivePortalPasswordCode,
+} from './portal-password-code.service'
 import { agreementEmailSubject } from '../email/templates/agreement'
 import { DOCUMENT_RESUBMISSION_EMAIL_SUBJECT } from '../email/templates/document-resubmission'
 import { liveActivationEmailSubject } from '../email/templates/live-activation'
@@ -667,9 +671,12 @@ export async function getMidCreationEmailPreview(
     getMerchantPortalSettings(),
   ])
   const subject = midCreationEmailSubject(caseRow.merchantName)
+  const passwordCode = await requireActivePortalPasswordCode(
+    caseRow.merchantId,
+  )
   const portalPassword = buildPortalPassword(
     credentials.email,
-    caseRow.merchantNumber,
+    passwordCode.code,
   )
   const payoutRateLabel = getClientPayoutRateLabel(credentials.merchantRole)
   const serverIntegration = resolveCustomWebsiteServerIntegration(
@@ -704,7 +711,9 @@ export async function getMidCreationEmailPreview(
     })),
     subject,
     body,
-    tokenId: caseId,
+    // Ties the confirmation to the code shown in this preview, so a code
+    // regenerated in between is not marked as sent.
+    tokenId: passwordCode.id,
   }
 }
 
@@ -739,8 +748,14 @@ export async function confirmMidCreationEmailManual(
     input.recipientEmailType,
   )
 
-  if (input.tokenId !== caseId) {
-    throw new AppError(400, 'Invalid preview token.')
+  const passwordCode = await requireActivePortalPasswordCode(
+    caseRow.merchantId,
+  )
+  if (input.tokenId !== passwordCode.id) {
+    throw new AppError(
+      409,
+      'The portal password code changed after this preview. Load the preview again.',
+    )
   }
 
   const { savedFile } = await uploadEmailProofFile(
@@ -775,6 +790,7 @@ export async function confirmMidCreationEmailManual(
     },
     createdAt: now,
   })
+  await consumePortalPasswordCode(passwordCode.id)
 
   return { status: 'sent', fileId: savedFile.id }
 }

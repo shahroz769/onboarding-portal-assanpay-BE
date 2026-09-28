@@ -445,9 +445,11 @@ export const ROLE_PAYOUT_METHOD_LABELS: Record<MerchantPortalRole, string> = {
   international_merchant_admin: 'All supported banks/e-wallets',
 }
 
-export function buildPortalPassword(email: string, merchantNumber: number) {
+// The random code is the secret; the email prefix only keeps the shape the
+// merchant portal already expects.
+export function buildPortalPassword(email: string, code: string) {
   const [localPart = email] = email.trim().split('@')
-  return `${localPart.trim().toLowerCase()}@ASSAN${merchantNumber}`
+  return `${localPart.trim().toLowerCase()}@ASSAN${code}`
 }
 
 export async function getMidCreationCredentials(

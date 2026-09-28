@@ -589,6 +589,13 @@
       "when": 1789344000000,
       "tag": "0084_simplify_case_stages",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1789430400000,
+      "tag": "0085_merchant_portal_password_codes",
+      "breakpoints": true
     }
   ]
 }

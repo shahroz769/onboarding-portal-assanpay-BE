@@ -80,6 +80,10 @@ import {
   saveMidCreationDetails,
   sendMidCreationCredentialsEmail,
 } from './mid-case.service'
+import {
+  generatePortalPasswordCode,
+  revealPortalPasswordCode,
+} from './portal-password-code.service'
 import { saveWordpressWebsiteCase } from './wordpress-case.service'
 import {
   selectSubMerchantForm,
@@ -364,6 +368,24 @@ caseRoutes.post(
     return c.json(result)
   },
 )
+
+// GET /api/cases/:id/portal-password-code — Reveal the active code (case owner only)
+caseRoutes.get('/:id/portal-password-code', async (c) => {
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await revealPortalPasswordCode(id, auth.userId)
+  c.header('Cache-Control', 'no-store')
+  return c.json(result)
+})
+
+// POST /api/cases/:id/portal-password-code — Generate or replace the code (case owner only)
+caseRoutes.post('/:id/portal-password-code', async (c) => {
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await generatePortalPasswordCode(id, auth.userId)
+  c.header('Cache-Control', 'no-store')
+  return c.json(result)
+})
 
 caseRoutes.post(
   '/:id/live/limits-applied',
