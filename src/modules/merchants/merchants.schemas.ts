@@ -520,6 +520,8 @@ export const sortableColumns = [
   'priority',
   'createdAt',
   'businessScope',
+  'ownerFullName',
+  'updatedAt',
 ] as const
 
 export const listMerchantsQuerySchema = z.object({

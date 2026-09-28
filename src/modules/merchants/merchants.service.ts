@@ -373,6 +373,14 @@ const sortColumnMap = {
     expression: merchants.businessScope,
     kind: 'string',
   },
+  ownerFullName: {
+    expression: sql`lower(${merchants.ownerFullName})`,
+    kind: 'string',
+  },
+  updatedAt: {
+    expression: merchants.updatedAt,
+    kind: 'date',
+  },
 } as const
 
 export async function listMerchants(query: ListMerchantsQuery) {
@@ -385,6 +393,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
     const searchConditions = [
       ilike(merchants.businessName, term),
       ilike(merchants.submitterEmail, term),
+      ilike(merchants.ownerFullName, term),
     ]
     if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
       searchConditions.push(eq(merchants.merchantNumber, numericSearch))
@@ -491,6 +500,16 @@ export async function listMerchants(query: ListMerchantsQuery) {
       currency: merchants.currency,
       businessScope: merchants.businessScope,
       liveAt: merchants.liveAt,
+      ownerFullName: merchants.ownerFullName,
+      updatedAt: merchants.updatedAt,
+      // Served by the partial cases_open_merchant_idx index. Columns are
+      // qualified by hand: single-table selects render them unqualified, so
+      // "id" would resolve to cases.id inside the subquery.
+      openCasesCount: sql<number>`(
+        select count(*)::int from "cases" as "open_cases"
+        where "open_cases"."merchant_id" = "merchants"."id"
+          and "open_cases"."status" <> 'closed'
+      )`,
       cursorValue: keysetCursorExpression(sortSpec),
     })
     .from(merchants)

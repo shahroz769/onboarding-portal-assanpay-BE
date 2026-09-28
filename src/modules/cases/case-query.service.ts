@@ -330,6 +330,29 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
     }
   }
 
+  if (query.priority) {
+    const priorities = query.priority
+      .split(',')
+      .map((value) => value.trim())
+      .filter(
+        (value): value is 'normal' | 'high' =>
+          value === 'normal' || value === 'high',
+      )
+    if (priorities.length > 0) {
+      conditions.push(inArray(cases.priority, priorities))
+    }
+  }
+
+  if (query.merchantId) {
+    const merchantIds = query.merchantId
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+    if (merchantIds.length > 0) {
+      conditions.push(inArray(cases.merchantId, merchantIds))
+    }
+  }
+
   if (query.status) {
     const requestedStatuses = parseCsvValues<CaseListStatusFilterValue>(
       query.status,

@@ -86,6 +86,27 @@ export const listCasesQuerySchema = z.object({
   search: z.string().optional(),
   queueId: z.uuid().optional(),
   ownerId: z.string().optional(),
+  // Comma-separated, like ownerId and status.
+  priority: z
+    .string()
+    .refine((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .every((item) => item === 'normal' || item === 'high'),
+    )
+    .optional(),
+  merchantId: z
+    .string()
+    .refine((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .every((item) => z.uuid().safeParse(item).success),
+    )
+    .optional(),
   status: z
     .string()
     .refine((value) =>
