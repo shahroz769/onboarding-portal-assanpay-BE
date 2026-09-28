@@ -81,6 +81,7 @@ import {
   markStorageObjectsLifecycle,
   recordStorageObject,
 } from '../../lib/storage/ownership'
+import { clearPortalApiCredentials } from '../cases/portal-api-credentials.service'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType
@@ -831,6 +832,8 @@ export async function terminateMerchant(
       return null
     }
 
+    // Terminated merchants no longer need their portal API credentials.
+    await clearPortalApiCredentials(tx, [merchantId])
     const closedCaseCount = await closeOpenCasesAsUnsuccessful(tx, {
       merchantIds: [merchantId],
       actorId,
@@ -887,6 +890,8 @@ export async function bulkTerminateMerchants(
       .returning({ id: merchants.id })
 
     const updatedIds = updatedRows.map((row) => row.id)
+    // Terminated merchants no longer need their portal API credentials.
+    await clearPortalApiCredentials(tx, updatedIds)
     const closedCaseCount =
       updatedIds.length > 0
         ? await closeOpenCasesAsUnsuccessful(tx, {

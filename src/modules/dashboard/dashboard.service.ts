@@ -817,10 +817,6 @@ export async function getDashboard(query: DashboardQuery) {
     }),
     { newInRange: 0, closedInRange: 0 },
   )
-  const breachRate =
-    slaSummary.evaluated > 0
-      ? Math.round((slaSummary.breached / slaSummary.evaluated) * 1000) / 10
-      : 0
 
   // ─── Shape Merchant Counts ────────────────────────────────────────────────
 
@@ -900,7 +896,6 @@ export async function getDashboard(query: DashboardQuery) {
       slaBreached: slaSummary.breached,
       slaEvaluated: slaSummary.evaluated,
       openOverSla: slaSummary.openOverSla,
-      breachRate,
       statusDistribution: caseStatusDistribution,
     },
     merchants: {

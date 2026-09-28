@@ -34,6 +34,7 @@ import {
   getMidCreationCredentialsSentEntry,
   getWordpressWebsiteDetails,
 } from './case-detail-lookups'
+import { hasPortalApiCredentials } from './portal-api-credentials.service'
 
 export async function updateCaseStatus(
   caseId: string,
@@ -328,6 +329,13 @@ export async function advanceStage(caseId: string, userId: string) {
       )
     }
 
+    if (!(await hasPortalApiCredentials(caseData.merchantId))) {
+      throw new AppError(
+        400,
+        'Save the API Key and API Secret for the internal merchant ID before closing this case.',
+      )
+    }
+
     targetStage = await db.query.queueStages.findFirst({
       where: and(
         eq(queueStages.queueId, caseData.queueId),
@@ -408,7 +416,10 @@ export async function advanceStage(caseId: string, userId: string) {
     }
 
     if (details.screenshots.length === 0) {
-      throw new AppError(400, 'Upload screenshots before closing this case.')
+      throw new AppError(
+        400,
+        'Upload the home page screenshot before closing this case.',
+      )
     }
 
     const documentReview = await getLatestDocumentReviewDetailsForMerchant(

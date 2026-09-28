@@ -1,16 +1,19 @@
 export function sanitizeCaseHistoryDetails(action: string, details: unknown) {
-  if (
-    action !== 'mid_creation_saved' ||
-    !details ||
-    typeof details !== 'object'
-  ) {
+  if (!details || typeof details !== 'object') {
     return details
   }
 
-  const { password: _password, ...safeDetails } = details as Record<
-    string,
-    unknown
-  >
+  // API credentials are never written to history; this is a backstop.
+  const {
+    apiKey: _apiKey,
+    apiSecret: _apiSecret,
+    ...withoutApiCredentials
+  } = details as Record<string, unknown>
+  if (action !== 'mid_creation_saved') {
+    return withoutApiCredentials
+  }
+
+  const { password: _password, ...safeDetails } = withoutApiCredentials
   return safeDetails
 }
 

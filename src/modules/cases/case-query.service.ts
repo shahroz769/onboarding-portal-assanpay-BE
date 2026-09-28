@@ -78,6 +78,7 @@ import {
   getWordpressWebsiteDetails,
 } from './case-detail-lookups'
 import { getPortalPasswordCodeStatus } from './portal-password-code.service'
+import { getPortalApiCredentialsStatus } from './portal-api-credentials.service'
 
 export async function createCase(input: CreateCaseInput, actorId?: string) {
   const db = getDb()
@@ -560,6 +561,11 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const workflowType = queue.workflowType
   const needsMerchantDocuments =
     workflowType === 'document_review' || workflowType === 'sub_merchant_form'
+  const isWorkingOwner = Boolean(
+    actor &&
+    caseData.ownerId === actor.userId &&
+    caseData.status === 'working',
+  )
   const needsMidCredentials =
     workflowType === 'mid' ||
     workflowType === 'testing' ||
@@ -583,6 +589,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     merchantDocumentReviewDetail,
     midCreationCredentials,
     portalPasswordCode,
+    portalApiCredentials,
     limitsAndMdr,
     paymentMethods,
     payoutMethods,
@@ -694,6 +701,12 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       : Promise.resolve(null),
     workflowType === 'mid' || workflowType === 'testing'
       ? getPortalPasswordCodeStatus(caseData.merchantId)
+      : Promise.resolve(null),
+    // Status only; the key hint is for the working owner.
+    workflowType === 'mid' || workflowType === 'wordpress'
+      ? getPortalApiCredentialsStatus(caseData.merchantId, {
+          includeKeyHint: isWorkingOwner,
+        })
       : Promise.resolve(null),
     workflowType === 'mid' ? getLimitsAndMdrSettings() : Promise.resolve(null),
     workflowType === 'mid' ? getPaymentMethodSettings() : Promise.resolve([]),
@@ -936,32 +949,34 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         ? Boolean(
             midCreationCredentials?.branchCode.trim() &&
             midCreationCredentials.internalEmail.trim() &&
-            midCreationCredentials.internalBranchCode.trim(),
+            midCreationCredentials.internalBranchCode.trim() &&
+            portalApiCredentials,
           )
         : Boolean(midCreationCredentials),
       portalPasswordCode,
+      portalApiCredentials,
       portalMid: isQueueWorkflowType(queue, 'mid')
         ? (midCreationCredentials?.portalMid ?? null)
         : null,
-      internalPortalMid:
-        isQueueWorkflowType(queue, 'mid') ||
-        isQueueWorkflowType(queue, 'wordpress')
-          ? (midCreationCredentials?.internalPortalMid ?? null)
-          : null,
+      internalPortalMid: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.internalPortalMid ?? null)
+        : null,
       email: isQueueWorkflowType(queue, 'mid')
         ? (midCreationCredentials?.email ?? null)
         : null,
       branchCode: isQueueWorkflowType(queue, 'mid')
         ? (midCreationCredentials?.branchCode ?? null)
         : null,
-      internalEmail:
-        isQueueWorkflowType(queue, 'mid') ||
-        isQueueWorkflowType(queue, 'wordpress')
-          ? (midCreationCredentials?.internalEmail ?? null)
-          : null,
-      internalBranchCode: isQueueWorkflowType(queue, 'mid')
-        ? (midCreationCredentials?.internalBranchCode ?? null)
+      internalEmail: isQueueWorkflowType(queue, 'mid')
+        ? (midCreationCredentials?.internalEmail ?? null)
         : null,
+      // WordPress shows the internal branch code to the working owner only,
+      // so it is left out of the payload for everyone else.
+      internalBranchCode:
+        isQueueWorkflowType(queue, 'mid') ||
+        (isQueueWorkflowType(queue, 'wordpress') && isWorkingOwner)
+          ? (midCreationCredentials?.internalBranchCode ?? null)
+          : null,
       internalLimitsAppliedAt:
         internalPortalMidLimitsAppliedEntry?.createdAt?.toISOString() ?? null,
       internalLimitsAppliedBy: internalPortalMidLimitsAppliedEntry?.actorId

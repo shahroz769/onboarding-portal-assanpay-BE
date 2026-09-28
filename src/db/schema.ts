@@ -1229,6 +1229,42 @@ export const merchantPortalPasswordCodes = pgTable(
   }),
 )
 
+// Merchant portal API key and secret for the internal merchant ID. Both are
+// encrypted; only the key's last four characters are kept in the clear. The
+// row is deleted when the WordPress Website case closes.
+export const merchantPortalApiCredentials = pgTable(
+  'merchant_portal_api_credentials',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    caseId: uuid('case_id').references(() => cases.id, {
+      onDelete: 'set null',
+    }),
+    apiKeyCiphertext: text('api_key_ciphertext').notNull(),
+    apiSecretCiphertext: text('api_secret_ciphertext').notNull(),
+    apiKeyLast4: varchar('api_key_last4', { length: 4 }).notNull(),
+    updatedBy: uuid('updated_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    merchantPortalApiCredentialsMerchantIdx: uniqueIndex(
+      'merchant_portal_api_credentials_merchant_idx',
+    ).on(table.merchantId),
+    merchantPortalApiCredentialsCaseIdx: index(
+      'merchant_portal_api_credentials_case_idx',
+    ).on(table.caseId),
+    merchantPortalApiCredentialsUpdatedByIdx: index(
+      'merchant_portal_api_credentials_updated_by_idx',
+    ).on(table.updatedBy),
+  }),
+)
+
 export const emailLog = pgTable(
   'email_log',
   {

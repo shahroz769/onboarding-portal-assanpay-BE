@@ -85,7 +85,7 @@ export async function saveWordpressWebsiteCase(
   const caseRow = await loadWordpressWebsiteCase(caseId, userId)
 
   if (input.screenshots.length === 0) {
-    throw new AppError(400, 'At least one page screenshot is required.')
+    throw new AppError(400, 'A home page screenshot is required.')
   }
 
   if (input.subMerchantLogoScreenshots.length === 0) {
@@ -99,8 +99,8 @@ export async function saveWordpressWebsiteCase(
     throw new AppError(400, 'An AssanPay checkout page screenshot is required.')
   }
 
-  if (input.screenshots.length > 30) {
-    throw new AppError(400, 'Upload no more than 30 page screenshots.')
+  if (input.screenshots.length > 1) {
+    throw new AppError(400, 'Upload only one home page screenshot.')
   }
 
   if (input.subMerchantLogoScreenshots.length > 30) {

@@ -16,6 +16,7 @@ import {
   emailRecipientSelectionSchema,
   listCasesQuerySchema,
   markLiveLimitsAppliedSchema,
+  savePortalApiCredentialsSchema,
   markTestingLimitsAppliedSchema,
   saveMidCreationDetailsSchema,
   saveDocumentReviewSubMerchantSchema,
@@ -84,6 +85,10 @@ import {
   generatePortalPasswordCode,
   revealPortalPasswordCode,
 } from './portal-password-code.service'
+import {
+  revealPortalApiCredentials,
+  savePortalApiCredentials,
+} from './portal-api-credentials.service'
 import { saveWordpressWebsiteCase } from './wordpress-case.service'
 import {
   selectSubMerchantForm,
@@ -383,6 +388,34 @@ caseRoutes.post('/:id/portal-password-code', async (c) => {
   const auth = c.get('auth')
   const id = c.req.param('id')
   const result = await generatePortalPasswordCode(id, auth.userId)
+  c.header('Cache-Control', 'no-store')
+  return c.json(result)
+})
+
+// PUT /api/cases/:id/portal-api-credentials — Save or replace the internal
+// merchant ID API key and secret (MID Creation owner only). Write-only.
+caseRoutes.put(
+  '/:id/portal-api-credentials',
+  zodValidator('json', savePortalApiCredentialsSchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const result = await savePortalApiCredentials(
+      id,
+      auth.userId,
+      c.req.valid('json'),
+    )
+    c.header('Cache-Control', 'no-store')
+    return c.json(result)
+  },
+)
+
+// POST /api/cases/:id/portal-api-credentials/reveal — Reveal the API key and
+// secret (working owner of the MID Creation or WordPress case only)
+caseRoutes.post('/:id/portal-api-credentials/reveal', async (c) => {
+  const auth = c.get('auth')
+  const id = c.req.param('id')
+  const result = await revealPortalApiCredentials(id, auth.userId)
   c.header('Cache-Control', 'no-store')
   return c.json(result)
 })

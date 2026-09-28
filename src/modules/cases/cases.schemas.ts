@@ -264,6 +264,25 @@ export type MarkTestingLimitsAppliedInput = z.infer<
   typeof markTestingLimitsAppliedSchema
 >
 
+// Printable ASCII without spaces, as issued by the merchant portal.
+function portalApiCredentialValue(label: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, `${label} is required.`)
+    .max(512, `${label} is too long.`)
+    .regex(/^[!-~]+$/, `${label} must not contain spaces.`)
+}
+
+export const savePortalApiCredentialsSchema = z.strictObject({
+  apiKey: portalApiCredentialValue('API Key'),
+  apiSecret: portalApiCredentialValue('API Secret'),
+})
+
+export type SavePortalApiCredentialsInput = z.infer<
+  typeof savePortalApiCredentialsSchema
+>
+
 export const markLiveLimitsAppliedSchema = z.strictObject({
   applied: z.literal(true),
 })

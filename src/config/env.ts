@@ -108,6 +108,17 @@ const envSchema = z.object({
       message: 'Expected a base64-encoded 32-byte key.',
     })
     .optional(),
+  // Base64-encoded 32-byte AES-256-GCM key for the merchant portal API key and
+  // secret, held from MID Creation until the WordPress Website case closes.
+  // Kept separate from the portal password key. Rotating it makes stored
+  // credentials unreadable.
+  PORTAL_API_CREDENTIALS_ENCRYPTION_KEY: z
+    .string()
+    .trim()
+    .refine((value) => Buffer.from(value, 'base64').length === 32, {
+      message: 'Expected a base64-encoded 32-byte key.',
+    })
+    .optional(),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   ALLOW_SUPER_ADMIN_REGISTRATION: z

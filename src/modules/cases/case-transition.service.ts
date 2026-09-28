@@ -17,6 +17,7 @@ import {
 } from './case-email-delivery'
 import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { isCaseSlaBreached } from './case-sla'
+import { clearPortalApiCredentials } from './portal-api-credentials.service'
 
 type DbTransaction = Parameters<
   Parameters<ReturnType<typeof getDb>['transaction']>[0]
@@ -173,7 +174,12 @@ export async function transitionCaseState(
           : Promise.resolve(null),
         tx.query.queues.findFirst({
           where: eq(queues.id, locked.queueId),
-          columns: { id: true, slug: true, slaHours: true },
+          columns: {
+            id: true,
+            slug: true,
+            slaHours: true,
+            workflowType: true,
+          },
         }),
       ])
 
@@ -324,6 +330,26 @@ export async function transitionCaseState(
 
       if (input.afterUpdate) {
         await input.afterUpdate(tx, locked, updatedRow, derivedStatus)
+      }
+
+      // The API credentials are only needed until the WordPress website is
+      // set up, so any close of that case (either outcome) deletes them.
+      if (
+        derivedStatus === 'closed' &&
+        locked.status !== 'closed' &&
+        queue.workflowType === 'wordpress'
+      ) {
+        const cleared = await clearPortalApiCredentials(tx, [
+          locked.merchantId,
+        ])
+        if (cleared.length > 0) {
+          await tx.insert(caseHistory).values({
+            caseId: input.caseId,
+            actorId: input.actorId,
+            action: 'portal_api_credentials_cleared',
+            details: { reason: 'wordpress_case_closed' },
+          })
+        }
       }
 
       if (
