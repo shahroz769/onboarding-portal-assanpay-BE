@@ -73,19 +73,6 @@ export function LiveActivationEmail({
         )}
       </Panel>
 
-      {paymentMethods.length > 0 || payoutMethods.length > 0 ? (
-        <Panel tone="plain">
-          <SectionLabel>Applicable commission</SectionLabel>
-          {[...paymentMethods, ...payoutMethods].map((method) => (
-            <KeyRow
-              key={method.id}
-              label={method.label}
-              value={`${method.commissionRate}%`}
-            />
-          ))}
-        </Panel>
-      ) : null}
-
       <Paragraph>
         Please use the merchant portal to monitor live activity and manage your
         AssanPay merchant account.

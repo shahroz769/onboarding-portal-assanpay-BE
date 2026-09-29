@@ -60,10 +60,6 @@ export function MidCreationEmail({
     disbursementMin: 1000,
     disbursementMax: 50000,
   },
-  rates = {
-    payout: 0,
-    payoutLabel: 'Bank Settlement',
-  },
 }: MidCreationEmailProps) {
   return (
     <EmailShell
@@ -140,31 +136,6 @@ export function MidCreationEmail({
         disbursement method. After testing, withdraw your balance. Settlement is
         T+2 and is processed at 12:00 AM after each 48-hour period.
       </Paragraph>
-
-      <Panel tone="plain">
-        <SectionLabel>Applicable rates</SectionLabel>
-        {paymentMethods.map((method) => (
-          <KeyRow
-            key={method.id}
-            label={method.label}
-            value={`${method.commissionRate}%`}
-          />
-        ))}
-        {payoutMethods.length > 0 ? (
-          payoutMethods.map((method) => (
-            <KeyRow
-              key={method.id}
-              label={method.label}
-              value={`${method.commissionRate}%`}
-            />
-          ))
-        ) : (
-          <KeyRow
-            label={rates.payoutLabel ?? 'Payout'}
-            value={`${rates.payout}%`}
-          />
-        )}
-      </Panel>
 
       <Divider />
 

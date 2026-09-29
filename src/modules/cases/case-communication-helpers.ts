@@ -339,10 +339,6 @@ Testing Limits:
 ${params.paymentMethods.map((method) => `- ${method.label} collection: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n')}
 ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label} payout: PKR ${method.testing.min.toLocaleString()}-${method.testing.max.toLocaleString()}`).join('\n') : `- Disbursement: PKR ${params.testingLimits.disbursementMin.toLocaleString()}-${params.testingLimits.disbursementMax.toLocaleString()}`}
 
-Rates:
-${params.paymentMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n')}
-${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n') : `- ${params.payoutRateLabel}: ${params.payoutRate}`}
-
 Testing Instructions:
 - Perform low-amount tests only across every enabled collection and disbursement method.
 - After testing, withdraw your balance.
@@ -387,9 +383,6 @@ Merchant Portal Link: ${merchantPortalUrl}
 Live Limits Per Transaction
 ${params.paymentMethods.map((method) => `- ${method.label} collection: PKR ${method.live.min.toLocaleString()}-${method.live.max.toLocaleString()}`).join('\n')}
 ${params.payoutMethods.length > 0 ? params.payoutMethods.map((method) => `- ${method.label} payout: PKR ${method.live.min.toLocaleString()}-${method.live.max.toLocaleString()}`).join('\n') : `- Disbursement: PKR ${liveLimits.disbursementMin.toLocaleString()}-${liveLimits.disbursementMax.toLocaleString()}`}
-
-Applicable Commission
-${[...params.paymentMethods, ...params.payoutMethods].map((method) => `- ${method.label}: ${method.commissionRate}%`).join('\n')}
 
 You can use the merchant portal to monitor live activity and manage your AssanPay merchant account.
 
