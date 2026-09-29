@@ -449,7 +449,7 @@ export const ROLE_PAYOUT_METHOD_LABELS: Record<MerchantPortalRole, string> = {
 // merchant portal already expects.
 export function buildPortalPassword(email: string, code: string) {
   const [localPart = email] = email.trim().split('@')
-  return `${localPart.trim().toLowerCase()}@ASSAN${code}`
+  return `${localPart.trim().toLowerCase()}@${code}`
 }
 
 export async function getMidCreationCredentials(

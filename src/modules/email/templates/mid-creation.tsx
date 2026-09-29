@@ -186,7 +186,7 @@ export function midCreationEmailSubject(merchantName: string) {
 MidCreationEmail.PreviewProps = {
   merchantName: 'Acme Pvt Ltd',
   portalEmail: 'merchant@example.com',
-  portalPassword: 'merchant@ASSAN123',
+  portalPassword: 'merchant@123',
   merchantPortalUrl: 'https://merchant.assanpay.com/login',
   integrationGuideLabel: 'Custom Website',
 } satisfies MidCreationEmailProps
