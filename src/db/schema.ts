@@ -413,9 +413,6 @@ export const userPasswordTokens = pgTable(
       .notNull(),
   },
   (table) => ({
-    userPasswordTokensUserIdx: index('user_password_tokens_user_idx').on(
-      table.userId,
-    ),
     userPasswordTokensCreatedByIdx: index(
       'user_password_tokens_created_by_idx',
     ).on(table.createdBy),
@@ -695,26 +692,14 @@ export const cases = pgTable(
     casesSubMerchantIdIdx: index('cases_sub_merchant_id_idx').on(
       table.subMerchantId,
     ),
-    casesCurrentStageQueueIdx: index('cases_current_stage_queue_idx').on(
-      table.currentStageId,
-      table.queueId,
-    ),
     casesListCreatedIdx: index('cases_list_created_idx').on(
       table.createdAt,
-      table.id,
-    ),
-    casesCaseNumberIdIdx: index('cases_case_number_id_idx').on(
-      table.caseNumber,
       table.id,
     ),
     casesStatusIdIdx: index('cases_status_id_idx').on(table.status, table.id),
     casesClosedIdIdx: index('cases_closed_id_idx').on(table.closedAt, table.id),
     casesClosedCoalesceIdIdx: index('cases_closed_coalesce_id_idx').on(
       sql`coalesce(${table.closedAt}, '0001-01-01 00:00:00+00'::timestamptz)`,
-      table.id,
-    ),
-    casesUpdatedIdIdx: index('cases_updated_id_idx').on(
-      table.updatedAt,
       table.id,
     ),
     casesQueueCreatedIdx: index('cases_queue_created_idx').on(
@@ -1117,12 +1102,6 @@ export const caseFlowCloseJobs = pgTable(
     caseFlowCloseJobsMerchantIdx: index('case_flow_close_jobs_merchant_idx').on(
       table.merchantId,
     ),
-    caseFlowCloseJobsSourceQueueIdx: index(
-      'case_flow_close_jobs_source_queue_idx',
-    ).on(table.sourceQueueId),
-    caseFlowCloseJobsTargetQueueIdx: index(
-      'case_flow_close_jobs_target_queue_idx',
-    ).on(table.targetQueueId),
     caseFlowCloseJobsAttemptsNonnegative: check(
       'case_flow_close_jobs_attempts_nonnegative',
       sql`${table.attempts} >= 0`,
@@ -1171,9 +1150,6 @@ export const caseResubmissionTokens = pgTable(
       .notNull(),
   },
   (table) => ({
-    caseResubmissionTokensCaseIdIdx: index(
-      'case_resubmission_tokens_case_id_idx',
-    ).on(table.caseId),
     caseResubmissionTokensCreatedByIdx: index(
       'case_resubmission_tokens_created_by_idx',
     ).on(table.createdBy),
@@ -1537,10 +1513,6 @@ export const storageObjects = pgTable(
     storageObjectsMerchantAttemptIdx: index(
       'storage_objects_merchant_attempt_idx',
     ).on(table.merchantId, table.attemptId),
-    storageObjectsCaseAttemptIdx: index('storage_objects_case_attempt_idx').on(
-      table.caseId,
-      table.attemptId,
-    ),
     storageObjectsMerchantRootClaimUniq: uniqueIndex(
       'storage_objects_merchant_root_claim_uniq',
     )

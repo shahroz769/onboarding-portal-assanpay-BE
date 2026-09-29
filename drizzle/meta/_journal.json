@@ -603,6 +603,62 @@
       "when": 1789516800000,
       "tag": "0086_merchant_portal_api_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1789603200000,
+      "tag": "0087_drop_cases_current_stage_queue_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1789689600000,
+      "tag": "0088_drop_storage_objects_case_attempt_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1789776000000,
+      "tag": "0089_drop_case_flow_close_jobs_source_queue_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1789862400000,
+      "tag": "0090_drop_case_flow_close_jobs_target_queue_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1789948800000,
+      "tag": "0091_drop_case_resubmission_tokens_case_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1790035200000,
+      "tag": "0092_drop_cases_case_number_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790121600000,
+      "tag": "0093_drop_user_password_tokens_user_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1790208000000,
+      "tag": "0094_drop_cases_updated_id_idx",
+      "breakpoints": true
     }
   ]
 }
