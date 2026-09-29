@@ -56,7 +56,7 @@ export const loginSchema = z
   .object({
     identifier: z.string().trim().min(2).max(255).optional(),
     email: z.string().trim().min(2).max(255).optional(),
-    password: z.string().min(8).max(128),
+    password: z.string().min(1).max(128),
   })
   .transform((value, ctx) => {
     const identifier = value.identifier ?? value.email
