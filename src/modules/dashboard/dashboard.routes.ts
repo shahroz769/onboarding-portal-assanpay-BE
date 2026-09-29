@@ -18,6 +18,7 @@ import {
   listPendingPortalMidLimitsPage,
   listPendingPortalMidValues,
 } from './dashboard.service'
+import { getCaseWorkload } from './dashboard-workload.service'
 
 export const dashboardRoutes = new Hono<AppEnv>()
 
@@ -33,6 +34,13 @@ dashboardRoutes.get(
     return c.json(result)
   },
 )
+
+// GET /api/dashboard/workload — Open cases per queue and owner, right now.
+// Agents get their own cases and the unassigned pool.
+dashboardRoutes.get('/workload', async (c) => {
+  const result = await getCaseWorkload(c.get('auth'))
+  return c.json(result)
+})
 
 // GET /api/dashboard/portal-mids/pending — Paged MIDs awaiting limits
 dashboardRoutes.get(
