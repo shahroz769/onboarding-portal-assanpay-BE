@@ -7,7 +7,9 @@
     "db:migrate": "bun run src/db/migrate.ts",
     "db:audit": "bun run src/db/audit.ts",
     "db:seed-demo": "bun run src/db/seed-demo.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix"
   },
   "dependencies": {
     "@react-email/components": "^1.0.12",
@@ -28,6 +30,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "drizzle-kit": "^0.31.11",
+    "oxlint": "^1.86.0",
+    "oxlint-tsgolint": "^7.0.2003",
     "typescript": "^7.0.2"
   }
 }
