@@ -4,6 +4,8 @@ If a contract change requires frontend work, use Desktop path `\Onboarding Porta
 
 The current DB is a test DB and can be used for read/write tests, verifications, etc
 
+Production DB is Planetscale DB, read only, available via Planetscale MCP, and always use planetscale relevant skills along
+
 ## Hono Docs
 Always reference https://hono.dev/llms.txt for Hono specific things
 - [Full Docs](https://hono.dev/llms-full.txt) Full documentation of Hono. (without examples)
