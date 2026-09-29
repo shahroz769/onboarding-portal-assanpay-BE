@@ -26,6 +26,7 @@ import type {
   PendingPortalMidsQuery,
   PendingPortalMidValuesQuery,
 } from './dashboard.schemas'
+import { MAX_DASHBOARD_RANGE_DAYS } from './dashboard.schemas'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -41,7 +42,6 @@ const MERCHANT_STATUSES = ['pending', 'testing', 'live', 'terminated'] as const
 // Open cases mirror the "My Open Cases" definition: not closed.
 const OPEN_CASE_STATUSES = ['new', 'working', 'awaiting_merchant']
 
-const MAX_TREND_DAYS = 120
 const DASHBOARD_TIME_ZONE = sql.raw("'Asia/Karachi'")
 const DASHBOARD_TIME_ZONE_OFFSET_MINUTES = 5 * 60
 const MID_CREATION_QUEUE_SLUG = 'merchant-id'
@@ -110,7 +110,11 @@ function resolveRange(query: DashboardQuery): ResolvedRange {
     case 'custom': {
       const fromDate = dateKeyToStartOfDay(query.from as string)
       const toDate = dateKeyToStartOfDay(query.to as string)
-      const safeTo = Number.isNaN(toDate.getTime()) ? now : toDate
+      // `to` is a date key for a whole day, so report the end of it. Queries
+      // bound on the next day's start (see getDashboard's `endIso`).
+      const safeTo = Number.isNaN(toDate.getTime())
+        ? now
+        : new Date(addDays(toDate, 1).getTime() - 1)
       const safeFrom = Number.isNaN(fromDate.getTime())
         ? startOfDay(addDays(now, -29))
         : fromDate
@@ -678,7 +682,10 @@ function buildDateSeries(from: Date, to: Date) {
   const cursor = startOfDay(from)
   const end = startOfDay(to)
   let guard = 0
-  while (cursor.getTime() <= end.getTime() && guard < MAX_TREND_DAYS) {
+  while (
+    cursor.getTime() <= end.getTime() &&
+    guard < MAX_DASHBOARD_RANGE_DAYS
+  ) {
     days.push(toDashboardDateKey(cursor))
     cursor.setTime(addDays(cursor, 1).getTime())
     guard += 1
@@ -695,11 +702,13 @@ export async function getDashboard(query: DashboardQuery) {
 
   // ISO strings for raw `sql` interpolation. postgres-js cannot bind raw Date
   // objects passed as template params, so timestamps must be serialized first.
+  // Every range filter is [from, endIso): the start of the day after `to`, so
+  // the range totals and the daily trend series count exactly the same rows.
   const fromIso = from.toISOString()
-  const toIso = to.toISOString()
+  const endIso = addDays(startOfDay(to), 1).toISOString()
   const liveMerchant = and(isNull(merchants.deletedAt))
 
-  const [caseSummaryRows, merchantSummaryRows, dashboardTrendRows] =
+  const [caseSummaryRows, merchantSummaryRows, dashboardTrendRows, portalMids] =
     await Promise.all([
       // Case snapshot, range, and SLA metrics in one grouped scan.
       db
@@ -707,10 +716,10 @@ export async function getDashboard(query: DashboardQuery) {
           status: cases.status,
           count: int(sql`count(*)`),
           newInRange: int(
-            sql`count(*) filter (where ${cases.createdAt} >= ${fromIso} and ${cases.createdAt} <= ${toIso})`,
+            sql`count(*) filter (where ${cases.createdAt} >= ${fromIso} and ${cases.createdAt} < ${endIso})`,
           ),
           closedInRange: int(
-            sql`count(*) filter (where ${cases.closedAt} >= ${fromIso} and ${cases.closedAt} <= ${toIso})`,
+            sql`count(*) filter (where ${cases.closedAt} >= ${fromIso} and ${cases.closedAt} < ${endIso})`,
           ),
           breached: int(
             sql`count(*) filter (where ${cases.slaBreached} = true)`,
@@ -732,10 +741,10 @@ export async function getDashboard(query: DashboardQuery) {
           status: merchants.status,
           count: int(sql`count(*)`),
           submittedInRange: int(
-            sql`count(*) filter (where ${merchants.submittedAt} >= ${fromIso} and ${merchants.submittedAt} <= ${toIso})`,
+            sql`count(*) filter (where ${merchants.submittedAt} >= ${fromIso} and ${merchants.submittedAt} < ${endIso})`,
           ),
           liveInRange: int(
-            sql`count(*) filter (where ${merchants.liveAt} >= ${fromIso} and ${merchants.liveAt} <= ${toIso})`,
+            sql`count(*) filter (where ${merchants.liveAt} >= ${fromIso} and ${merchants.liveAt} < ${endIso})`,
           ),
         })
         .from(merchants)
@@ -750,8 +759,8 @@ export async function getDashboard(query: DashboardQuery) {
         count(*)::int as "count"
       from ${merchants}
       where ${merchants.deletedAt} is null
-        and ${merchants.submittedAt} >= ${from.toISOString()}
-        and ${merchants.submittedAt} < ${addDays(startOfDay(to), 1).toISOString()}
+        and ${merchants.submittedAt} >= ${fromIso}
+        and ${merchants.submittedAt} < ${endIso}
       group by "day"
       union all
       select
@@ -759,8 +768,8 @@ export async function getDashboard(query: DashboardQuery) {
         to_char(${cases.createdAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
         count(*)::int as "count"
       from ${cases}
-      where ${cases.createdAt} >= ${from.toISOString()}
-        and ${cases.createdAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      where ${cases.createdAt} >= ${fromIso}
+        and ${cases.createdAt} < ${endIso}
       group by "day"
       union all
       select
@@ -768,8 +777,8 @@ export async function getDashboard(query: DashboardQuery) {
         to_char(${cases.closedAt} at time zone ${DASHBOARD_TIME_ZONE}, 'YYYY-MM-DD') as "day",
         count(*)::int as "count"
       from ${cases}
-      where ${cases.closedAt} >= ${from.toISOString()}
-        and ${cases.closedAt} < ${addDays(startOfDay(to), 1).toISOString()}
+      where ${cases.closedAt} >= ${fromIso}
+        and ${cases.closedAt} < ${endIso}
       group by "day"
       union all
       select
@@ -778,12 +787,14 @@ export async function getDashboard(query: DashboardQuery) {
         count(*)::int as "count"
       from ${merchants}
       where ${merchants.deletedAt} is null
-        and ${merchants.liveAt} >= ${from.toISOString()}
-        and ${merchants.liveAt} < ${addDays(startOfDay(to), 1).toISOString()}
+        and ${merchants.liveAt} >= ${fromIso}
+        and ${merchants.liveAt} < ${endIso}
       group by "day"
     `),
+
+      // Independent of the range; no reason to wait for the queries above.
+      getPendingPortalMidLimits(),
     ])
-  const portalMids = await getPendingPortalMidLimits()
 
   // ─── Shape Case Status Counts ─────────────────────────────────────────────
 
@@ -841,27 +852,21 @@ export async function getDashboard(query: DashboardQuery) {
   // ─── Shape Trends ─────────────────────────────────────────────────────────
 
   const series = buildDateSeries(from, to)
-  const trendRows = Array.from(dashboardTrendRows) as DashboardTrendRow[]
-  const submissionMap = new Map(
-    trendRows
-      .filter((row) => row.metric === 'submission')
-      .map((row) => [row.day, row.count]),
-  )
-  const newMap = new Map(
-    trendRows
-      .filter((row) => row.metric === 'opened')
-      .map((row) => [row.day, row.count]),
-  )
-  const closedMap = new Map(
-    trendRows
-      .filter((row) => row.metric === 'closed')
-      .map((row) => [row.day, row.count]),
-  )
-  const wentLiveMap = new Map(
-    trendRows
-      .filter((row) => row.metric === 'went_live')
-      .map((row) => [row.day, row.count]),
-  )
+  const trendMaps: Record<DashboardTrendRow['metric'], Map<string, number>> = {
+    submission: new Map(),
+    opened: new Map(),
+    closed: new Map(),
+    went_live: new Map(),
+  }
+  for (const row of Array.from(dashboardTrendRows) as DashboardTrendRow[]) {
+    trendMaps[row.metric].set(row.day, row.count)
+  }
+  const {
+    submission: submissionMap,
+    opened: newMap,
+    closed: closedMap,
+    went_live: wentLiveMap,
+  } = trendMaps
 
   const submissionsTrend = series.map((day) => ({
     date: day,

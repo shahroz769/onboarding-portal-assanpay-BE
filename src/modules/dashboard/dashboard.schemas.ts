@@ -11,16 +11,45 @@ export const dashboardRangeKeys = [
 
 export type DashboardRangeKey = (typeof dashboardRangeKeys)[number]
 
+// Trend charts draw one point per day for at most this many days; a longer
+// range would give totals that cover days the charts cannot show.
+export const MAX_DASHBOARD_RANGE_DAYS = 120
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
 export const dashboardQuerySchema = z
   .object({
     range: z.enum(dashboardRangeKeys).default('30d'),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
   })
   .refine(
     (value) =>
       value.range !== 'custom' || (Boolean(value.from) && Boolean(value.to)),
     { error: 'Custom range requires both from and to dates.' },
+  )
+  .refine(
+    (value) =>
+      value.range !== 'custom' ||
+      !value.from ||
+      !value.to ||
+      value.from <= value.to,
+    {
+      error: 'Custom range start must be on or before its end.',
+      path: ['from'],
+    },
+  )
+  .refine(
+    (value) =>
+      value.range !== 'custom' ||
+      !value.from ||
+      !value.to ||
+      (Date.parse(value.to) - Date.parse(value.from)) / DAY_MS <
+        MAX_DASHBOARD_RANGE_DAYS,
+    {
+      error: `Custom range cannot exceed ${MAX_DASHBOARD_RANGE_DAYS} days.`,
+      path: ['to'],
+    },
   )
 
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>
