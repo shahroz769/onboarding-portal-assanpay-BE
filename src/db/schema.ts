@@ -1289,7 +1289,7 @@ export const portalMidLimitApplications = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     portalMid: integer('portal_mid').notNull(),
-    category: varchar('category', { length: 32 }),
+    category: varchar('category', { length: 32 }).notNull(),
     merchantId: uuid('merchant_id').references(() => merchants.id, {
       onDelete: 'cascade',
     }),
@@ -1320,6 +1320,18 @@ export const portalMidLimitApplications = pgTable(
     ),
   }),
 )
+
+// Each MID Creation case's latest saved MIDs, kept current by a trigger on
+// `case_history` (migration 0095). Holds MID values only; case status and
+// merchant deletion are read from their own tables.
+export const midCasePortalMids = pgTable('mid_case_portal_mids', {
+  caseId: uuid('case_id')
+    .primaryKey()
+    .references(() => cases.id, { onDelete: 'cascade' }),
+  portalMid: integer('portal_mid').notNull(),
+  internalPortalMid: integer('internal_portal_mid'),
+  savedAt: timestamp('saved_at', { withTimezone: true }).notNull(),
+})
 
 export const notifications = pgTable(
   'notifications',

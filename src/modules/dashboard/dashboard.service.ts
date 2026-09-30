@@ -3,10 +3,10 @@ import { and, asc, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import {
   agreementCaseDetails,
-  caseHistory,
   cases,
   documentReviewDetails,
   merchants,
+  midCasePortalMids,
   portalMidLimitApplications,
   queues,
   users,
@@ -151,14 +151,6 @@ type PendingPortalMidLimitRow = {
   savedAt: Date | string | null
 }
 
-type AppliedPortalMidLimitRow = {
-  portalMid: number
-  merchantId: string | null
-  appliedByName: string | null
-  appliedAt: Date | string | null
-  category: 'custom_wordpress' | 'shopify' | 'internal'
-}
-
 type DashboardTrendRow = {
   metric: 'submission' | 'opened' | 'closed' | 'went_live'
   day: string
@@ -182,16 +174,6 @@ function toPendingPortalMidLimit(row: PendingPortalMidLimitRow) {
   }
 }
 
-function toAppliedPortalMidLimit(row: AppliedPortalMidLimitRow) {
-  return {
-    portalMid: row.portalMid,
-    merchantId: row.merchantId,
-    appliedByName: row.appliedByName,
-    appliedAt: serializeTimestamp(row.appliedAt),
-    category: row.category,
-  }
-}
-
 function serializeTimestamp(value: Date | string | null) {
   if (value instanceof Date) {
     return value.toISOString()
@@ -210,77 +192,84 @@ type PendingPortalMidOptions = {
 }
 
 /**
- * CTEs ending in `pending`: every portal/internal MID from a successful MID
- * Creation case whose limits have not been applied yet. Shared by the paged
- * list, the counts and the copy-all MID lists so they can never disagree.
+ * CTEs ending in `pending`: every portal/internal MID from a merchant's latest
+ * successful MID Creation case whose limits have not been applied yet. Shared
+ * by the paged list, the counts and the copy-all MID lists so they can never
+ * disagree.
+ *
+ * Unapplied MIDs are found first, so the case and merchant checks only run for
+ * those rows; the cost follows the pending MIDs, not every MID ever saved.
  */
 function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
   const { filterPortalMids, midKind } = options
   const portalMidFilter =
     filterPortalMids && filterPortalMids.length > 0
-      ? sql`and candidate_mid."portalMid" in (${sql.join(
+      ? sql`and candidate."portalMid" in (${sql.join(
           filterPortalMids.map((portalMid) => sql`${portalMid}`),
           sql`, `,
         )})`
       : sql``
   const midKindFilter = midKind
-    ? sql`and candidate_mid."midKind" = ${midKind}`
+    ? sql`and candidate."midKind" = ${midKind}`
     : sql``
 
   return sql`
-    with latest_mid as (
-      select distinct on (${cases.merchantId})
+    with candidate_mid as (
+      select
+        ${midCasePortalMids.caseId} as "caseId",
+        ${midCasePortalMids.savedAt} as "savedAt",
+        candidate."portalMid",
+        candidate."midKind"
+      from ${midCasePortalMids}
+      cross join lateral (
+        values
+          (${midCasePortalMids.portalMid}, 'portal'::text),
+          (${midCasePortalMids.internalPortalMid}, 'internal'::text)
+      ) as candidate("portalMid", "midKind")
+      where candidate."portalMid" is not null
+        -- An internal MID equal to the portal MID is the same MID.
+        and (
+          candidate."midKind" = 'portal'
+          or candidate."portalMid" <> ${midCasePortalMids.portalMid}
+        )
+        and not exists (
+          select 1
+          from ${portalMidLimitApplications}
+          where ${portalMidLimitApplications.portalMid} = candidate."portalMid"
+        )
+        ${portalMidFilter}
+        ${midKindFilter}
+    ),
+    pending as (
+      select
         ${cases.merchantId} as "merchantId",
         ${merchants.businessName} as "merchantName",
         ${cases.id} as "caseId",
         ${cases.caseNumber} as "caseNumber",
-        ${caseHistory.details} as "details",
-        ${caseHistory.createdAt} as "savedAt"
-      from ${caseHistory}
-      inner join ${cases} on ${caseHistory.caseId} = ${cases.id}
-      inner join ${queues} on ${cases.queueId} = ${queues.id}
-      inner join ${merchants} on ${cases.merchantId} = ${merchants.id}
-      where ${caseHistory.action} = 'mid_creation_saved'
-        and ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
+        candidate_mid."portalMid",
+        candidate_mid."midKind",
+        candidate_mid."savedAt",
+        ${cases.id}::text || ':' || candidate_mid."midKind" as "rowKey"
+      from candidate_mid
+      inner join ${cases} on ${cases.id} = candidate_mid."caseId"
+      inner join ${queues} on ${queues.id} = ${cases.queueId}
+      inner join ${merchants} on ${merchants.id} = ${cases.merchantId}
+      where ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
         and ${cases.status} = 'closed'
         and ${cases.closeOutcome} = 'successful'
         and ${merchants.deletedAt} is null
-        and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
-      order by ${cases.merchantId}, ${caseHistory.createdAt} desc
-    ),
-    candidate_mid as (
-      select
-        latest_mid."caseId",
-        (latest_mid.details ->> 'portalMid')::int as "portalMid",
-        'portal'::text as "midKind"
-      from latest_mid
-      union all
-      select
-        latest_mid."caseId",
-        (latest_mid.details ->> 'internalPortalMid')::int as "portalMid",
-        'internal'::text as "midKind"
-      from latest_mid
-      where (latest_mid.details ->> 'internalPortalMid') ~ '^[0-9]+$'
-        and (latest_mid.details ->> 'internalPortalMid')::int <> (latest_mid.details ->> 'portalMid')::int
-    ),
-    pending as (
-      select
-        latest_mid."merchantId",
-        latest_mid."merchantName",
-        latest_mid."caseId",
-        latest_mid."caseNumber",
-        candidate_mid."portalMid",
-        candidate_mid."midKind",
-        latest_mid."savedAt",
-        latest_mid."caseId"::text || ':' || candidate_mid."midKind" as "rowKey"
-      from candidate_mid
-      inner join latest_mid
-        on latest_mid."caseId" = candidate_mid."caseId"
-      left join ${portalMidLimitApplications}
-        on ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
-      where ${portalMidLimitApplications.portalMid} is null
-        ${portalMidFilter}
-        ${midKindFilter}
+        -- Only the merchant's latest successful MID case counts.
+        and not exists (
+          select 1
+          from ${cases} as newer_case
+          inner join ${midCasePortalMids} as newer_mid
+            on newer_mid.case_id = newer_case.id
+          where newer_case.merchant_id = ${cases.merchantId}
+            and newer_case.queue_id = ${cases.queueId}
+            and newer_case.status = 'closed'
+            and newer_case.close_outcome = 'successful'
+            and newer_mid.saved_at > candidate_mid."savedAt"
+        )
     )
   `
 }
@@ -367,88 +356,33 @@ async function countPendingPortalMidLimits() {
   }
 }
 
-async function listAppliedPortalMidLimitRows(): Promise<
-  AppliedPortalMidLimitRow[]
-> {
-  const db = getDb()
-  const rows = await db.execute(sql<AppliedPortalMidLimitRow>`
-    with latest_mid as (
-      select distinct on (${cases.merchantId})
-        ${cases.merchantId} as "merchantId",
-        ${merchants.websiteCms} as "websiteCms",
-        ${caseHistory.details} as "details",
-        ${caseHistory.createdAt} as "savedAt"
-      from ${caseHistory}
-      inner join ${cases} on ${caseHistory.caseId} = ${cases.id}
-      inner join ${queues} on ${cases.queueId} = ${queues.id}
-      inner join ${merchants} on ${cases.merchantId} = ${merchants.id}
-      where ${caseHistory.action} = 'mid_creation_saved'
-        and ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
-        and ${merchants.deletedAt} is null
-        and (${caseHistory.details} ->> 'portalMid') ~ '^[0-9]+$'
-      order by ${cases.merchantId}, ${caseHistory.createdAt} desc
-    ),
-    classified_mid as materialized (
-      select
-        latest_mid."merchantId",
-        latest_mid."websiteCms",
-        (latest_mid."details" ->> 'portalMid')::int as "portalMid",
-        'portal'::text as "midKind",
-        latest_mid."savedAt"
-      from latest_mid
-      union all
-      select
-        latest_mid."merchantId",
-        latest_mid."websiteCms",
-        (latest_mid."details" ->> 'internalPortalMid')::int as "portalMid",
-        'internal'::text as "midKind",
-        latest_mid."savedAt"
-      from latest_mid
-      where (latest_mid."details" ->> 'internalPortalMid') ~ '^[0-9]+$'
-        and (latest_mid."details" ->> 'internalPortalMid')::int <> (latest_mid."details" ->> 'portalMid')::int
-    )
-    select distinct on (${portalMidLimitApplications.portalMid})
-      ${portalMidLimitApplications.portalMid} as "portalMid",
-      coalesce(${portalMidLimitApplications.merchantId}, classified_mid."merchantId") as "merchantId",
-      ${users.name} as "appliedByName",
-      ${portalMidLimitApplications.appliedAt} as "appliedAt",
-      coalesce(
-        ${portalMidLimitApplications.category},
-        case
-          when classified_mid."midKind" = 'internal' then 'internal'
-          when classified_mid."websiteCms" = 'shopify' then 'shopify'
-          else 'custom_wordpress'
-        end
-      ) as "category"
-    from ${portalMidLimitApplications}
-    left join ${users}
-      on ${portalMidLimitApplications.appliedBy} = ${users.id}
-    left join classified_mid
-      on classified_mid."portalMid" = ${portalMidLimitApplications.portalMid}
-    order by
-      ${portalMidLimitApplications.portalMid} asc,
-      case
-        when classified_mid."merchantId" = ${portalMidLimitApplications.merchantId} then 0
-        else 1
-      end,
-      classified_mid."savedAt" desc
-  `)
+/**
+ * Every applied MID grouped by category, for the Applied dialog. Loaded only
+ * when the dialog opens, never with the dashboard summary.
+ */
+export async function listAppliedPortalMids() {
+  const rows = await getDb()
+    .select({
+      portalMid: portalMidLimitApplications.portalMid,
+      category: portalMidLimitApplications.category,
+    })
+    .from(portalMidLimitApplications)
+    .orderBy(asc(portalMidLimitApplications.portalMid))
 
-  return Array.from(rows) as AppliedPortalMidLimitRow[]
-}
-
-/** Dashboard summary: pending counts only; the list itself is paged. */
-export async function getPendingPortalMidLimits() {
-  const [pendingCounts, appliedRows] = await Promise.all([
-    countPendingPortalMidLimits(),
-    listAppliedPortalMidLimitRows(),
-  ])
-  const appliedLimits = appliedRows.map(toAppliedPortalMidLimit)
+  const customWordpress: number[] = []
+  const shopify: number[] = []
+  const internal: number[] = []
+  for (const row of rows) {
+    if (row.category === 'shopify') shopify.push(row.portalMid)
+    else if (row.category === 'internal') internal.push(row.portalMid)
+    else customWordpress.push(row.portalMid)
+  }
 
   return {
-    pendingCounts,
-    appliedLimits,
-    appliedCsv: appliedLimits.map((item) => item.portalMid).join(','),
+    customWordpress,
+    shopify,
+    internal,
+    csv: rows.map((row) => row.portalMid).join(','),
   }
 }
 
@@ -708,7 +642,10 @@ export async function getDashboard(query: DashboardQuery) {
   const endIso = addDays(startOfDay(to), 1).toISOString()
   const liveMerchant = and(isNull(merchants.deletedAt))
 
-  const [caseSummaryRows, merchantSummaryRows, dashboardTrendRows, portalMids] =
+  // Portal MID counts and applied MIDs come from their own endpoints: the
+  // pending list's first page carries the counts, and the Applied dialog
+  // loads its MIDs on open.
+  const [caseSummaryRows, merchantSummaryRows, dashboardTrendRows] =
     await Promise.all([
       // Case snapshot, range, and SLA metrics in one grouped scan.
       db
@@ -791,9 +728,6 @@ export async function getDashboard(query: DashboardQuery) {
         and ${merchants.liveAt} < ${endIso}
       group by "day"
     `),
-
-      // Independent of the range; no reason to wait for the queries above.
-      getPendingPortalMidLimits(),
     ])
 
   // ─── Shape Case Status Counts ─────────────────────────────────────────────
@@ -918,6 +852,5 @@ export async function getDashboard(query: DashboardQuery) {
       caseFlow: caseFlowTrend,
       merchantsLive: merchantsLiveTrend,
     },
-    portalMids,
   }
 }

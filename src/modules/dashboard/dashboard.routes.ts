@@ -14,6 +14,7 @@ import {
 import {
   applyPortalMidLimits,
   getDashboard,
+  listAppliedPortalMids,
   listAwaitingPhysicalAgreementsPage,
   listPendingPortalMidLimitsPage,
   listPendingPortalMidValues,
@@ -61,6 +62,12 @@ dashboardRoutes.get(
     return c.json(result)
   },
 )
+
+// GET /api/dashboard/portal-mids/applied — Every applied MID by category
+dashboardRoutes.get('/portal-mids/applied', async (c) => {
+  const result = await listAppliedPortalMids()
+  return c.json(result)
+})
 
 // GET /api/dashboard/agreements/awaiting-physical — Sent agreements whose
 // signed physical copy has not been received yet
