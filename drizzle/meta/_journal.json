@@ -673,6 +673,13 @@
       "when": 1790380800000,
       "tag": "0096_merchants_owner_full_name_trgm_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1790467200000,
+      "tag": "0097_small_table_stats_and_dup_index",
+      "breakpoints": true
     }
   ]
 }

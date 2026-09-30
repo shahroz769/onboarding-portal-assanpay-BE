@@ -70,12 +70,12 @@ import {
   ensureInheritedSubMerchantFormDetails,
   getCaseDetailMerchant,
   getDocumentReviewDetails,
-  getInternalPortalMidLimitsAppliedEntryForMerchant,
+  getInternalPortalMidLimitsAppliedEntryForCredentials,
   getLatestDocumentReviewDetailsForMerchant,
   getLatestWordpressWebsiteDetailsForMerchant,
   getLiveLimitsAppliedEntry,
   getMidCreationCredentials,
-  getTestingLimitsAppliedEntryForMerchant,
+  getTestingLimitsAppliedEntryForCredentials,
   getWordpressWebsiteDetails,
 } from './case-detail-lookups'
 import { getPortalPasswordCodeStatus } from './portal-password-code.service'
@@ -301,9 +301,16 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
 
   if (query.search) {
     const term = `%${query.search}%`
-    conditions.push(
-      or(ilike(cases.caseNumber, term), ilike(merchants.businessName, term)),
-    )
+    // An OR across cases and merchants cannot combine their trigram indexes,
+    // so collect matching ids per table and let each side use its own index.
+    conditions.push(sql`${cases.id} in (
+      select ${cases.id} from ${cases}
+      where ${ilike(cases.caseNumber, term)}
+      union
+      select ${cases.id} from ${cases}
+      inner join ${merchants} on ${eq(cases.merchantId, merchants.id)}
+      where ${ilike(merchants.businessName, term)}
+    )`)
   }
 
   if (query.queueId) {
@@ -439,16 +446,13 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
 
   // Count the filtered set only on the first page; later pages reuse it.
   // merchant_id and queue_id are non-null foreign keys, so the list's inner
-  // joins never drop a case: count from cases alone and join merchants only
-  // when the search filter reads its name.
-  const countQuery = db.select({ value: count() }).from(cases).$dynamic()
+  // joins never drop a case: count from cases alone. The search filter reads
+  // merchant names in its own subquery.
   const total = cursor
     ? null
-    : await (
-        query.search
-          ? countQuery.innerJoin(merchants, eq(cases.merchantId, merchants.id))
-          : countQuery
-      )
+    : await db
+        .select({ value: count() })
+        .from(cases)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .then((result) => result[0]?.value ?? 0)
 
@@ -606,6 +610,10 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     workflowType === 'mid' ||
     workflowType === 'testing' ||
     workflowType === 'wordpress'
+  // Shared by the credentials field and both limits-applied lookups.
+  const midCredentialsPromise = needsMidCredentials
+    ? getMidCreationCredentials(caseData.merchantId)
+    : Promise.resolve(null)
 
   // Fetch core data plus only the projection required by this workflow.
   const [
@@ -712,13 +720,15 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
           .then((rows) => rows[0] ?? null)
       : Promise.resolve(null),
     workflowType === 'testing'
-      ? getTestingLimitsAppliedEntryForMerchant(caseData.merchantId)
+      ? midCredentialsPromise.then(getTestingLimitsAppliedEntryForCredentials)
       : Promise.resolve(null),
     workflowType === 'live'
       ? getLiveLimitsAppliedEntry(caseId)
       : Promise.resolve(null),
     workflowType === 'mid'
-      ? getInternalPortalMidLimitsAppliedEntryForMerchant(caseData.merchantId)
+      ? midCredentialsPromise.then(
+          getInternalPortalMidLimitsAppliedEntryForCredentials,
+        )
       : Promise.resolve(null),
     workflowType === 'wordpress'
       ? getWordpressWebsiteDetails(caseId)
@@ -732,9 +742,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     workflowType === 'wordpress'
       ? getLatestDocumentReviewDetailsForMerchant(caseData.merchantId)
       : Promise.resolve(null),
-    needsMidCredentials
-      ? getMidCreationCredentials(caseData.merchantId)
-      : Promise.resolve(null),
+    midCredentialsPromise,
     workflowType === 'mid' || workflowType === 'testing'
       ? getPortalPasswordCodeStatus(caseData.merchantId)
       : Promise.resolve(null),

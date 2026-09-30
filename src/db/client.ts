@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 
 import { env } from '../config/env'
+import { withSqlCommenter } from './query-tags'
 import * as schema from './schema'
 
 let client: ReturnType<typeof postgres> | null = null
@@ -27,7 +28,7 @@ export function getQueryClient() {
 
 export function getDb() {
   if (!database) {
-    database = drizzle(getQueryClient(), { schema })
+    database = drizzle(withSqlCommenter(getQueryClient()), { schema })
   }
 
   return database

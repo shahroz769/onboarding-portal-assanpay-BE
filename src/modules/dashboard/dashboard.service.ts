@@ -208,85 +208,95 @@ const pendingGroupExpression = sql`
  * by the paged list, the counts and the copy-all MID lists so they can never
  * disagree.
  *
- * Unapplied MIDs are found first, so the case and merchant checks only run for
- * those rows; the cost follows the pending MIDs, not every MID ever saved.
+ * The latest case per merchant is ranked in one pass over the rollup, instead
+ * of probing for a newer case once per candidate row. rank() keeps cases that
+ * tie on saved_at, as the per-row "no newer case" check did.
  */
 function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
   const { filterPortalMids, group } = options
-  const portalMidFilter =
+  const filteredMids =
     filterPortalMids && filterPortalMids.length > 0
-      ? sql`and candidate."portalMid" in (${sql.join(
+      ? sql.join(
           filterPortalMids.map((portalMid) => sql`${portalMid}`),
           sql`, `,
-        )})`
-      : sql``
-  // The MID kind narrows candidates early; the CMS split needs the merchant.
+        )
+      : null
+  // A MID lookup only needs to rank the merchants that own those MIDs.
+  const merchantScope = filteredMids
+    ? sql`and ${cases.merchantId} in (
+        select owner_case.merchant_id
+        from ${midCasePortalMids} as scoped_mid
+        inner join ${cases} as owner_case
+          on owner_case.id = scoped_mid.case_id
+        where scoped_mid.portal_mid in (${filteredMids})
+          or scoped_mid.internal_portal_mid in (${filteredMids})
+      )`
+    : sql``
+  const portalMidFilter = filteredMids
+    ? sql`and candidate_mid."portalMid" in (${filteredMids})`
+    : sql``
   const midKindFilter = group
-    ? sql`and candidate."midKind" = ${group === 'internal' ? 'internal' : 'portal'}`
+    ? sql`and candidate_mid."midKind" = ${group === 'internal' ? 'internal' : 'portal'}`
     : sql``
   const groupFilter = group
     ? sql`and ${pendingGroupExpression} = ${group}`
     : sql``
 
   return sql`
-    with candidate_mid as (
+    with successful_mid as (
       select
         ${midCasePortalMids.caseId} as "caseId",
         ${midCasePortalMids.savedAt} as "savedAt",
-        candidate."portalMid",
-        candidate."midKind"
+        ${midCasePortalMids.portalMid} as "portalMid",
+        ${midCasePortalMids.internalPortalMid} as "internalPortalMid",
+        ${cases.merchantId} as "merchantId",
+        ${cases.caseNumber} as "caseNumber",
+        rank() over (
+          partition by ${cases.merchantId}
+          order by ${midCasePortalMids.savedAt} desc
+        ) as "latestRank"
       from ${midCasePortalMids}
+      inner join ${cases} on ${cases.id} = ${midCasePortalMids.caseId}
+      inner join ${queues} on ${queues.id} = ${cases.queueId}
+      where ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
+        and ${cases.status} = 'closed'
+        and ${cases.closeOutcome} = 'successful'
+        ${merchantScope}
+    ),
+    pending as (
+      select
+        successful_mid."merchantId",
+        ${merchants.businessName} as "merchantName",
+        successful_mid."caseId",
+        successful_mid."caseNumber",
+        candidate_mid."portalMid",
+        candidate_mid."midKind",
+        ${pendingGroupExpression} as "group",
+        successful_mid."savedAt",
+        successful_mid."caseId"::text || ':' || candidate_mid."midKind" as "rowKey"
+      from successful_mid
+      inner join ${merchants} on ${merchants.id} = successful_mid."merchantId"
       cross join lateral (
         values
-          (${midCasePortalMids.portalMid}, 'portal'::text),
-          (${midCasePortalMids.internalPortalMid}, 'internal'::text)
-      ) as candidate("portalMid", "midKind")
-      where candidate."portalMid" is not null
+          (successful_mid."portalMid", 'portal'::text),
+          (successful_mid."internalPortalMid", 'internal'::text)
+      ) as candidate_mid("portalMid", "midKind")
+      where successful_mid."latestRank" = 1
+        and ${merchants.deletedAt} is null
+        and candidate_mid."portalMid" is not null
         -- An internal MID equal to the portal MID is the same MID.
         and (
-          candidate."midKind" = 'portal'
-          or candidate."portalMid" <> ${midCasePortalMids.portalMid}
+          candidate_mid."midKind" = 'portal'
+          or candidate_mid."portalMid" <> successful_mid."portalMid"
         )
         and not exists (
           select 1
           from ${portalMidLimitApplications}
-          where ${portalMidLimitApplications.portalMid} = candidate."portalMid"
+          where ${portalMidLimitApplications.portalMid} = candidate_mid."portalMid"
         )
         ${portalMidFilter}
         ${midKindFilter}
-    ),
-    pending as (
-      select
-        ${cases.merchantId} as "merchantId",
-        ${merchants.businessName} as "merchantName",
-        ${cases.id} as "caseId",
-        ${cases.caseNumber} as "caseNumber",
-        candidate_mid."portalMid",
-        candidate_mid."midKind",
-        ${pendingGroupExpression} as "group",
-        candidate_mid."savedAt",
-        ${cases.id}::text || ':' || candidate_mid."midKind" as "rowKey"
-      from candidate_mid
-      inner join ${cases} on ${cases.id} = candidate_mid."caseId"
-      inner join ${queues} on ${queues.id} = ${cases.queueId}
-      inner join ${merchants} on ${merchants.id} = ${cases.merchantId}
-      where ${queues.slug} = ${MID_CREATION_QUEUE_SLUG}
-        and ${cases.status} = 'closed'
-        and ${cases.closeOutcome} = 'successful'
-        and ${merchants.deletedAt} is null
         ${groupFilter}
-        -- Only the merchant's latest successful MID case counts.
-        and not exists (
-          select 1
-          from ${cases} as newer_case
-          inner join ${midCasePortalMids} as newer_mid
-            on newer_mid.case_id = newer_case.id
-          where newer_case.merchant_id = ${cases.merchantId}
-            and newer_case.queue_id = ${cases.queueId}
-            and newer_case.status = 'closed'
-            and newer_case.close_outcome = 'successful'
-            and newer_mid.saved_at > candidate_mid."savedAt"
-        )
     )
   `
 }
@@ -325,7 +335,7 @@ async function listPendingPortalMidLimitRows(
         on ${documentReviewDetails.caseId} = ${cases.id}
       order by ${cases.merchantId}, ${documentReviewDetails.updatedAt} desc
     ),
-    latest_submerchant as (
+    latest_submerchant as materialized (
       select
         latest_review_case."merchantId",
         string_agg(${documentReviewDetails.subMerchantName}, ', ' order by ${documentReviewDetails.subMerchantName}) as "subMerchantName"

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, or } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import {
@@ -109,101 +109,90 @@ export async function getLiveLimitsAppliedEntry(caseId: string) {
 
 export async function getWordpressWebsiteDetails(caseId: string) {
   const db = getDb()
-  const [savedEntry] = await db
-    .select({
-      createdAt: caseHistory.createdAt,
-      actorId: caseHistory.actorId,
-      actorName: users.name,
-      details: caseHistory.details,
-    })
-    .from(caseHistory)
-    .leftJoin(users, eq(caseHistory.actorId, users.id))
-    .where(
-      and(
-        eq(caseHistory.caseId, caseId),
-        eq(caseHistory.action, 'wordpress_website_saved'),
-      ),
-    )
-    .orderBy(desc(caseHistory.createdAt))
-    .limit(1)
-
-  const screenshotRows = await db
-    .select({
-      id: caseFiles.id,
-      originalName: caseFiles.originalName,
-      mimeType: caseFiles.mimeType,
-      sizeBytes: caseFiles.sizeBytes,
-      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-      createdAt: caseFiles.createdAt,
-    })
-    .from(caseFiles)
-    .where(
-      and(
-        eq(caseFiles.caseId, caseId),
-        ilike(caseFiles.fileKind, `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}%`),
-      ),
-    )
-    .orderBy(asc(caseFiles.fileKind))
-
-  const subMerchantLogoScreenshotRows = await db
-    .select({
-      id: caseFiles.id,
-      fileKind: caseFiles.fileKind,
-      originalName: caseFiles.originalName,
-      mimeType: caseFiles.mimeType,
-      sizeBytes: caseFiles.sizeBytes,
-      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-      createdAt: caseFiles.createdAt,
-    })
-    .from(caseFiles)
-    .where(
-      and(
-        eq(caseFiles.caseId, caseId),
-        ilike(
-          caseFiles.fileKind,
-          `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}%`,
+  // History and all screenshot kinds load together: one case_files query
+  // split by kind prefix in code instead of one query per prefix.
+  const [[savedEntry], wordpressFileRows] = await Promise.all([
+    db
+      .select({
+        createdAt: caseHistory.createdAt,
+        actorId: caseHistory.actorId,
+        actorName: users.name,
+        details: caseHistory.details,
+      })
+      .from(caseHistory)
+      .leftJoin(users, eq(caseHistory.actorId, users.id))
+      .where(
+        and(
+          eq(caseHistory.caseId, caseId),
+          eq(caseHistory.action, 'wordpress_website_saved'),
         ),
-      ),
-    )
-    .orderBy(asc(caseFiles.fileKind))
-
-  const subMerchantLogoScreenshots = subMerchantLogoScreenshotRows.map(
-    ({ fileKind, ...file }) => {
-      const subMerchantId = fileKind.slice(
-        WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX.length,
       )
-      return {
-        ...file,
-        subMerchantId: /^[0-9a-f-]{36}$/i.test(subMerchantId)
-          ? subMerchantId
-          : null,
-      }
-    },
-  )
-
-  const assanpayCheckoutScreenshotRows = await db
-    .select({
-      id: caseFiles.id,
-      originalName: caseFiles.originalName,
-      mimeType: caseFiles.mimeType,
-      sizeBytes: caseFiles.sizeBytes,
-      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-      createdAt: caseFiles.createdAt,
-    })
-    .from(caseFiles)
-    .where(
-      and(
-        eq(caseFiles.caseId, caseId),
-        ilike(
-          caseFiles.fileKind,
-          `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}%`,
+      .orderBy(desc(caseHistory.createdAt))
+      .limit(1),
+    db
+      .select({
+        id: caseFiles.id,
+        fileKind: caseFiles.fileKind,
+        originalName: caseFiles.originalName,
+        mimeType: caseFiles.mimeType,
+        sizeBytes: caseFiles.sizeBytes,
+        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+        createdAt: caseFiles.createdAt,
+      })
+      .from(caseFiles)
+      .where(
+        and(
+          eq(caseFiles.caseId, caseId),
+          or(
+            ilike(
+              caseFiles.fileKind,
+              `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}%`,
+            ),
+            ilike(
+              caseFiles.fileKind,
+              `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}%`,
+            ),
+            ilike(
+              caseFiles.fileKind,
+              `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}%`,
+            ),
+          ),
         ),
-      ),
+      )
+      .orderBy(asc(caseFiles.fileKind)),
+  ])
+
+  const filesWithPrefix = (prefix: string) =>
+    wordpressFileRows.filter((file) =>
+      file.fileKind.toLowerCase().startsWith(prefix),
     )
-    .orderBy(asc(caseFiles.fileKind))
+  const withoutFileKind = ({
+    fileKind: _fileKind,
+    ...file
+  }: (typeof wordpressFileRows)[number]) => file
+
+  const screenshotRows = filesWithPrefix(
+    WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
+  ).map(withoutFileKind)
+
+  const subMerchantLogoScreenshots = filesWithPrefix(
+    WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
+  ).map(({ fileKind, ...file }) => {
+    const subMerchantId = fileKind.slice(
+      WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX.length,
+    )
+    return {
+      ...file,
+      subMerchantId: /^[0-9a-f-]{36}$/i.test(subMerchantId)
+        ? subMerchantId
+        : null,
+    }
+  })
+
+  const assanpayCheckoutScreenshotRows = filesWithPrefix(
+    WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX,
+  ).map(withoutFileKind)
 
   const details = savedEntry?.details as {
     clonedWebsiteLink?: unknown
@@ -540,10 +529,9 @@ export async function getPortalMidLimitApplication(portalMid: number) {
   return entry ?? null
 }
 
-export async function getTestingLimitsAppliedEntryForMerchant(
-  merchantId: string,
+export async function getTestingLimitsAppliedEntryForCredentials(
+  credentials: MidCreationCredentials | null,
 ) {
-  const credentials = await getMidCreationCredentials(merchantId)
   if (!credentials) return null
 
   const application = await getPortalMidLimitApplication(credentials.portalMid)
@@ -557,10 +545,9 @@ export async function getTestingLimitsAppliedEntryForMerchant(
   }
 }
 
-export async function getInternalPortalMidLimitsAppliedEntryForMerchant(
-  merchantId: string,
+export async function getInternalPortalMidLimitsAppliedEntryForCredentials(
+  credentials: MidCreationCredentials | null,
 ) {
-  const credentials = await getMidCreationCredentials(merchantId)
   if (!credentials) return null
 
   const application = await getPortalMidLimitApplication(

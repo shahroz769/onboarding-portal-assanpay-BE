@@ -48,6 +48,8 @@ const envSchema = z.object({
     .positive()
     .max(3600)
     .default(20),
+  // Deployed git SHA, sent as a SQLCommenter tag so Insights can split by release.
+  RELEASE_SHA: z.string().trim().min(1).max(64).optional(),
   CASE_FLOW_WORKER_POLL_MS: z.coerce
     .number()
     .int()

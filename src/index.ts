@@ -3,11 +3,13 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
 import { requestId } from 'hono/request-id'
+import { routePath } from 'hono/route'
 import { secureHeaders } from 'hono/secure-headers'
 import { rateLimiter } from 'hono-rate-limiter'
 
 import { env } from './config/env'
 import { closeQueryClient, getDb } from './db/client'
+import { withQueryTags } from './db/query-tags'
 import { refreshTokens } from './db/schema'
 import { errorHandler } from './middleware/error-handler'
 import { getClientIp } from './lib/client-ip'
@@ -63,6 +65,11 @@ const publicMultipartLimit = bodyLimit({
 })
 
 app.use('*', requestId())
+// Tag this request's queries with the matched route template (never the raw
+// path) so Insights can attribute load to an endpoint.
+app.use('*', (c, next) =>
+  withQueryTags({ route: `${c.req.method} ${routePath(c, -1)}` }, next),
+)
 app.use('*', secureHeaders())
 app.use(
   '*',
@@ -143,20 +150,23 @@ app.route('/api/webhooks/resend', resendWebhookRoutes)
 // needs the row to recognise a stolen copy for the token's whole lifetime.
 async function purgeExpiredRefreshTokens() {
   try {
-    await getDb()
-      .delete(refreshTokens)
-      .where(
-        or(
-          lt(refreshTokens.expiresAt, new Date()),
-          and(
-            eq(refreshTokens.status, 'revoked'),
-            lt(
-              refreshTokens.revokedAt,
-              new Date(Date.now() - 24 * 60 * 60 * 1000),
+    // Await inside the callback: drizzle queries run when awaited.
+    await withQueryTags({ job: 'refresh-token-cleanup' }, async () => {
+      await getDb()
+        .delete(refreshTokens)
+        .where(
+          or(
+            lt(refreshTokens.expiresAt, new Date()),
+            and(
+              eq(refreshTokens.status, 'revoked'),
+              lt(
+                refreshTokens.revokedAt,
+                new Date(Date.now() - 24 * 60 * 60 * 1000),
+              ),
             ),
           ),
-        ),
-      )
+        )
+    })
 
     console.log(`[cleanup] Purged expired/revoked refresh tokens.`)
   } catch (error) {
@@ -221,41 +231,44 @@ function drainCaseFlowCloseJobs() {
   if (caseFlowWorkerPromise) return caseFlowWorkerPromise
 
   const startedAt = performance.now()
-  caseFlowWorkerPromise = (async () => {
-    let claimed = 0
-    let nextDueAt: Date | null = null
+  caseFlowWorkerPromise = withQueryTags(
+    { job: 'case-flow-close-worker' },
+    async () => {
+      let claimed = 0
+      let nextDueAt: Date | null = null
 
-    try {
-      const result = await processCaseFlowCloseJobs(
-        env.CASE_FLOW_WORKER_BATCH_SIZE,
-      )
-      claimed = result.claimed
-      if (claimed === 0) nextDueAt = await getNextCaseFlowCloseJobDueAt()
-      caseFlowWorkerLastError = null
-
-      if (result.claimed > 0 || result.completed > 0 || result.failed > 0) {
-        console.info(
-          JSON.stringify({
-            event: 'case_flow_worker_cycle',
-            ...result,
-          }),
+      try {
+        const result = await processCaseFlowCloseJobs(
+          env.CASE_FLOW_WORKER_BATCH_SIZE,
         )
-      }
-    } catch (error) {
-      caseFlowWorkerLastError =
-        error instanceof Error ? error.message : String(error)
-      console.error('[case-flow] Worker cycle failed:', error)
-    } finally {
-      caseFlowWorkerLastCycleAt = new Date()
-      caseFlowWorkerLastDurationMs =
-        Math.round((performance.now() - startedAt) * 100) / 100
-      caseFlowWorkerPromise = null
+        claimed = result.claimed
+        if (claimed === 0) nextDueAt = await getNextCaseFlowCloseJobDueAt()
+        caseFlowWorkerLastError = null
 
-      const delayMs = nextCaseFlowWorkerDelay(claimed, nextDueAt)
-      caseFlowWorkerDrainRequested = false
-      if (!shuttingDown) scheduleCaseFlowWorker(delayMs)
-    }
-  })()
+        if (result.claimed > 0 || result.completed > 0 || result.failed > 0) {
+          console.info(
+            JSON.stringify({
+              event: 'case_flow_worker_cycle',
+              ...result,
+            }),
+          )
+        }
+      } catch (error) {
+        caseFlowWorkerLastError =
+          error instanceof Error ? error.message : String(error)
+        console.error('[case-flow] Worker cycle failed:', error)
+      } finally {
+        caseFlowWorkerLastCycleAt = new Date()
+        caseFlowWorkerLastDurationMs =
+          Math.round((performance.now() - startedAt) * 100) / 100
+        caseFlowWorkerPromise = null
+
+        const delayMs = nextCaseFlowWorkerDelay(claimed, nextDueAt)
+        caseFlowWorkerDrainRequested = false
+        if (!shuttingDown) scheduleCaseFlowWorker(delayMs)
+      }
+    },
+  )
 
   return caseFlowWorkerPromise
 }
