@@ -2,9 +2,13 @@
 
 If a contract change requires frontend work, use Desktop path `\Onboarding Portal\onboarding-portal-assanpay-FE` and read its `AGENTS.md` first.
 
-The current local env DB is a dev branch on planetscale DB and can be used for read/write tests, verifications, etc. Available via Planetscale MCP, and always use planetscale relevant skills along
+## Database rules
 
-Production DB is Planetscale DB, read only, available via Planetscale MCP, and always use planetscale relevant skills along
+- Both branches are on PlanetScale and reachable via PlanetScale MCP; always use the relevant PlanetScale skills.
+- Production (`main` branch): read-only. Use PlanetScale MCP read queries and Insights. Never run `EXPLAIN ANALYZE` there (it executes the query), and never write or migrate from an agent. Production changes go through deploy only.
+- Dev (`dev` branch, the local `.env` DB): free for real read/write tests and verifications; test data may stay.
+- Benchmarks and bulk fake data on `dev`: run inside a transaction that ends in `ROLLBACK`, and avoid real sequences and external side effects (email, Google Drive).
+- Tag agent-run SQL with `/* source=agent */` so it is identifiable in Insights.
 
 ## Hono Docs
 Always reference https://hono.dev/llms.txt for Hono specific things
