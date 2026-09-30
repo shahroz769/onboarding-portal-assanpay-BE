@@ -1463,6 +1463,7 @@ export async function getMerchantLimits(merchantId: string) {
     merchant: {
       id: merchant.id,
       status: merchant.status,
+      currency: merchant.currency,
     },
     limitsAndMdr: limitsBundle.limitsAndMdr,
     paymentMethods: limitsBundle.paymentMethods,
