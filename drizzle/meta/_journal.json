@@ -666,6 +666,13 @@
       "when": 1790294400000,
       "tag": "0095_mid_case_portal_mids",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1790380800000,
+      "tag": "0096_merchants_owner_full_name_trgm_idx",
+      "breakpoints": true
     }
   ]
 }

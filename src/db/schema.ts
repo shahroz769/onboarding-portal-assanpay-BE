@@ -568,6 +568,9 @@ export const merchants = pgTable(
     merchantsSubmitterEmailTrgmIdx: index(
       'merchants_submitter_email_trgm_idx',
     ).using('gin', sql`${table.submitterEmail} gin_trgm_ops`),
+    merchantsOwnerFullNameTrgmIdx: index(
+      'merchants_owner_full_name_trgm_idx',
+    ).using('gin', sql`${table.ownerFullName} gin_trgm_ops`),
     merchantsTransactionsNonnegative: check(
       'merchants_transactions_nonnegative',
       sql`${table.estimatedMonthlyTransactions} >= 0`,

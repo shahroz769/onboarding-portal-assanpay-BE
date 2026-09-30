@@ -2,7 +2,7 @@
 
 If a contract change requires frontend work, use Desktop path `\Onboarding Portal\onboarding-portal-assanpay-FE` and read its `AGENTS.md` first.
 
-The current DB is a test DB and can be used for read/write tests, verifications, etc
+The current local env DB is a dev branch on planetscale DB and can be used for read/write tests, verifications, etc. Available via Planetscale MCP, and always use planetscale relevant skills along
 
 Production DB is Planetscale DB, read only, available via Planetscale MCP, and always use planetscale relevant skills along
 

@@ -4,6 +4,7 @@ import {
   count,
   desc,
   eq,
+  exists,
   gt,
   ilike,
   inArray,
@@ -437,13 +438,17 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
     : null
 
   // Count the filtered set only on the first page; later pages reuse it.
+  // merchant_id and queue_id are non-null foreign keys, so the list's inner
+  // joins never drop a case: count from cases alone and join merchants only
+  // when the search filter reads its name.
+  const countQuery = db.select({ value: count() }).from(cases).$dynamic()
   const total = cursor
     ? null
-    : await db
-        .select({ value: count() })
-        .from(cases)
-        .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-        .innerJoin(queues, eq(cases.queueId, queues.id))
+    : await (
+        query.search
+          ? countQuery.innerJoin(merchants, eq(cases.merchantId, merchants.id))
+          : countQuery
+      )
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .then((result) => result[0]?.value ?? 0)
 
@@ -523,13 +528,21 @@ export async function listCases(query: ListCasesQuery, actor?: SessionUser) {
 export async function listCaseOwners() {
   const db = getDb()
 
+  // One index probe per user instead of scanning every case.
   const rows = await db
-    .selectDistinct({
+    .select({
       id: users.id,
       name: users.name,
     })
-    .from(cases)
-    .innerJoin(users, eq(cases.ownerId, users.id))
+    .from(users)
+    .where(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(cases)
+          .where(eq(cases.ownerId, users.id)),
+      ),
+    )
 
   return rows
 }
