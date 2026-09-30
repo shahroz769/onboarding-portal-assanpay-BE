@@ -67,6 +67,16 @@ export const pendingPortalMidKinds = ['portal', 'internal'] as const
 
 export type PendingPortalMidKind = (typeof pendingPortalMidKinds)[number]
 
+// Copy groups, matching the Apply limits categories: internal MIDs, and
+// portal MIDs split by the merchant's website CMS.
+export const pendingPortalMidGroups = [
+  'internal',
+  'custom_wordpress',
+  'shopify',
+] as const
+
+export type PendingPortalMidGroup = (typeof pendingPortalMidGroups)[number]
+
 export const pendingPortalMidsQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -76,9 +86,9 @@ export type PendingPortalMidsQuery = z.infer<
   typeof pendingPortalMidsQuerySchema
 >
 
-// Omit midKind to get every pending MID.
+// Omit group to get every pending MID.
 export const pendingPortalMidValuesQuerySchema = z.object({
-  midKind: z.enum(pendingPortalMidKinds).optional(),
+  group: z.enum(pendingPortalMidGroups).optional(),
 })
 
 export type PendingPortalMidValuesQuery = z.infer<

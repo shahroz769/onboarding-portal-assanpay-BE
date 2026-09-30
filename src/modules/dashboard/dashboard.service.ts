@@ -22,7 +22,7 @@ import type {
   DashboardQuery,
   DashboardRangeKey,
   AwaitingPhysicalAgreementsQuery,
-  PendingPortalMidKind,
+  PendingPortalMidGroup,
   PendingPortalMidsQuery,
   PendingPortalMidValuesQuery,
 } from './dashboard.schemas'
@@ -188,8 +188,17 @@ function serializeTimestamp(value: Date | string | null) {
 
 type PendingPortalMidOptions = {
   filterPortalMids?: number[]
-  midKind?: PendingPortalMidKind
+  group?: PendingPortalMidGroup
 }
+
+// Internal MIDs, else the merchant's website CMS: Shopify or Custom/WordPress.
+const pendingGroupExpression = sql`
+  case
+    when candidate_mid."midKind" = 'internal' then 'internal'
+    when ${merchants.websiteCms} = 'shopify' then 'shopify'
+    else 'custom_wordpress'
+  end
+`
 
 /**
  * CTEs ending in `pending`: every portal/internal MID from a merchant's latest
@@ -201,7 +210,7 @@ type PendingPortalMidOptions = {
  * those rows; the cost follows the pending MIDs, not every MID ever saved.
  */
 function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
-  const { filterPortalMids, midKind } = options
+  const { filterPortalMids, group } = options
   const portalMidFilter =
     filterPortalMids && filterPortalMids.length > 0
       ? sql`and candidate."portalMid" in (${sql.join(
@@ -209,8 +218,12 @@ function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
           sql`, `,
         )})`
       : sql``
-  const midKindFilter = midKind
-    ? sql`and candidate."midKind" = ${midKind}`
+  // The MID kind narrows candidates early; the CMS split needs the merchant.
+  const midKindFilter = group
+    ? sql`and candidate."midKind" = ${group === 'internal' ? 'internal' : 'portal'}`
+    : sql``
+  const groupFilter = group
+    ? sql`and ${pendingGroupExpression} = ${group}`
     : sql``
 
   return sql`
@@ -248,6 +261,7 @@ function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
         ${cases.caseNumber} as "caseNumber",
         candidate_mid."portalMid",
         candidate_mid."midKind",
+        ${pendingGroupExpression} as "group",
         candidate_mid."savedAt",
         ${cases.id}::text || ':' || candidate_mid."midKind" as "rowKey"
       from candidate_mid
@@ -258,6 +272,7 @@ function pendingPortalMidCtes(options: PendingPortalMidOptions = {}) {
         and ${cases.status} = 'closed'
         and ${cases.closeOutcome} = 'successful'
         and ${merchants.deletedAt} is null
+        ${groupFilter}
         -- Only the merchant's latest successful MID case counts.
         and not exists (
           select 1
@@ -337,22 +352,30 @@ async function listPendingPortalMidLimitRows(
 }
 
 async function countPendingPortalMidLimits() {
+  type PendingCounts = {
+    total: number
+    internal: number
+    customWordpress: number
+    shopify: number
+  }
   const db = getDb()
   const [row] = Array.from(
-    await db.execute(sql<{ total: number; portal: number; internal: number }>`
+    await db.execute(sql<PendingCounts>`
       ${pendingPortalMidCtes()}
       select
         count(*)::int as "total",
-        (count(*) filter (where pending."midKind" = 'portal'))::int as "portal",
-        (count(*) filter (where pending."midKind" = 'internal'))::int as "internal"
+        (count(*) filter (where pending."group" = 'internal'))::int as "internal",
+        (count(*) filter (where pending."group" = 'custom_wordpress'))::int as "customWordpress",
+        (count(*) filter (where pending."group" = 'shopify'))::int as "shopify"
       from pending
     `),
-  ) as { total: number; portal: number; internal: number }[]
+  ) as PendingCounts[]
 
   return {
     total: row?.total ?? 0,
-    portal: row?.portal ?? 0,
     internal: row?.internal ?? 0,
+    customWordpress: row?.customWordpress ?? 0,
+    shopify: row?.shopify ?? 0,
   }
 }
 
@@ -429,14 +452,14 @@ export async function listPendingPortalMidLimitsPage(
   }
 }
 
-/** Every pending MID (optionally one kind) straight from the DB, for copying. */
+/** Every pending MID (optionally one group) straight from the DB, for copying. */
 export async function listPendingPortalMidValues(
   query: PendingPortalMidValuesQuery,
 ) {
   const db = getDb()
   const rows = Array.from(
     await db.execute(sql<{ portalMid: number }>`
-      ${pendingPortalMidCtes({ midKind: query.midKind })}
+      ${pendingPortalMidCtes({ group: query.group })}
       select distinct pending."portalMid" as "portalMid"
       from pending
       order by pending."portalMid" asc
