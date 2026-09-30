@@ -27,6 +27,8 @@ const MERCHANT_COUNT = 96
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 const NOW = Date.now()
+// Demo submissions span Aug 1 - Sep 30, 2026.
+const WINDOW_START = new Date('2026-08-01T00:00:00+05:00').getTime()
 
 type CaseStatus = (typeof cases.$inferInsert)['status'] & string
 type Outcome = 'successful' | 'unsuccessful'
@@ -189,13 +191,13 @@ const DEPTHS: readonly (readonly [Depth, number])[] = [
 const SUBMITTED_DAYS_AGO: Record<Depth, readonly [number, number]> = {
   0: [0, 2],
   1: [0, 4],
-  2: [1, 6],
-  3: [3, 10],
-  4: [5, 14],
-  5: [8, 24],
-  6: [10, 30],
-  7: [6, 60],
-  8: [12, 50],
+  2: [1, 8],
+  3: [3, 20],
+  4: [5, 35],
+  5: [8, 50],
+  6: [10, 58],
+  7: [2, 60],
+  8: [10, 60],
 }
 
 const cap = (ms: number) => Math.min(ms, NOW - 2 * 60 * 1000)
@@ -207,7 +209,10 @@ interface OwnerPools {
 
 function planMerchant(depth: Depth, owners: OwnerPools): PlannedMerchant {
   const [minDays, maxDays] = SUBMITTED_DAYS_AGO[depth]
-  const submittedMs = cap(NOW - between(minDays, maxDays) * DAY)
+  const submittedMs = Math.max(
+    cap(NOW - between(minDays, maxDays) * DAY),
+    WINDOW_START,
+  )
   const planned: PlannedCase[] = []
   const ownerFor = (slug: string) =>
     pick(owners.bySlug.get(slug) ?? owners.fallback)
