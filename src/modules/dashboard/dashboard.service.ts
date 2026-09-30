@@ -148,6 +148,7 @@ type PendingPortalMidLimitRow = {
   caseNumber: string
   portalMid: number
   midKind: 'portal' | 'internal'
+  group: PendingPortalMidGroup
   savedAt: Date | string | null
 }
 
@@ -170,6 +171,7 @@ function toPendingPortalMidLimit(row: PendingPortalMidLimitRow) {
     caseNumber: row.caseNumber,
     portalMid: row.portalMid,
     midKind: row.midKind,
+    group: row.group,
     savedAt: serializeTimestamp(row.savedAt),
   }
 }
@@ -340,6 +342,7 @@ async function listPendingPortalMidLimitRows(
       page."caseNumber",
       page."portalMid",
       page."midKind" as "midKind",
+      page."group",
       page."savedAt",
       page."rowKey"
     from page
