@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   agreementCaseDetails,
   caseFiles,
@@ -28,7 +28,6 @@ import {
 } from './agreement.config'
 import { assertCanWorkCase } from './case-access.service'
 
-import type { DbTransaction } from './case-db'
 import {
   assertAutoEmailEnabled,
   resolveCaseEmailRecipients,
@@ -42,7 +41,7 @@ import {
   ensurePrivateInternalCaseFolder,
   ensurePublicFinalAgreementFolder,
 } from './case-drive-folders'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 
 export type AgreementEmailResult = {
   status: 'sent' | 'failed'
@@ -162,7 +161,7 @@ export async function uploadAgreementFinalAgreement(
       })
     : null
 
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePublicFinalAgreementFolder({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,
@@ -447,7 +446,7 @@ export async function uploadReceivedAgreement(
         where: eq(caseFiles.id, details.receivedAgreementFileId),
       })
     : null
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,

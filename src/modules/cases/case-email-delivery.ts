@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, isNotNull, like, sql } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { caseHistory, cases, emailLog } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { getResendClient } from '../email/email.client'
@@ -14,7 +14,6 @@ import { getEmailTemplateLabel } from '../email/email-templates'
 import { assertCanWorkCase } from './case-access.service'
 
 type Db = ReturnType<typeof getDb>
-type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
 
 export type CaseEmailDelivery = {
   emailLogId: string

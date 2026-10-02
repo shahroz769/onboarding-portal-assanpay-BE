@@ -16,7 +16,7 @@ import {
 } from './field-labels'
 import type { EmailRecipientType } from './cases.schemas'
 import { ensurePrivateInternalCaseFolder } from './case-drive-folders'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 
 export function getRejectionLabel(
   fieldName: string,
@@ -166,7 +166,7 @@ export async function uploadEmailProofFile(
   queueName: string | null | undefined,
 ) {
   const db = getDb()
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId,
     merchantName,

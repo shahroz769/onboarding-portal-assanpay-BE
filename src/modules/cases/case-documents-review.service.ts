@@ -16,7 +16,6 @@ import {
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
-import { isQueueWorkflowType } from '../queues/queue-workflow'
 import { sendEmail } from '../email/email.service'
 import {
   DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
@@ -47,17 +46,24 @@ import { assertCanWorkCase } from './case-access.service'
 import { loadQueueStageForCase } from './case-transition.service'
 
 import { DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS } from './case-constants'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   assertAutoEmailEnabled,
   getRejectionLabel,
   resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
-import type {
-  RegeneratedResubmissionLinkResult,
-  SendForResubmissionResult,
-} from './case-documents-review.types'
+
+type SendForResubmissionResult = {
+  status: 'sent' | 'failed'
+  emailLogId: string
+  error?: string
+}
+
+type RegeneratedResubmissionLinkResult = {
+  url: string
+  rejectedFieldCount: number
+}
 
 export async function saveFieldReviews(
   caseId: string,
@@ -148,7 +154,7 @@ export async function saveFieldReviews(
     updatedAt: now,
   }))
   const documentMoves =
-    queue != null && isQueueWorkflowType(queue, 'document_review')
+    queue != null && queue.workflowType === 'document_review'
       ? await prepareDocumentReviewDocumentMoves({
           caseId,
           merchantId: caseData.merchantId,
@@ -183,7 +189,7 @@ export async function saveFieldReviews(
         .where(eq(merchantDocuments.id, move.documentId))
     }
 
-    if (queue == null || !isQueueWorkflowType(queue, 'document_review')) {
+    if (queue == null || queue.workflowType !== 'document_review') {
       const rejected = reviewValues.filter(
         (r) => r.status === 'rejected',
       ).length
@@ -314,7 +320,7 @@ async function prepareDocumentReviewDocumentMoves(input: {
   const documentsById = new Map(
     documents.map((document) => [document.id, document]),
   )
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const [rejectionRoundRow] = await db
     .select({ count: count() })
     .from(caseHistory)

@@ -35,11 +35,11 @@ import {
 } from './cases.schemas'
 import {
   MID_CREATION_CREDENTIALS_SENT_ACTIONS,
+  SUB_MERCHANT_EMAIL_PROOF_KIND,
   WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
 } from './case-constants'
-import { SUB_MERCHANT_EMAIL_PROOF_KIND } from './sub-merchant-form.config'
 
 export async function getTestingLimitsAppliedEntry(caseId: string) {
   const db = getDb()

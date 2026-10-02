@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   agreementDraftTemplates,
   caseFlowCloseBlockers,
@@ -57,10 +57,6 @@ const DRAFT_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
 const DRAFT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
-
-type DbTransaction = Parameters<
-  Parameters<ReturnType<typeof getDb>['transaction']>[0]
->[0]
 
 type QueueRef = {
   id: string

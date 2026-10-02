@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm'
 
 import { queueCaseSequences, queues } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import type { DbTransaction } from './case-db'
+import type { DbTransaction } from '../../db/client'
 
 export async function generateCaseNumber(
   tx: DbTransaction,

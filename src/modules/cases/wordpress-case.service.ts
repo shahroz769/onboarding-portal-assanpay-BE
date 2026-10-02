@@ -21,7 +21,7 @@ import {
 import { getLatestDocumentReviewDetailsForMerchant } from './case-detail-lookups'
 import { validateWordpressScreenshotFile } from './case-upload-validation'
 import { ensurePrivateInternalCaseFolder } from './case-drive-folders'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 
 export async function loadWordpressWebsiteCase(caseId: string, userId: string) {
   const db = getDb()
@@ -186,7 +186,7 @@ export async function saveWordpressWebsiteCase(
       ),
     )
 
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,

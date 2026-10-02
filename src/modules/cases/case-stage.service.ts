@@ -11,7 +11,6 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { resolveUniqueStageForStatus } from '../queues/queue-stage-defaults'
-import { isQueueWorkflowType } from '../queues/queue-workflow'
 import { isValidStatusTransition } from './cases.schemas'
 import type {
   CaseStatusValue,
@@ -181,7 +180,7 @@ export async function advanceStage(caseId: string, userId: string) {
 
   let targetStage = null
 
-  if (queue != null && isQueueWorkflowType(queue, 'document_review')) {
+  if (queue != null && queue.workflowType === 'document_review') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -224,7 +223,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'sub_merchant_form')) {
+  } else if (queue != null && queue.workflowType === 'sub_merchant_form') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -266,7 +265,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'agreement')) {
+  } else if (queue != null && queue.workflowType === 'agreement') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -302,7 +301,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'mid')) {
+  } else if (queue != null && queue.workflowType === 'mid') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -346,7 +345,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'testing')) {
+  } else if (queue != null && queue.workflowType === 'testing') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -373,7 +372,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'live')) {
+  } else if (queue != null && queue.workflowType === 'live') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -399,7 +398,7 @@ export async function advanceStage(caseId: string, userId: string) {
     if (!targetStage) {
       throw new AppError(500, 'No closed stage configured.')
     }
-  } else if (queue != null && isQueueWorkflowType(queue, 'wordpress')) {
+  } else if (queue != null && queue.workflowType === 'wordpress') {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
       throw new AppError(
         400,
@@ -520,7 +519,7 @@ export async function advanceStage(caseId: string, userId: string) {
         return
       }
 
-      if (queue != null && isQueueWorkflowType(queue, 'testing')) {
+      if (queue != null && queue.workflowType === 'testing') {
         await tx
           .update(merchants)
           .set({
@@ -530,7 +529,7 @@ export async function advanceStage(caseId: string, userId: string) {
           .where(eq(merchants.id, caseData.merchantId))
       }
 
-      if (queue != null && isQueueWorkflowType(queue, 'live')) {
+      if (queue != null && queue.workflowType === 'live') {
         await tx
           .update(merchants)
           .set({

@@ -51,5 +51,3 @@ export function getStringDetail(details: unknown, key: string) {
   const value = (details as Record<string, unknown>)[key]
   return typeof value === 'string' && value ? value : null
 }
-
-// ─── Send For Resubmission ──────────────────────────────────────────────────

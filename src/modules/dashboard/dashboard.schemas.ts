@@ -65,8 +65,6 @@ export type ApplyPortalMidLimitsInput = z.infer<
 
 export const pendingPortalMidKinds = ['portal', 'internal'] as const
 
-export type PendingPortalMidKind = (typeof pendingPortalMidKinds)[number]
-
 // Copy groups, matching the Apply limits categories: internal MIDs, and
 // portal MIDs split by the merchant's website CMS.
 export const pendingPortalMidGroups = [

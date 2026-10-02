@@ -24,6 +24,8 @@ export const AGREEMENT_WHATSAPP_PROOF_KIND = 'agreement_whatsapp_proof'
 export const MID_CREATION_WHATSAPP_PROOF_KIND = 'mid_creation_whatsapp_proof'
 export const LIVE_ACTIVATION_WHATSAPP_PROOF_KIND =
   'live_activation_whatsapp_proof'
+export const SUB_MERCHANT_FINAL_FORM_KIND = 'sub_merchant_final_form'
+export const SUB_MERCHANT_EMAIL_PROOF_KIND = 'sub_merchant_email_proof'
 export const EMAIL_PROOF_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',

@@ -285,10 +285,6 @@ export const markTestingLimitsAppliedSchema = z.strictObject({
   applied: z.literal(true),
 })
 
-export type MarkTestingLimitsAppliedInput = z.infer<
-  typeof markTestingLimitsAppliedSchema
->
-
 // Printable ASCII without spaces, as issued by the merchant portal.
 function portalApiCredentialValue(label: string) {
   return z
@@ -311,10 +307,6 @@ export type SavePortalApiCredentialsInput = z.infer<
 export const markLiveLimitsAppliedSchema = z.strictObject({
   applied: z.literal(true),
 })
-
-export type MarkLiveLimitsAppliedInput = z.infer<
-  typeof markLiveLimitsAppliedSchema
->
 
 export const saveWordpressWebsiteSchema = z.strictObject({
   clonedWebsiteLink: z.string().trim().max(2048).pipe(z.url()),

@@ -12,10 +12,7 @@ import {
   getLimitsAndMdrSettings,
   getMerchantPortalSettings,
 } from '../configuration/configuration.service'
-import type {
-  MarkLiveLimitsAppliedInput,
-  SendLiveEmailInput,
-} from './cases.schemas'
+import type { SendLiveEmailInput } from './cases.schemas'
 import { assertCanWorkCase } from './case-access.service'
 import { loadQueueStageForCase } from './case-transition.service'
 
@@ -33,10 +30,8 @@ import type { MidCreationEmailResult } from './mid-case.service'
 export async function markLiveLimitsApplied(
   caseId: string,
   userId: string,
-  input: MarkLiveLimitsAppliedInput,
 ) {
   const db = getDb()
-  void input
 
   const [caseRow] = await db
     .select({

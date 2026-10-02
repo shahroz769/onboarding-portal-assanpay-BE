@@ -358,8 +358,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json')
-    const result = await markTestingLimitsApplied(id, auth.userId, input)
+    const result = await markTestingLimitsApplied(id, auth.userId)
     return c.json(result)
   },
 )
@@ -428,8 +427,7 @@ caseRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const id = c.req.param('id')
-    const input = c.req.valid('json')
-    const result = await markLiveLimitsApplied(id, auth.userId, input)
+    const result = await markLiveLimitsApplied(id, auth.userId)
     return c.json(result)
   },
 )

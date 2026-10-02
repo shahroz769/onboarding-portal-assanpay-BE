@@ -16,7 +16,7 @@ import type { SelectSubMerchantFormInput } from './cases.schemas'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
-} from './sub-merchant-form.config'
+} from './case-constants'
 import { assertCanWorkCase } from './case-access.service'
 
 import { ensureInheritedSubMerchantFormDetails } from './case-detail-lookups'
@@ -25,7 +25,7 @@ import {
   validateWordpressScreenshotFile,
 } from './case-upload-validation'
 import { ensurePrivateInternalCaseFolder } from './case-drive-folders'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 
 export async function loadSubMerchantFormCase(caseId: string, userId: string) {
   const db = getDb()
@@ -184,7 +184,7 @@ export async function uploadSubMerchantFinalForm(
       })
     : null
 
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,
@@ -330,7 +330,7 @@ export async function uploadSubMerchantEmailProof(
     ),
   })
 
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const folder = await ensurePrivateInternalCaseFolder({
     merchantId: caseRow.merchantId,
     merchantName: caseRow.merchantName,
