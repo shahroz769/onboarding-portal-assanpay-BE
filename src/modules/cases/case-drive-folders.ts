@@ -4,7 +4,7 @@ import {
   buildCaseFolderName,
   ensureMerchantFolderPath,
 } from '../merchants/merchant-drive-folders'
-import type { FileStorageProvider } from './case-storage'
+import type { FileStorageProvider } from '../../lib/storage/google-drive'
 
 export async function ensurePrivateInternalCaseFolder(input: {
   merchantId: string

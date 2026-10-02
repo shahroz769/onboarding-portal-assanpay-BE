@@ -47,7 +47,7 @@ import { assertCanWorkCase } from './case-access.service'
 import { loadQueueStageForCase } from './case-transition.service'
 
 import { DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS } from './case-constants'
-import { getCaseFileStorage } from './case-storage'
+import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   assertAutoEmailEnabled,
   getRejectionLabel,
@@ -321,7 +321,7 @@ async function prepareDocumentReviewDocumentMoves(input: {
   const documentsById = new Map(
     documents.map((document) => [document.id, document]),
   )
-  const storage = getCaseFileStorage()
+  const storage = new GoogleDriveStorageProvider()
   const [rejectionRoundRow] = await db
     .select({ count: count() })
     .from(caseHistory)
