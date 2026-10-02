@@ -35,7 +35,6 @@ import {
   getVisibleStagesForQueue,
   resolveStageForCase,
 } from '../queues/queue-stage-defaults'
-import { isQueueWorkflowType } from '../queues/queue-workflow'
 import {
   getConfiguredAgreementDraftForMerchantType,
   getLimitsAndMdrSettings,
@@ -119,7 +118,7 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       )
     }
 
-    if (isQueueWorkflowType(queue, 'live')) {
+    if (queue.workflowType === 'live') {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${merchant.id}), hashtext('live-case'))`,
       )
@@ -144,7 +143,7 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       }
     }
 
-    const selectedSubMerchant = isQueueWorkflowType(queue, 'sub_merchant_form')
+    const selectedSubMerchant = queue.workflowType === 'sub_merchant_form'
       ? input.subMerchantId
         ? await tx.query.subMerchantDraftTemplates.findFirst({
             where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
@@ -158,7 +157,7 @@ export async function createCase(input: CreateCaseInput, actorId?: string) {
       : null
 
     if (
-      isQueueWorkflowType(queue, 'sub_merchant_form') &&
+      queue.workflowType === 'sub_merchant_form' &&
       !selectedSubMerchant
     ) {
       throw new AppError(
@@ -799,7 +798,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   }
 
   let agreementRecord = agreement
-  if (!agreementRecord && isQueueWorkflowType(queue, 'agreement')) {
+  if (!agreementRecord && queue.workflowType === 'agreement') {
     const draft = await getConfiguredAgreementDraftForMerchantType(
       merchant.merchantType,
     )
@@ -855,16 +854,14 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         where: eq(caseFiles.id, agreementRecord.receivedAgreementFileId),
       })
     : null
-  const documentReviewDetail = isQueueWorkflowType(queue, 'wordpress')
+  const documentReviewDetail = queue.workflowType === 'wordpress'
     ? merchantDocumentReviewDetail
     : caseDocumentReviewDetail
-  const resolvedWordpressWebsiteDetails = isQueueWorkflowType(
-    queue,
-    'sub_merchant_form',
-  )
-    ? (merchantWordpressWebsiteDetails ?? wordpressWebsiteDetails)
-    : wordpressWebsiteDetails
-  const subMerchantFormRecord = isQueueWorkflowType(queue, 'sub_merchant_form')
+  const resolvedWordpressWebsiteDetails =
+    queue.workflowType === 'sub_merchant_form'
+      ? (merchantWordpressWebsiteDetails ?? wordpressWebsiteDetails)
+      : wordpressWebsiteDetails
+  const subMerchantFormRecord = queue.workflowType === 'sub_merchant_form'
     ? await ensureInheritedSubMerchantFormDetails({
         caseId,
         merchantId: caseData.merchantId,
@@ -989,7 +986,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             name: testingLimitsAppliedEntry.actorName ?? 'Unknown',
           }
         : null,
-      credentialsReady: isQueueWorkflowType(queue, 'mid')
+      credentialsReady: queue.workflowType === 'mid'
         ? Boolean(
             midCreationCredentials?.branchCode.trim() &&
             midCreationCredentials.internalEmail.trim() &&
@@ -999,26 +996,26 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         : Boolean(midCreationCredentials),
       portalPasswordCode,
       portalApiCredentials,
-      portalMid: isQueueWorkflowType(queue, 'mid')
+      portalMid: queue.workflowType === 'mid'
         ? (midCreationCredentials?.portalMid ?? null)
         : null,
-      internalPortalMid: isQueueWorkflowType(queue, 'mid')
+      internalPortalMid: queue.workflowType === 'mid'
         ? (midCreationCredentials?.internalPortalMid ?? null)
         : null,
-      email: isQueueWorkflowType(queue, 'mid')
+      email: queue.workflowType === 'mid'
         ? (midCreationCredentials?.email ?? null)
         : null,
-      branchCode: isQueueWorkflowType(queue, 'mid')
+      branchCode: queue.workflowType === 'mid'
         ? (midCreationCredentials?.branchCode ?? null)
         : null,
-      internalEmail: isQueueWorkflowType(queue, 'mid')
+      internalEmail: queue.workflowType === 'mid'
         ? (midCreationCredentials?.internalEmail ?? null)
         : null,
       // WordPress shows the internal branch code to the working owner only,
       // so it is left out of the payload for everyone else.
       internalBranchCode:
-        isQueueWorkflowType(queue, 'mid') ||
-        (isQueueWorkflowType(queue, 'wordpress') && isWorkingOwner)
+        queue.workflowType === 'mid' ||
+        (queue.workflowType === 'wordpress' && isWorkingOwner)
           ? (midCreationCredentials?.internalBranchCode ?? null)
           : null,
       internalLimitsAppliedAt:
@@ -1029,21 +1026,21 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             name: internalPortalMidLimitsAppliedEntry.actorName ?? 'Unknown',
           }
         : null,
-      merchantRole: isQueueWorkflowType(queue, 'mid')
+      merchantRole: queue.workflowType === 'mid'
         ? (midCreationCredentials?.merchantRole ?? null)
         : null,
       paymentMethods:
-        isQueueWorkflowType(queue, 'mid') ||
-        isQueueWorkflowType(queue, 'testing')
+        queue.workflowType === 'mid' ||
+        queue.workflowType === 'testing'
           ? (midCreationCredentials?.paymentMethods ?? paymentMethods)
           : null,
       payoutMethods:
-        isQueueWorkflowType(queue, 'mid') ||
-        isQueueWorkflowType(queue, 'testing')
+        queue.workflowType === 'mid' ||
+        queue.workflowType === 'testing'
           ? (midCreationCredentials?.payoutMethods ?? payoutMethods)
           : null,
     },
-    midConfiguration: isQueueWorkflowType(queue, 'mid')
+    midConfiguration: queue.workflowType === 'mid'
       ? {
           limitsAndMdr,
           paymentMethods,

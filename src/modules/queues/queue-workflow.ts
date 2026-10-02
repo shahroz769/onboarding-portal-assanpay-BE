@@ -1,4 +1,3 @@
-import type { Queue } from '../../db/schema'
 import {
   QUEUE_LIFECYCLES,
   QUEUE_WORKFLOW_TYPES,
@@ -11,27 +10,6 @@ export {
   QUEUE_WORKFLOW_TYPES,
   type QueueLifecycle,
   type QueueWorkflowType,
-}
-
-export const QUEUE_STAGE_TEMPLATES = [
-  'generic',
-  'document_review',
-  'agreement',
-  'mid',
-  'testing',
-  'wordpress',
-  'physical_agreement',
-  'live',
-  'sub_merchant_form',
-] as const
-
-export type QueueStageTemplateName = (typeof QUEUE_STAGE_TEMPLATES)[number]
-
-export function isQueueWorkflowType(
-  queue: Pick<Queue, 'workflowType'> | { workflowType: QueueWorkflowType },
-  workflowType: QueueWorkflowType,
-): boolean {
-  return queue.workflowType === workflowType
 }
 
 export function lifecycleToIsActive(lifecycle: QueueLifecycle): boolean {
@@ -119,7 +97,7 @@ export function validateStageDefinitions(
 }
 
 export function getStageTemplateDefinitions(
-  template: QueueStageTemplateName,
+  template: QueueWorkflowType,
 ): StageDefinitionInput[] {
   const baseNewWorkingClosed: StageDefinitionInput[] = [
     { name: 'New', slug: 'new', order: 1, category: 'new', isActive: true },

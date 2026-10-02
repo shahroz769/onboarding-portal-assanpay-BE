@@ -16,7 +16,6 @@ import {
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
-import { isQueueWorkflowType } from '../queues/queue-workflow'
 import { sendEmail } from '../email/email.service'
 import {
   DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
@@ -155,7 +154,7 @@ export async function saveFieldReviews(
     updatedAt: now,
   }))
   const documentMoves =
-    queue != null && isQueueWorkflowType(queue, 'document_review')
+    queue != null && queue.workflowType === 'document_review'
       ? await prepareDocumentReviewDocumentMoves({
           caseId,
           merchantId: caseData.merchantId,
@@ -190,7 +189,7 @@ export async function saveFieldReviews(
         .where(eq(merchantDocuments.id, move.documentId))
     }
 
-    if (queue == null || !isQueueWorkflowType(queue, 'document_review')) {
+    if (queue == null || queue.workflowType !== 'document_review') {
       const rejected = reviewValues.filter(
         (r) => r.status === 'rejected',
       ).length
