@@ -1,13 +1,9 @@
 import { eq, inArray } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { cases, queues, userQueueAccess, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import type { SessionUser } from '../../types/auth'
-
-type DbTransaction = Parameters<
-  Parameters<ReturnType<typeof getDb>['transaction']>[0]
->[0]
 
 type DbExecutor = ReturnType<typeof getDb> | DbTransaction
 

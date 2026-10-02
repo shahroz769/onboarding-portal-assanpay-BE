@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   caseHistory,
   cases,
@@ -14,10 +14,6 @@ import { decryptSecret, encryptSecret } from '../../lib/secret-box'
 import type { SecretKeyName } from '../../lib/secret-box'
 import { assertCanWorkCase } from './case-access.service'
 import type { SavePortalApiCredentialsInput } from './cases.schemas'
-
-type DbTransaction = Parameters<
-  Parameters<ReturnType<typeof getDb>['transaction']>[0]
->[0]
 
 const KEY_NAME: SecretKeyName = 'PORTAL_API_CREDENTIALS_ENCRYPTION_KEY'
 

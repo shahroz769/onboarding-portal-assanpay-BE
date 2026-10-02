@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { caseHistory, cases, queueStages, queues } from '../../db/schema'
 import type { QueueStage } from '../../db/schema'
 import { AppError } from '../../lib/errors'
@@ -18,10 +18,6 @@ import {
 import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { isCaseSlaBreached } from './case-sla'
 import { clearPortalApiCredentials } from './portal-api-credentials.service'
-
-type DbTransaction = Parameters<
-  Parameters<ReturnType<typeof getDb>['transaction']>[0]
->[0]
 
 export type LockedCaseRow = {
   id: string

@@ -12,7 +12,7 @@ import {
 } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { env } from '../../config/env'
 import {
   caseFlowCloseBlockers,
@@ -37,10 +37,6 @@ import {
   calculateCaseFlowRetryDelay,
   classifyCaseFlowFailure,
 } from './case-flow-retry'
-
-type DbTransaction = Parameters<
-  Parameters<ReturnType<typeof getDb>['transaction']>[0]
->[0]
 
 export async function getMerchantFlowVersionId(
   tx: DbTransaction,

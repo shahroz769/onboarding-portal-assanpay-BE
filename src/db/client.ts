@@ -34,6 +34,10 @@ export function getDb() {
   return database
 }
 
+export type DbTransaction = Parameters<
+  Parameters<ReturnType<typeof getDb>['transaction']>[0]
+>[0]
+
 export async function closeQueryClient() {
   if (!client) return
 

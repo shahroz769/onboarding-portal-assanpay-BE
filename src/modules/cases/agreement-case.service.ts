@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   agreementCaseDetails,
   caseFiles,
@@ -28,7 +28,6 @@ import {
 } from './agreement.config'
 import { assertCanWorkCase } from './case-access.service'
 
-import type { DbTransaction } from './case-db'
 import {
   assertAutoEmailEnabled,
   resolveCaseEmailRecipients,
