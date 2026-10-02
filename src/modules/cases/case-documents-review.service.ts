@@ -54,10 +54,17 @@ import {
   resolveCaseEmailRecipients,
   resolveMerchantEmailRecipient,
 } from './case-communication-helpers'
-import type {
-  RegeneratedResubmissionLinkResult,
-  SendForResubmissionResult,
-} from './case-documents-review.types'
+
+type SendForResubmissionResult = {
+  status: 'sent' | 'failed'
+  emailLogId: string
+  error?: string
+}
+
+type RegeneratedResubmissionLinkResult = {
+  url: string
+  rejectedFieldCount: number
+}
 
 export async function saveFieldReviews(
   caseId: string,

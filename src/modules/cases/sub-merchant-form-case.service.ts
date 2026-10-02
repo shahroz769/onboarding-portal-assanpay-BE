@@ -16,7 +16,7 @@ import type { SelectSubMerchantFormInput } from './cases.schemas'
 import {
   SUB_MERCHANT_EMAIL_PROOF_KIND,
   SUB_MERCHANT_FINAL_FORM_KIND,
-} from './sub-merchant-form.config'
+} from './case-constants'
 import { assertCanWorkCase } from './case-access.service'
 
 import { ensureInheritedSubMerchantFormDetails } from './case-detail-lookups'
