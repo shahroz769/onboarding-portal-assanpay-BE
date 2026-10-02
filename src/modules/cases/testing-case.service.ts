@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { caseHistory, cases, queues, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import type { MarkTestingLimitsAppliedInput } from './cases.schemas'
 import { assertCanWorkCase } from './case-access.service'
 import { loadQueueStageForCase } from './case-transition.service'
 
@@ -12,10 +11,8 @@ import { getTestingLimitsAppliedEntry } from './case-detail-lookups'
 export async function markTestingLimitsApplied(
   caseId: string,
   userId: string,
-  input: MarkTestingLimitsAppliedInput,
 ) {
   const db = getDb()
-  void input
 
   const [caseRow] = await db
     .select({
