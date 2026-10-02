@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNotNull, like } from 'drizzle-orm'
+import { and, desc, eq, gt, isNotNull, like, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
 import { caseHistory, cases, emailLog } from '../../db/schema'
@@ -11,6 +11,7 @@ import {
 } from '../email/email-delivery-status'
 import type { EmailDeliveryStatus } from '../email/email-delivery-status'
 import { getEmailTemplateLabel } from '../email/email-templates'
+import { assertCanWorkCase } from './case-access.service'
 
 type Db = ReturnType<typeof getDb>
 type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
@@ -28,8 +29,36 @@ export type CaseEmailDelivery = {
   statusUpdatedAt: string | null
   /** A later manual (Gmail) or WhatsApp send replaced this email. */
   supersededByManual: boolean
+  /**
+   * The case owner checked Resend and confirmed the email reached the To
+   * address (only a CC address failed), so it no longer blocks closing.
+   */
+  confirmedByOwner: boolean
+  /** The owner may confirm delivery to the To address and force close. */
+  canForceClose: boolean
   /** Why the case can't be closed successfully yet, or null. */
   closeBlockedReason: string | null
+}
+
+/** History action recording an owner's delivery confirmation. */
+export const EMAIL_DELIVERY_CONFIRMED_ACTION = 'email_delivery_confirmed'
+
+// Statuses Resend reports for the whole email when any one recipient fails,
+// so with CC addresses the To address may still have received it. `failed`
+// isn't here: nothing was sent to anyone.
+const RECIPIENT_FAILURE_STATUSES: ReadonlySet<EmailDeliveryStatus> = new Set([
+  'bounced',
+  'complained',
+  'suppressed',
+])
+
+function canConfirmToDelivery(email: {
+  status: EmailDeliveryStatus
+  ccEmails: string[]
+}) {
+  return (
+    RECIPIENT_FAILURE_STATUSES.has(email.status) && email.ccEmails.length > 0
+  )
 }
 
 /**
@@ -44,7 +73,7 @@ export async function getCaseEmailDelivery(
   const latest = await findLatestTrackedEmail(db, caseId)
   if (!latest) return null
 
-  const [[manualSend], [caseRow]] = await Promise.all([
+  const [[manualSend], [ownerConfirmation], [caseRow]] = await Promise.all([
     db
       .select({ id: caseHistory.id })
       .from(caseHistory)
@@ -56,6 +85,7 @@ export async function getCaseEmailDelivery(
         ),
       )
       .limit(1),
+    findOwnerConfirmation(db, caseId, latest.id),
     db
       .select({ status: cases.status })
       .from(cases)
@@ -64,6 +94,7 @@ export async function getCaseEmailDelivery(
   ])
 
   const supersededByManual = Boolean(manualSend)
+  const confirmedByOwner = Boolean(ownerConfirmation)
   const templateLabel = getEmailTemplateLabel(latest.template)
 
   return {
@@ -77,8 +108,14 @@ export async function getCaseEmailDelivery(
     sentAt: latest.createdAt.toISOString(),
     statusUpdatedAt: latest.statusUpdatedAt?.toISOString() ?? null,
     supersededByManual,
+    confirmedByOwner,
+    canForceClose:
+      !supersededByManual &&
+      !confirmedByOwner &&
+      caseRow?.status === 'working' &&
+      canConfirmToDelivery(latest),
     closeBlockedReason:
-      supersededByManual || latest.status === 'delivered'
+      supersededByManual || confirmedByOwner || latest.status === 'delivered'
         ? null
         : closeBlockedReason({
             templateLabel,
@@ -116,6 +153,24 @@ async function findLatestTrackedEmail(db: Db | DbTransaction, caseId: string) {
     .orderBy(desc(emailLog.createdAt))
     .limit(1)
   return latest ?? null
+}
+
+function findOwnerConfirmation(
+  db: Db | DbTransaction,
+  caseId: string,
+  emailLogId: string,
+) {
+  return db
+    .select({ id: caseHistory.id })
+    .from(caseHistory)
+    .where(
+      and(
+        eq(caseHistory.caseId, caseId),
+        eq(caseHistory.action, EMAIL_DELIVERY_CONFIRMED_ACTION),
+        sql`${caseHistory.details}->>'emailLogId' = ${emailLogId}`,
+      ),
+    )
+    .limit(1)
 }
 
 function closeBlockedReason(input: {
@@ -166,6 +221,79 @@ export async function assertCaseEmailDelivered(
   if (delivery?.closeBlockedReason) {
     throw new AppError(409, delivery.closeBlockedReason)
   }
+}
+
+/**
+ * Records the case owner's confirmation (checked manually on Resend) that the
+ * latest email reached its To address and only a CC address failed, so the
+ * case can close successfully. Resend reports one status for the whole email,
+ * so we can't tell which recipient failed on our own.
+ */
+export async function confirmCaseEmailDelivered(
+  caseId: string,
+  userId: string,
+  input: { emailLogId: string },
+) {
+  await assertCanWorkCase(caseId, userId)
+
+  return getDb().transaction(async (tx) => {
+    const [caseRow] = await tx
+      .select({ ownerId: cases.ownerId, status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .for('update')
+      .limit(1)
+
+    if (!caseRow) throw new AppError(404, 'Case not found.')
+    if (caseRow.ownerId !== userId) {
+      throw new AppError(
+        403,
+        'Only the current case owner can work on this case.',
+      )
+    }
+    if (caseRow.status !== 'working') {
+      throw new AppError(
+        409,
+        'Delivery can only be confirmed while the case is in Working.',
+      )
+    }
+
+    const delivery = await getCaseEmailDelivery(tx, caseId)
+    if (!delivery || delivery.emailLogId !== input.emailLogId) {
+      throw new AppError(
+        409,
+        'A newer email was sent for this case. Refresh and check it again.',
+      )
+    }
+    if (delivery.confirmedByOwner) return delivery
+    if (!delivery.canForceClose) {
+      throw new AppError(
+        409,
+        'This email can only be force closed when it bounced and was copied to CC addresses.',
+      )
+    }
+
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: EMAIL_DELIVERY_CONFIRMED_ACTION,
+      details: {
+        emailLogId: delivery.emailLogId,
+        template: delivery.template,
+        templateLabel: delivery.templateLabel,
+        recipient: delivery.recipient,
+        cc: delivery.cc,
+        status: delivery.status,
+      },
+    })
+
+    return {
+      ...delivery,
+      confirmedByOwner: true,
+      canForceClose: false,
+      closeBlockedReason: null,
+    }
+  })
 }
 
 // ─── Status check for a missing webhook ──────────────────────────────────────

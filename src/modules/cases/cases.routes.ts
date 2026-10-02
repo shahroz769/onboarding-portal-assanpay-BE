@@ -11,6 +11,7 @@ import {
   bulkAssignCaseSchema,
   bulkCreateCaseSchema,
   closeUnsuccessfulSchema,
+  confirmEmailDeliverySchema,
   createCaseSchema,
   createCommentSchema,
   emailRecipientSelectionSchema,
@@ -106,6 +107,7 @@ import {
   previewMissingCloseTriggerCases,
   retryFailedCaseFlowCloseJob,
 } from './case-flow.service'
+import { confirmCaseEmailDelivered } from './case-email-delivery'
 
 export const caseRoutes = new Hono<AppEnv>()
 
@@ -530,6 +532,20 @@ caseRoutes.patch(
     const id = c.req.param('id')
     const input = c.req.valid('json')
     const result = await closeUnsuccessful(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+// POST /api/cases/:id/email-delivery/confirm-delivered — Owner confirms (from
+// Resend) the latest email reached its To address and only a CC bounced
+caseRoutes.post(
+  '/:id/email-delivery/confirm-delivered',
+  zodValidator('json', confirmEmailDeliverySchema),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    const input = c.req.valid('json')
+    const result = await confirmCaseEmailDelivered(id, auth.userId, input)
     return c.json(result)
   },
 )

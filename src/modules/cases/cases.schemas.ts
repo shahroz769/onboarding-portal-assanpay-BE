@@ -66,6 +66,10 @@ export const updateCaseStatusSchema = z.strictObject({
 
 export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>
 
+export const confirmEmailDeliverySchema = z.strictObject({
+  emailLogId: z.uuid(),
+})
+
 export const assignCaseSchema = z.strictObject({
   ownerId: z.uuid().nullable(),
 })
