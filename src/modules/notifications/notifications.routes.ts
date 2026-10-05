@@ -78,7 +78,8 @@ notificationRoutes.get('/stream', (c) => {
   c.header('Content-Type', 'text/event-stream; charset=utf-8')
   c.header('Cache-Control', 'no-cache, no-transform')
   c.header('Content-Encoding', 'identity')
-  c.header('Vary', 'Origin, Authorization, Cookie')
+  // CORS middleware already contributes Origin; appending avoids a duplicate.
+  c.header('Vary', 'Authorization, Cookie', { append: true })
   c.header('X-Accel-Buffering', 'no')
 
   return streamSSE(

@@ -359,7 +359,7 @@ export async function assignCase(
           : null
 
   if (!targetStage) {
-    throw new AppError(500, 'Case has no current stage configured.')
+    throw new AppError(400, 'Case has no current stage.')
   }
 
   const historyAction =
