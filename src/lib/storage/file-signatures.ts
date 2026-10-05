@@ -65,19 +65,13 @@ export async function assertFileContentSignature(input: {
     throw new AppError(415, `Document "${label}" has an unsupported file type.`)
   }
 
-  const probeLength = Math.min(
-    FILE_SIGNATURE_PROBE_BYTES,
-    input.file.size,
-  )
+  const probeLength = Math.min(FILE_SIGNATURE_PROBE_BYTES, input.file.size)
   const probe = new Uint8Array(
     await input.file.slice(0, probeLength).arrayBuffer(),
   )
 
   if (probe.byteLength < minimumBytesForFamily(expectedFamily)) {
-    throw new AppError(
-      400,
-      `Document "${label}" is truncated or corrupted.`,
-    )
+    throw new AppError(400, `Document "${label}" is truncated or corrupted.`)
   }
 
   const detectedFamily = detectFamily(probe)

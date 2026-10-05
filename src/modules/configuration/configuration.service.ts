@@ -819,28 +819,28 @@ export async function updateCaseFlowConfiguration(
     // Editor IDs belong to the previous version; every published rule gets a new ID.
     if (value.startRules.length)
       await tx.insert(caseFlowStartRules).values(
-        value.startRules.map(({ id, ...rule }) => ({
+        value.startRules.map(({ id: _id, ...rule }) => ({
           ...rule,
           flowVersionId: version.id,
         })),
       )
     if (value.closeTriggers.length)
       await tx.insert(caseFlowCloseTriggers).values(
-        value.closeTriggers.map(({ id, ...rule }) => ({
+        value.closeTriggers.map(({ id: _id, ...rule }) => ({
           ...rule,
           flowVersionId: version.id,
         })),
       )
     if (value.closeBlockers.length)
       await tx.insert(caseFlowCloseBlockers).values(
-        value.closeBlockers.map(({ id, ...rule }) => ({
+        value.closeBlockers.map(({ id: _id, ...rule }) => ({
           ...rule,
           flowVersionId: version.id,
         })),
       )
     if (value.creationRequirements.length)
       await tx.insert(caseFlowCreationRequirements).values(
-        value.creationRequirements.map(({ id, ...rule }) => ({
+        value.creationRequirements.map(({ id: _id, ...rule }) => ({
           ...rule,
           flowVersionId: version.id,
         })),

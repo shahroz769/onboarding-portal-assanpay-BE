@@ -82,15 +82,15 @@ export async function sendEmail(
       // Only emails sent while webhooks are configured receive delivery
       // events, so only those can gate a case (see case-email-delivery.ts).
       deliveryTracked: Boolean(env.RESEND_WEBHOOK_SECRET),
-      metadata: (testRecipientOverride
+      metadata: testRecipientOverride
         ? {
-            ...(input.metadata ?? {}),
+            ...input.metadata,
             originalTo: input.to,
             originalCc: input.cc ?? [],
             originalBcc: input.bcc ?? [],
             overriddenTo: testRecipientOverride,
           }
-        : (input.metadata ?? null)),
+        : (input.metadata ?? null),
     })
     .returning({ id: emailLog.id })
 

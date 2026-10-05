@@ -45,8 +45,20 @@ Success response:
 
 ```json
 {
-  "created": [{ "id": "uuid", "caseNumber": "DR-000000001", "merchantId": "uuid", "merchantName": "Merchant Name" }],
-  "failed": [{ "merchantId": "uuid", "error": "Live case LV-000000001 already exists for this merchant." }]
+  "created": [
+    {
+      "id": "uuid",
+      "caseNumber": "DR-000000001",
+      "merchantId": "uuid",
+      "merchantName": "Merchant Name"
+    }
+  ],
+  "failed": [
+    {
+      "merchantId": "uuid",
+      "error": "Live case LV-000000001 already exists for this merchant."
+    }
+  ]
 }
 ```
 

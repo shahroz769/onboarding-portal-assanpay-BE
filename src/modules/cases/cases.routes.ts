@@ -251,7 +251,7 @@ caseRoutes.post(
   },
 )
 
-// PATCH /api/cases/:id/status — Update status (case owner only)
+// PATCH /api/cases/:id/status — Awaiting Merchant → Working (case owner only)
 caseRoutes.patch(
   '/:id/status',
   zodValidator('json', updateCaseStatusSchema),

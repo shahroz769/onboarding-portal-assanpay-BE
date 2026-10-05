@@ -7,7 +7,6 @@ import { getResendClient } from '../email/email.client'
 import {
   applyEmailDeliveryStatus,
   IN_FLIGHT_EMAIL_STATUSES,
-  UNDELIVERED_EMAIL_STATUSES,
 } from '../email/email-delivery-status'
 import type { EmailDeliveryStatus } from '../email/email-delivery-status'
 import { getEmailTemplateLabel } from '../email/email-templates'
@@ -336,7 +335,10 @@ export async function refreshStaleCaseEmailDelivery(caseId: string) {
     const waitingSince = (latest.statusUpdatedAt ?? latest.createdAt).getTime()
     const now = Date.now()
     if (now - waitingSince < STATUS_CHECK_AFTER_MS) return
-    if (now - (lastStatusCheckAt.get(latest.id) ?? 0) < STATUS_CHECK_INTERVAL_MS) {
+    if (
+      now - (lastStatusCheckAt.get(latest.id) ?? 0) <
+      STATUS_CHECK_INTERVAL_MS
+    ) {
       return
     }
     lastStatusCheckAt.set(latest.id, now)

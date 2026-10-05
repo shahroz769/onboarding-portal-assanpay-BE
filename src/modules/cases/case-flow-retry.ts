@@ -3,7 +3,9 @@ import { AppError } from '../../lib/errors'
 export type CaseFlowFailureKind = 'blocked' | 'transient'
 
 export function classifyCaseFlowFailure(error: unknown): CaseFlowFailureKind {
-  return error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500
+  return error instanceof AppError &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500
     ? 'blocked'
     : 'transient'
 }

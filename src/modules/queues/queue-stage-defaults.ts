@@ -68,16 +68,10 @@ function stageMatchesStatus(
  */
 export function resolveUniqueStageForStatus(
   stages: Array<
-    Pick<
-      QueueStage,
-      'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'
-    >
+    Pick<QueueStage, 'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'>
   >,
   status: CaseStatusValue,
-): Pick<
-  QueueStage,
-  'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'
-> {
+): Pick<QueueStage, 'id' | 'category' | 'slug' | 'name' | 'queueId' | 'order'> {
   const matches = stages.filter((stage) => stageMatchesStatus(stage, status))
 
   if (matches.length === 0) {
@@ -103,7 +97,9 @@ function createDefaultQueueStageDefinitions(queue: QueueStageSeedInput) {
     slug: stage.slug,
     order: stage.order,
     category: stage.category,
-  })) satisfies Array<Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>>
+  })) satisfies Array<
+    Pick<NewQueueStage, 'name' | 'slug' | 'order' | 'category'>
+  >
 }
 
 function hasStageEquivalent(
@@ -235,7 +231,5 @@ export function getVisibleStagesForQueue(
   stages: QueueStage[],
   currentStageId?: string | null,
 ) {
-  return stages.filter(
-    (stage) => stage.isActive || stage.id === currentStageId,
-  )
+  return stages.filter((stage) => stage.isActive || stage.id === currentStageId)
 }

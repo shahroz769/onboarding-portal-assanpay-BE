@@ -227,9 +227,7 @@ export async function sendMidCreationCredentialsEmail(
     getLimitsAndMdrSettings(),
     getMerchantPortalSettings(),
   ])
-  const passwordCode = await requireActivePortalPasswordCode(
-    caseRow.merchantId,
-  )
+  const passwordCode = await requireActivePortalPasswordCode(caseRow.merchantId)
   const portalPassword = buildPortalPassword(
     credentials.email,
     passwordCode.code,

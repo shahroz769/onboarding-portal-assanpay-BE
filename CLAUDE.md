@@ -11,7 +11,9 @@ If a contract change requires frontend work, use Desktop path `\Onboarding Porta
 - Tag agent-run SQL with `/* source=agent */` so it is identifiable in Insights.
 
 ## Hono Docs
+
 Always reference https://hono.dev/llms.txt for Hono specific things
+
 - [Full Docs](https://hono.dev/llms-full.txt) Full documentation of Hono. (without examples)
 
 - Stack: Bun, Hono, strict TypeScript, Drizzle, PostgreSQL.

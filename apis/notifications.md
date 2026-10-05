@@ -103,6 +103,6 @@ Notifications are created automatically by other endpoints:
 | `PATCH /api/cases/:id/assign`   | `case_assigned`, `case_unassigned`                                                | New owner (assigned), previous owner (unassigned). Excludes the actor.                                          |
 | `POST  /api/cases/bulk-assign`  | `case_assigned`, `case_unassigned`                                                | Same rules per case.                                                                                            |
 | `POST  /api/cases/:id/comments` | `comment_mention` > `comment_reply` > `comment_thread` (precedence per recipient) | @-mentioned users; parent comment author on reply; prior commenters in the thread. Excludes the comment author. |
-| `POST  /api/webhooks/resend`    | `case_email_undelivered`                                                          | Case owner, when a merchant email bounces, is marked as spam, is suppressed or fails.                          |
+| `POST  /api/webhooks/resend`    | `case_email_undelivered`                                                          | Case owner, when a merchant email bounces, is marked as spam, is suppressed or fails.                           |
 
 Notification creation is best-effort — failures are logged and do **not** roll back the originating action.

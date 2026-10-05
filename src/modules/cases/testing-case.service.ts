@@ -8,10 +8,7 @@ import { loadQueueStageForCase } from './case-transition.service'
 
 import { getTestingLimitsAppliedEntry } from './case-detail-lookups'
 
-export async function markTestingLimitsApplied(
-  caseId: string,
-  userId: string,
-) {
+export async function markTestingLimitsApplied(caseId: string, userId: string) {
   const db = getDb()
 
   const [caseRow] = await db

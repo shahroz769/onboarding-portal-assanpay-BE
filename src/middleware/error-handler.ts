@@ -36,7 +36,7 @@ function getDatabaseError(error: Error) {
 export function errorHandler(error: Error, c: Context<AppEnv>) {
   if (error instanceof AppError) {
     return c.json(
-      { error: error.message, ...(error.details ?? {}) },
+      { error: error.message, ...error.details },
       error.statusCode as ContentfulStatusCode,
     )
   }

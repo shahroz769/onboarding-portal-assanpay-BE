@@ -328,7 +328,8 @@ export async function confirmResubmissionEmailManual(
     slug: row.queueSlug,
     workflowType: row.workflowType ?? 'document_review',
   })
-  const awaitingStage = stages.find((s) => s.slug === 'awaiting_merchant') ?? null
+  const awaitingStage =
+    stages.find((s) => s.slug === 'awaiting_merchant') ?? null
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_merchant stage configured.')
 
@@ -671,9 +672,7 @@ export async function getMidCreationEmailPreview(
     getMerchantPortalSettings(),
   ])
   const subject = midCreationEmailSubject(caseRow.merchantName)
-  const passwordCode = await requireActivePortalPasswordCode(
-    caseRow.merchantId,
-  )
+  const passwordCode = await requireActivePortalPasswordCode(caseRow.merchantId)
   const portalPassword = buildPortalPassword(
     credentials.email,
     passwordCode.code,
@@ -748,9 +747,7 @@ export async function confirmMidCreationEmailManual(
     input.recipientEmailType,
   )
 
-  const passwordCode = await requireActivePortalPasswordCode(
-    caseRow.merchantId,
-  )
+  const passwordCode = await requireActivePortalPasswordCode(caseRow.merchantId)
   if (input.tokenId !== passwordCode.id) {
     throw new AppError(
       409,

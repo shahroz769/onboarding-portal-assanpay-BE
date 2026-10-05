@@ -366,7 +366,8 @@ function toStorageUploadResult(
     fileId: data.id,
     fileName: data.name,
     mimeType: data.mimeType,
-    sizeBytes: parseDriveSizeBytes(data.size) ?? parseDriveSizeBytes(fallbackSize) ?? 0,
+    sizeBytes:
+      parseDriveSizeBytes(data.size) ?? parseDriveSizeBytes(fallbackSize) ?? 0,
     webViewLink: data.webViewLink,
     downloadLink: data.webContentLink ?? null,
     folderId,

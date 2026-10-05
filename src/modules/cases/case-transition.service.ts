@@ -335,9 +335,7 @@ export async function transitionCaseState(
         locked.status !== 'closed' &&
         queue.workflowType === 'wordpress'
       ) {
-        const cleared = await clearPortalApiCredentials(tx, [
-          locked.merchantId,
-        ])
+        const cleared = await clearPortalApiCredentials(tx, [locked.merchantId])
         if (cleared.length > 0) {
           await tx.insert(caseHistory).values({
             caseId: input.caseId,

@@ -9,7 +9,10 @@
     "db:seed-demo": "bun run src/db/seed-demo.ts",
     "db:studio": "drizzle-kit studio",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "check": "oxfmt && oxlint --fix"
   },
   "dependencies": {
     "@react-email/components": "^1.0.12",
@@ -30,6 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "drizzle-kit": "^0.31.11",
+    "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",
     "oxlint-tsgolint": "^7.0.2003",
     "typescript": "^7.0.2"

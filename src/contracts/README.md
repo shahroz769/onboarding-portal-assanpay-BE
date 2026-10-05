@@ -15,8 +15,8 @@ API. These are **build-time** references only.
 
 ## Current contracts
 
-| File | Covers |
-|---|---|
+| File        | Covers                                      |
+| ----------- | ------------------------------------------- |
 | `queues.ts` | `workflowType`, `lifecycle` (plans 003–004) |
 
 Frontend mirror: `onboarding-portal-assanpay-FE/src/schemas/queue-workflow.schema.ts`

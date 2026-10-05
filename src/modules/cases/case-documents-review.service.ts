@@ -978,7 +978,10 @@ export async function getResubmissionContext(
       label: MERCHANT_FIELD_LABELS[review.fieldName],
       remarks: review.remarks,
       isDocument: false,
-      currentValue: value == null ? '' : String(value),
+      currentValue:
+        typeof value === 'string' || typeof value === 'number'
+          ? String(value)
+          : '',
     }
   })
 

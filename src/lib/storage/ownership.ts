@@ -4,10 +4,7 @@ import { getDb } from '../../db/client'
 import { storageObjects } from '../../db/schema'
 import type { NewStorageObject, StorageObject } from '../../db/schema'
 import { AppError } from '../errors'
-import type {
-  FileStorageProvider,
-  GoogleDriveVisibility,
-} from './google-drive'
+import type { FileStorageProvider, GoogleDriveVisibility } from './google-drive'
 
 export const STORAGE_PROVIDER = 'google_drive' as const
 
@@ -182,7 +179,7 @@ export async function finalizeRootClaim(input: {
       lifecycle: 'current',
       updatedAt: now,
       metadata: {
-        ...(asRecord(input.claim.metadata) ?? {}),
+        ...asRecord(input.claim.metadata),
         role: 'merchant_root',
       },
     })

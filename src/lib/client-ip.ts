@@ -26,10 +26,7 @@ export function getClientIp(c: Context) {
     const cloudflareIp = c.req.header('cf-connecting-ip')?.trim()
     if (cloudflareIp) return cloudflareIp
 
-    const forwardedIp = c.req
-      .header('x-forwarded-for')
-      ?.split(',')[0]
-      ?.trim()
+    const forwardedIp = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
     if (forwardedIp) return forwardedIp
   }
 

@@ -90,47 +90,120 @@ function weighted<T>(entries: readonly (readonly [T, number])[]) {
 // ─── Merchant Content ───────────────────────────────────────────────────────
 
 const BUSINESS_NAMES = [
-  'Karachi Thread Works', 'Lahore Leather Co', 'Indus Digital Studio',
-  'Zameen Organics', 'Punjab Pixel Labs', 'Sindh Spice Traders',
-  'Margalla Outdoor Gear', 'Chenab Textiles', 'Roshan Learning Hub',
-  'Bahria Bites Catering', 'Hunza Dry Fruits', 'Mehran Auto Parts',
-  'Pak Fitness Club', 'Saffron Home Decor', 'Gulberg Gadgets',
-  'Peshawar Carpet House', 'Nayab Jewellers', 'Al Noor Pharmacy',
-  'Tez Courier Services', 'Sajawal Solar', 'Kohsar Books',
-  'Ravi Cloud Hosting', 'Fresh Basket Grocers', 'Karakoram Travels',
-  'Bilal Electronics', 'Clifton Cakes', 'Data Tech Solutions',
-  'Falak Fashion House', 'Green Valley Farms', 'Haveli Furniture',
-  'Ibtida Charity Trust', 'Jhelum Sports Goods', 'Kashif Mobile Mart',
-  'Lakson Learning Academy', 'Mall Road Optics', 'Noor Ul Ain Foundation',
-  'Orient Tea Company', 'Pearl Beauty Salon', 'Quetta Kabab House',
-  'Rehmat Medical Store', 'Sadaf Stitching Studio', 'Tariq Tyres',
-  'Umeed Welfare Society', 'Vertex Software House', 'Wapda Town Bakers',
-  'Xpress Print Shop', 'Yaqoob Traders', 'Zaitoon Oil Mills',
-  'Afaq Consultancy', 'Bloom Flower Shop', 'Cedar Kids Wear',
-  'Daraz Seller Hub', 'Eastern Herbal Care', 'Fajr Islamic Store',
-  'Gwadar Seafood', 'Hira Handicrafts',
+  'Karachi Thread Works',
+  'Lahore Leather Co',
+  'Indus Digital Studio',
+  'Zameen Organics',
+  'Punjab Pixel Labs',
+  'Sindh Spice Traders',
+  'Margalla Outdoor Gear',
+  'Chenab Textiles',
+  'Roshan Learning Hub',
+  'Bahria Bites Catering',
+  'Hunza Dry Fruits',
+  'Mehran Auto Parts',
+  'Pak Fitness Club',
+  'Saffron Home Decor',
+  'Gulberg Gadgets',
+  'Peshawar Carpet House',
+  'Nayab Jewellers',
+  'Al Noor Pharmacy',
+  'Tez Courier Services',
+  'Sajawal Solar',
+  'Kohsar Books',
+  'Ravi Cloud Hosting',
+  'Fresh Basket Grocers',
+  'Karakoram Travels',
+  'Bilal Electronics',
+  'Clifton Cakes',
+  'Data Tech Solutions',
+  'Falak Fashion House',
+  'Green Valley Farms',
+  'Haveli Furniture',
+  'Ibtida Charity Trust',
+  'Jhelum Sports Goods',
+  'Kashif Mobile Mart',
+  'Lakson Learning Academy',
+  'Mall Road Optics',
+  'Noor Ul Ain Foundation',
+  'Orient Tea Company',
+  'Pearl Beauty Salon',
+  'Quetta Kabab House',
+  'Rehmat Medical Store',
+  'Sadaf Stitching Studio',
+  'Tariq Tyres',
+  'Umeed Welfare Society',
+  'Vertex Software House',
+  'Wapda Town Bakers',
+  'Xpress Print Shop',
+  'Yaqoob Traders',
+  'Zaitoon Oil Mills',
+  'Afaq Consultancy',
+  'Bloom Flower Shop',
+  'Cedar Kids Wear',
+  'Daraz Seller Hub',
+  'Eastern Herbal Care',
+  'Fajr Islamic Store',
+  'Gwadar Seafood',
+  'Hira Handicrafts',
 ] as const
 
 const OWNER_NAMES = [
-  'Ahmed Raza', 'Sana Malik', 'Bilal Chaudhry', 'Ayesha Siddiqui',
-  'Hamza Qureshi', 'Fatima Noor', 'Usman Farooq', 'Zainab Ali',
-  'Kamran Akhtar', 'Hina Shah', 'Faisal Mehmood', 'Maryam Iqbal',
-  'Talha Javed', 'Nimra Aslam', 'Salman Butt', 'Rabia Anwar',
+  'Ahmed Raza',
+  'Sana Malik',
+  'Bilal Chaudhry',
+  'Ayesha Siddiqui',
+  'Hamza Qureshi',
+  'Fatima Noor',
+  'Usman Farooq',
+  'Zainab Ali',
+  'Kamran Akhtar',
+  'Hina Shah',
+  'Faisal Mehmood',
+  'Maryam Iqbal',
+  'Talha Javed',
+  'Nimra Aslam',
+  'Salman Butt',
+  'Rabia Anwar',
 ] as const
 
 const NATURES = [
-  'E-commerce', 'Retail', 'Software Services', 'Education', 'Food & Beverage',
-  'Healthcare', 'Logistics', 'Textile', 'Travel', 'Non-profit', 'Consulting',
+  'E-commerce',
+  'Retail',
+  'Software Services',
+  'Education',
+  'Food & Beverage',
+  'Healthcare',
+  'Logistics',
+  'Textile',
+  'Travel',
+  'Non-profit',
+  'Consulting',
 ] as const
 
 const BANKS = [
-  'HBL', 'Meezan Bank', 'UBL', 'MCB Bank', 'Allied Bank Limited',
-  'Bank Alfalah', 'Standard Chartered', 'Faysal Bank', 'Askari Bank',
+  'HBL',
+  'Meezan Bank',
+  'UBL',
+  'MCB Bank',
+  'Allied Bank Limited',
+  'Bank Alfalah',
+  'Standard Chartered',
+  'Faysal Bank',
+  'Askari Bank',
 ] as const
 
 const CITIES = [
-  'Karachi', 'Lahore', 'Islamabad', 'Rawalpindi', 'Faisalabad', 'Multan',
-  'Peshawar', 'Sialkot', 'Quetta', 'Hyderabad',
+  'Karachi',
+  'Lahore',
+  'Islamabad',
+  'Rawalpindi',
+  'Faisalabad',
+  'Multan',
+  'Peshawar',
+  'Sialkot',
+  'Quetta',
+  'Hyderabad',
 ] as const
 
 const MERCHANT_TYPES: readonly (readonly [MerchantType, number])[] = [
@@ -144,7 +217,13 @@ const MERCHANT_TYPES: readonly (readonly [MerchantType, number])[] = [
 ]
 
 const KIN: readonly KinRelation[] = [
-  'mother', 'father', 'brother', 'sister', 'spouse', 'son', 'daughter',
+  'mother',
+  'father',
+  'brother',
+  'sister',
+  'spouse',
+  'son',
+  'daughter',
 ]
 
 const MERCHANT_TYPE_LABELS: Record<MerchantType, string> = {
@@ -276,7 +355,12 @@ function planMerchant(depth: Depth, owners: OwnerPools): PlannedMerchant {
     if (!unsuccessfulReview) {
       const agState: Parameters<typeof addCase>[3] =
         depth === 3
-          ? { status: openStatus([['new', 3], ['working', 1]]) }
+          ? {
+              status: openStatus([
+                ['new', 3],
+                ['working', 1],
+              ]),
+            }
           : depth === 4 || depth === 5
             ? { status: 'awaiting_merchant' }
             : depth === 8
@@ -286,7 +370,12 @@ function planMerchant(depth: Depth, owners: OwnerPools): PlannedMerchant {
 
       const miState: Parameters<typeof addCase>[3] =
         depth === 3
-          ? { status: openStatus([['new', 3], ['working', 2]]) }
+          ? {
+              status: openStatus([
+                ['new', 3],
+                ['working', 2],
+              ]),
+            }
           : depth === 4
             ? { status: 'working' }
             : depth === 8
@@ -298,26 +387,51 @@ function planMerchant(depth: Depth, owners: OwnerPools): PlannedMerchant {
         const midDone = closedMs(mi)
         const tsState: Parameters<typeof addCase>[3] =
           depth === 5
-            ? { status: openStatus([['new', 2], ['working', 3]]) }
+            ? {
+                status: openStatus([
+                  ['new', 2],
+                  ['working', 3],
+                ]),
+              }
             : { status: 'closed', outcome: 'successful' }
         addCase('testing', 'merchant-id', midDone, tsState)
 
         const wpState: Parameters<typeof addCase>[3] =
           depth === 5
-            ? { status: openStatus([['new', 3], ['working', 2]]) }
+            ? {
+                status: openStatus([
+                  ['new', 3],
+                  ['working', 2],
+                ]),
+              }
             : { status: 'closed', outcome: 'successful' }
         const wp = addCase('wordpress-website', 'merchant-id', midDone, wpState)
 
         if (depth >= 6) {
           const smState: Parameters<typeof addCase>[3] =
             depth === 6
-              ? { status: openStatus([['new', 3], ['working', 2]]) }
+              ? {
+                  status: openStatus([
+                    ['new', 3],
+                    ['working', 2],
+                  ]),
+                }
               : { status: 'closed', outcome: 'successful' }
-          addCase('sub-merchant-form', 'wordpress-website', closedMs(wp), smState)
+          addCase(
+            'sub-merchant-form',
+            'wordpress-website',
+            closedMs(wp),
+            smState,
+          )
 
           const lvState: Parameters<typeof addCase>[3] =
             depth === 6
-              ? { status: openStatus([['new', 3], ['working', 2]]) }
+              ? {
+                  status: openStatus([
+                    ['new', 3],
+                    ['working', 2],
+                  ]),
+                }
               : { status: 'closed', outcome: 'successful' }
           addCase('live', 'agreement', closedMs(ag), lvState)
         }
@@ -412,7 +526,9 @@ function merchantRow(index: number, plan: PlannedMerchant) {
             'Seasonal campaign starts next week.',
           ])
         : null,
-    businessScope: chance(0.12) ? ('international' as const) : ('local' as const),
+    businessScope: chance(0.12)
+      ? ('international' as const)
+      : ('local' as const),
     liveAt: plan.liveAt,
     submittedAt: plan.submittedAt,
     createdAt: plan.submittedAt,
@@ -765,7 +881,10 @@ async function main() {
       (chunk) => tx.insert(caseHistory).values(chunk),
       historyValues,
     )
-    await insertChunks((chunk) => tx.insert(caseLinks).values(chunk), linkValues)
+    await insertChunks(
+      (chunk) => tx.insert(caseLinks).values(chunk),
+      linkValues,
+    )
     await insertChunks(
       (chunk) => tx.insert(agreementCaseDetails).values(chunk),
       agreementValues,

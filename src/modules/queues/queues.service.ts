@@ -275,13 +275,13 @@ export async function updateQueue(id: string, input: UpdateQueueInput) {
 
     if (nextLifecycle === 'active') {
       const candidateStages = (await loadQueueStages(tx, id)).map((stage) => ({
-          name: stage.name,
-          slug: stage.slug,
-          order: stage.order,
-          category: stage.category,
-          isActive: stage.isActive,
-          capabilities: stage.capabilities,
-        }))
+        name: stage.name,
+        slug: stage.slug,
+        order: stage.order,
+        category: stage.category,
+        isActive: stage.isActive,
+        capabilities: stage.capabilities,
+      }))
       const previewQueue = {
         ...existing,
         prefix: input.prefix ?? existing.prefix,

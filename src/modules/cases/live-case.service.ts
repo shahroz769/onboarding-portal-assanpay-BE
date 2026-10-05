@@ -27,10 +27,7 @@ import {
 } from './case-communication-helpers'
 import type { MidCreationEmailResult } from './mid-case.service'
 
-export async function markLiveLimitsApplied(
-  caseId: string,
-  userId: string,
-) {
+export async function markLiveLimitsApplied(caseId: string, userId: string) {
   const db = getDb()
 
   const [caseRow] = await db

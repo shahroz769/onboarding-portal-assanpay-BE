@@ -190,12 +190,14 @@ export async function revealPortalPasswordCode(caseId: string, userId: string) {
     throw new AppError(404, 'No portal password code has been generated.')
   }
 
-  await getDb().insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'portal_password_code_revealed',
-    details: { codeId: active.id },
-  })
+  await getDb()
+    .insert(caseHistory)
+    .values({
+      caseId,
+      actorId: userId,
+      action: 'portal_password_code_revealed',
+      details: { codeId: active.id },
+    })
 
   return {
     code: active.code,

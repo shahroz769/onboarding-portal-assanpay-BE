@@ -89,7 +89,7 @@ export async function updateCaseStatus(
     actorId: userId,
     targetStage,
     requireOwner: true,
-    checkCloseBlockers: input.status === 'closed',
+    checkCloseBlockers: false,
     historyAction: 'status_updated',
     historyDetails: {
       fromStatus: currentStatus,

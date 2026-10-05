@@ -30,12 +30,7 @@ import { MAX_DASHBOARD_RANGE_DAYS } from './dashboard.schemas'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const CASE_STATUSES = [
-  'new',
-  'working',
-  'closed',
-  'awaiting_merchant',
-] as const
+const CASE_STATUSES = ['new', 'working', 'closed', 'awaiting_merchant'] as const
 
 const MERCHANT_STATUSES = ['pending', 'testing', 'live', 'terminated'] as const
 

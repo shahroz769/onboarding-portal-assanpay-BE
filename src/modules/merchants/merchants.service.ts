@@ -1124,10 +1124,7 @@ async function requireMerchant(merchantId: string) {
   return merchant
 }
 
-function isMerchantCaseOpen(
-  status: string,
-  stageCategory: string | null,
-) {
+function isMerchantCaseOpen(status: string, stageCategory: string | null) {
   return status !== 'closed' && stageCategory !== 'closed'
 }
 

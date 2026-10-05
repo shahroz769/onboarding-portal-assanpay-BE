@@ -22,16 +22,17 @@ export type CaseListStatusFilterValue =
 
 const caseListStatusFilterValueSet = new Set<string>(caseListStatusFilterValues)
 
-// Status transitions that may be requested directly. Working and Awaiting
-// Merchant can move back and forth for the resubmission loop.
+// Status transitions that may be requested directly. Only Awaiting Merchant →
+// Working (e.g. after a bounced merchant email). Closing goes through
+// advance / close-unsuccessful so readiness checks and merchant updates run.
 const allowedStatusTransitions: Record<
   CaseStatusValue,
   readonly CaseStatusValue[]
 > = {
-  new: ['working', 'awaiting_merchant', 'closed'],
-  working: ['new', 'awaiting_merchant', 'closed'],
-  awaiting_merchant: ['working', 'closed'],
-  closed: ['awaiting_merchant'],
+  new: [],
+  working: [],
+  awaiting_merchant: ['working'],
+  closed: [],
 }
 
 /** Validates that a status transition is allowed. */
@@ -140,11 +141,7 @@ export type ListCasesQuery = z.infer<typeof listCasesQuerySchema>
 
 // ─── Stage-based Schemas ────────────────────────────────────────────────────
 
-export const stageCategoryValues = [
-  'new',
-  'in_progress',
-  'closed',
-] as const
+export const stageCategoryValues = ['new', 'in_progress', 'closed'] as const
 export type StageCategoryValue = (typeof stageCategoryValues)[number]
 
 // ─── Field Review Schemas ───────────────────────────────────────────────────

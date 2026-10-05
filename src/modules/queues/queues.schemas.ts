@@ -1,9 +1,6 @@
 import * as z from 'zod'
 
-import {
-  QUEUE_LIFECYCLES,
-  QUEUE_WORKFLOW_TYPES,
-} from './queue-workflow'
+import { QUEUE_LIFECYCLES, QUEUE_WORKFLOW_TYPES } from './queue-workflow'
 
 export const updateQueueSchema = z
   .strictObject({

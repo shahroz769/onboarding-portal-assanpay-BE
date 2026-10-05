@@ -34,12 +34,7 @@ export function UserPasswordEmail({
   const ctaLabel = isInvite ? 'Set up account' : 'Reset password'
 
   return (
-    <EmailShell
-      preview={preview}
-      eyebrow={eyebrow}
-      title={title}
-      intro={intro}
-    >
+    <EmailShell preview={preview} eyebrow={eyebrow} title={title} intro={intro}>
       <Paragraph>Hi {name},</Paragraph>
       <Paragraph>
         {isInvite

@@ -52,7 +52,9 @@ export async function handleResendWebhookEvent(
   const result = await applyEmailDeliveryStatus({
     resendId: event.data.email_id,
     emailLogId:
-      'tags' in event.data ? (event.data.tags?.[EMAIL_LOG_ID_TAG] ?? null) : null,
+      'tags' in event.data
+        ? (event.data.tags?.[EMAIL_LOG_ID_TAG] ?? null)
+        : null,
     status,
     detail: describeEvent(event),
     occurredAt,

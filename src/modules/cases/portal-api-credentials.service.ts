@@ -205,12 +205,14 @@ export async function revealPortalApiCredentials(
     ),
   ])
 
-  await getDb().insert(caseHistory).values({
-    caseId,
-    actorId: userId,
-    action: 'portal_api_credentials_revealed',
-    details: { credentialId: row.id },
-  })
+  await getDb()
+    .insert(caseHistory)
+    .values({
+      caseId,
+      actorId: userId,
+      action: 'portal_api_credentials_revealed',
+      details: { credentialId: row.id },
+    })
 
   return { apiKey, apiSecret, updatedAt: row.updatedAt.toISOString() }
 }
