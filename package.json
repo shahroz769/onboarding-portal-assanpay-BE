@@ -17,14 +17,14 @@
   "dependencies": {
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.1.0",
-    "drizzle-orm": "^0.45.3",
-    "hono": "^4.13.12",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
     "hono-rate-limiter": "^0.5.4",
     "jose": "^6.2.12",
     "postgres": "^3.4.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "resend": "^6.32.0",
+    "resend": "^6.32.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
