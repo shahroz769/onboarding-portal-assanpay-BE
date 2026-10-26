@@ -77,7 +77,7 @@ app.use(
     origin: env.CORS_ORIGIN,
     credentials: true,
     allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
     exposeHeaders: ['Content-Length', 'X-Request-Id'],
     maxAge: 86400,
   }),

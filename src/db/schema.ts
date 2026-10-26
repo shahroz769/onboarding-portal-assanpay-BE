@@ -510,6 +510,9 @@ export const merchants = pgTable(
     submittedAt: timestamp('submitted_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // SHA-256 of the public form's Idempotency-Key; a retried submission
+    // returns this merchant instead of creating another one.
+    submissionKeyHash: varchar('submission_key_hash', { length: 64 }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -571,6 +574,11 @@ export const merchants = pgTable(
     merchantsOwnerFullNameTrgmIdx: index(
       'merchants_owner_full_name_trgm_idx',
     ).using('gin', sql`${table.ownerFullName} gin_trgm_ops`),
+    merchantsSubmissionKeyHashUnique: uniqueIndex(
+      'merchants_submission_key_hash_unique',
+    )
+      .on(table.submissionKeyHash)
+      .where(sql`${table.submissionKeyHash} IS NOT NULL`),
     merchantsTransactionsNonnegative: check(
       'merchants_transactions_nonnegative',
       sql`${table.estimatedMonthlyTransactions} >= 0`,

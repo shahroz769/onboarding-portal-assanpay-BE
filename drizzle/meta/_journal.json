@@ -680,6 +680,13 @@
       "when": 1790467200000,
       "tag": "0097_small_table_stats_and_dup_index",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790640000000,
+      "tag": "0098_merchants_submission_key",
+      "breakpoints": true
     }
   ]
 }

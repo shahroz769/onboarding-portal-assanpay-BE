@@ -13,9 +13,10 @@ import {
   or,
   sql,
   aliasedTable,
+  type SQLWrapper,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   agreementCaseDetails,
   caseHistory,
@@ -32,6 +33,7 @@ import {
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
+import { hashToken } from '../../lib/security'
 import {
   buildKeysetCondition,
   decodeKeysetCursor,
@@ -101,6 +103,7 @@ const merchantStatusValueSet = new Set<string>(merchantStatusValues)
 function sanitizeMerchantRecord(merchant: typeof merchants.$inferSelect) {
   return {
     id: merchant.id,
+    merchantNumber: merchant.merchantNumber,
     submitterEmail: merchant.submitterEmail,
     ownerFullName: merchant.ownerFullName,
     ownerPhone: merchant.ownerPhone,
@@ -149,10 +152,134 @@ function sanitizeDocumentRecord(
   }
 }
 
+// ─── Duplicate submissions ──────────────────────────────────────────────────
+
+export const DUPLICATE_SUBMISSION_MESSAGE =
+  'An application for this business is already under review. Our team will contact you, so you do not need to submit it again.'
+
+const SUBMISSION_KEY_UNIQUE_CONSTRAINT = 'merchants_submission_key_hash_unique'
+
+// Both sides of each comparison go through the same SQL expression, so the
+// stored column and the submitted value are normalized identically.
+function normalizedBusinessName(value: SQLWrapper | string) {
+  return sql`regexp_replace(lower(${value}), '[^[:alnum:]]', '', 'g')`
+}
+
+function normalizedEmail(value: SQLWrapper | string) {
+  return sql`lower(trim(${value}))`
+}
+
+function normalizedIban(value: SQLWrapper | string) {
+  return sql`upper(regexp_replace(${value}, '[[:space:]]', '', 'g'))`
+}
+
+function normalizedPhone(value: SQLWrapper | string) {
+  return sql`right(regexp_replace(${value}, '[^0-9]', '', 'g'), 10)`
+}
+
+type DuplicateCheckInput = Pick<
+  MerchantFormSubmission,
+  'businessName' | 'email' | 'accountNumberIban' | 'ownerPhone'
+>
+
+// An open application (not deleted, not terminated) with the same business
+// name and the same submitter email, IBAN or owner phone. One owner may run
+// several differently named businesses, and a terminated merchant may apply
+// again, so neither counts.
+async function findOpenDuplicateMerchant(
+  db: DbTransaction | ReturnType<typeof getDb>,
+  input: DuplicateCheckInput,
+) {
+  const [duplicate] = await db
+    .select({ id: merchants.id })
+    .from(merchants)
+    .where(
+      and(
+        isNull(merchants.deletedAt),
+        ne(merchants.status, 'terminated'),
+        sql`${normalizedBusinessName(merchants.businessName)} = ${normalizedBusinessName(input.businessName)}`,
+        or(
+          sql`${normalizedEmail(merchants.submitterEmail)} = ${normalizedEmail(input.email)}`,
+          sql`${normalizedIban(merchants.accountNumberIban)} = ${normalizedIban(input.accountNumberIban)}`,
+          sql`${normalizedPhone(merchants.ownerPhone)} = ${normalizedPhone(input.ownerPhone)}`,
+        ),
+      ),
+    )
+    .limit(1)
+
+  return duplicate ?? null
+}
+
+async function findSubmissionByKeyHash(submissionKeyHash: string) {
+  const db = getDb()
+  const [merchant] = await db
+    .select()
+    .from(merchants)
+    .where(eq(merchants.submissionKeyHash, submissionKeyHash))
+    .limit(1)
+
+  if (!merchant) return null
+
+  const documents = await db
+    .select()
+    .from(merchantDocuments)
+    .where(eq(merchantDocuments.merchantId, merchant.id))
+    .orderBy(asc(merchantDocuments.createdAt))
+
+  return {
+    merchant: sanitizeMerchantRecord(merchant),
+    documents: documents.map(sanitizeDocumentRecord),
+  }
+}
+
+// Rolls back an attempt whose key another request already used.
+class SubmissionKeyReplayError extends Error {}
+
+function isSubmissionKeyConflict(error: unknown) {
+  const databaseError =
+    error instanceof Error ? (error.cause ?? error) : undefined
+  return (
+    !!databaseError &&
+    typeof databaseError === 'object' &&
+    'code' in databaseError &&
+    databaseError.code === '23505' &&
+    'constraint_name' in databaseError &&
+    databaseError.constraint_name === SUBMISSION_KEY_UNIQUE_CONSTRAINT
+  )
+}
+
+type CreateMerchantSubmissionOptions = {
+  // Client-generated Idempotency-Key; stored only as a SHA-256 hash.
+  submissionKey?: string | null
+  storage?: FileStorageProvider
+}
+
+/**
+ * `replayed` is true when the submission key matched an earlier request, so
+ * nothing new was created.
+ */
 export async function createMerchantSubmission(
   input: MerchantFormSubmission,
-  storage: FileStorageProvider = new GoogleDriveStorageProvider(),
+  {
+    submissionKey = null,
+    storage = new GoogleDriveStorageProvider(),
+  }: CreateMerchantSubmissionOptions = {},
 ) {
+  const submissionKeyHash = submissionKey
+    ? await hashToken(submissionKey)
+    : null
+
+  if (submissionKeyHash) {
+    const existing = await findSubmissionByKeyHash(submissionKeyHash)
+    if (existing) return { ...existing, replayed: true }
+  }
+
+  // Checked before any upload so a rejected form leaves nothing in Drive;
+  // repeated under a lock in the transaction below for concurrent requests.
+  if (await findOpenDuplicateMerchant(getDb(), input)) {
+    throw new AppError(409, DUPLICATE_SUBMISSION_MESSAGE)
+  }
+
   const merchantId = crypto.randomUUID()
   const attemptId = createStorageAttemptId()
   let folderId: string | null = null
@@ -239,6 +366,25 @@ export async function createMerchantSubmission(
     )
 
     const result = await getDb().transaction(async (tx) => {
+      // Every duplicate match requires the same normalized business name, so
+      // locking on it serializes exactly the submissions that could collide.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('merchant-submission:' || ${normalizedBusinessName(input.businessName)}))`,
+      )
+      // A concurrent request with the same key committed while this one
+      // waited for the lock; it must replay, not count as a duplicate.
+      if (submissionKeyHash) {
+        const [sameKey] = await tx
+          .select({ id: merchants.id })
+          .from(merchants)
+          .where(eq(merchants.submissionKeyHash, submissionKeyHash))
+          .limit(1)
+        if (sameKey) throw new SubmissionKeyReplayError()
+      }
+      if (await findOpenDuplicateMerchant(tx, input)) {
+        throw new AppError(409, DUPLICATE_SUBMISSION_MESSAGE)
+      }
+
       const [createdMerchant] = await tx
         .insert(merchants)
         .values({
@@ -266,6 +412,7 @@ export async function createMerchantSubmission(
           swiftCode: input.swiftCode,
           nextOfKinRelation: input.nextOfKinRelation,
           googleDrivePrivateFolderId: folderId,
+          submissionKeyHash,
           status: 'pending',
           submittedAt: new Date(),
           updatedAt: new Date(),
@@ -311,6 +458,7 @@ export async function createMerchantSubmission(
     return {
       merchant: sanitizeMerchantRecord(result.merchant),
       documents: result.documents.map(sanitizeDocumentRecord),
+      replayed: false,
     }
   } catch (error) {
     await cleanupFailedAttemptObjects({ attemptId, storage }).catch(
@@ -318,6 +466,18 @@ export async function createMerchantSubmission(
         console.error('[merchant-submission.cleanup]', cleanupError)
       },
     )
+
+    // A concurrent request with the same key won the insert; answer with
+    // its merchant, as a later retry would get.
+    if (
+      submissionKeyHash &&
+      (error instanceof SubmissionKeyReplayError ||
+        isSubmissionKeyConflict(error))
+    ) {
+      const existing = await findSubmissionByKeyHash(submissionKeyHash)
+      if (existing) return { ...existing, replayed: true }
+    }
+
     throw error
   }
 }
