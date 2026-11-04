@@ -687,6 +687,13 @@
       "when": 1790640000000,
       "tag": "0098_merchants_submission_key",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1790812800000,
+      "tag": "0099_case_flow_merchant_moves",
+      "breakpoints": true
     }
   ]
 }

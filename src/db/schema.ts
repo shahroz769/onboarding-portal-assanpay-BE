@@ -269,6 +269,56 @@ export const flowConfigurationRevisions = pgTable(
   ],
 )
 
+export const caseFlowMerchantMoves = pgTable(
+  'case_flow_merchant_moves',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    toVersionId: integer('to_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
+    movedBy: uuid('moved_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    reason: text('reason').notNull(),
+    merchantCount: integer('merchant_count').notNull(),
+    cancelledJobCount: integer('cancelled_job_count').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('case_flow_merchant_moves_to_version_idx').on(table.toVersionId),
+    index('case_flow_merchant_moves_moved_by_idx').on(table.movedBy),
+  ],
+)
+
+// The triggers on merchants, cases and jobs only accept a version change that
+// has a row here, so this also keeps each merchant's original version.
+export const caseFlowMerchantMoveItems = pgTable(
+  'case_flow_merchant_move_items',
+  {
+    moveId: uuid('move_id')
+      .notNull()
+      .references(() => caseFlowMerchantMoves.id, { onDelete: 'cascade' }),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references((): AnyPgColumn => merchants.id, { onDelete: 'cascade' }),
+    fromVersionId: integer('from_version_id')
+      .notNull()
+      .references(() => caseFlowVersions.id, { onDelete: 'restrict' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.moveId, table.merchantId] }),
+    index('case_flow_merchant_move_items_merchant_from_idx').on(
+      table.merchantId,
+      table.fromVersionId,
+    ),
+    index('case_flow_merchant_move_items_from_version_idx').on(
+      table.fromVersionId,
+    ),
+  ],
+)
+
 export const agreementDraftTemplates = pgTable(
   'agreement_draft_templates',
   {

@@ -29,7 +29,13 @@ import {
   updateSubMerchantDraft,
 } from './configuration.service'
 import {
+  moveMerchantsToActiveVersion,
+  previewMoveToActiveVersion,
+  previewMoveToDraftRules,
+} from './case-flow-move.service'
+import {
   businessTypeSchema,
+  moveCaseFlowMerchantsSchema,
   updateCaseFlowConfigurationSchema,
   emailRecipientSettingsInputSchema,
   emailSendingModeSettingsSchema,
@@ -117,6 +123,33 @@ configurationRoutes.put(
     const input = c.req.valid('json')
     return c.json(
       await updateCaseFlowConfiguration(input, c.get('auth').userId),
+    )
+  },
+)
+
+configurationRoutes.get('/case-flow/merchant-move/preview', async (c) => {
+  return c.json(await previewMoveToActiveVersion())
+})
+
+// Previews unpublished rules, so publishing can show the impact of moving
+// merchants before the version exists.
+configurationRoutes.post(
+  '/case-flow/merchant-move/preview',
+  zodValidator('json', updateCaseFlowConfigurationSchema),
+  async (c) => {
+    return c.json(await previewMoveToDraftRules(c.req.valid('json')))
+  },
+)
+
+configurationRoutes.post(
+  '/case-flow/merchant-move',
+  zodValidator('json', moveCaseFlowMerchantsSchema),
+  async (c) => {
+    return c.json(
+      await moveMerchantsToActiveVersion(
+        c.req.valid('json'),
+        c.get('auth').userId,
+      ),
     )
   },
 )

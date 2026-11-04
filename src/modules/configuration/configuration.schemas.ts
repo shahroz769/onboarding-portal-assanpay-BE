@@ -283,6 +283,8 @@ export const updateCaseFlowConfigurationSchema = z
   .strictObject({
     revision: z.coerce.number().int().min(1),
     changeNote: z.string().trim().max(1000).optional(),
+    // Also move in-progress merchants onto the version being published.
+    moveExistingMerchants: z.boolean().default(false),
     startRules: z.array(caseFlowStartRuleInputSchema),
     closeTriggers: z.array(caseFlowCloseTriggerInputSchema),
     closeBlockers: z.array(caseFlowCloseBlockerInputSchema),
@@ -291,6 +293,13 @@ export const updateCaseFlowConfigurationSchema = z
       .default([]),
   })
   .superRefine((value, ctx) => {
+    if (value.moveExistingMerchants && !value.changeNote) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['changeNote'],
+        message: 'Add a change note to move existing merchants.',
+      })
+    }
     addDuplicateIssue(
       value.startRules
         .filter((rule) => rule.isActive)
@@ -380,4 +389,17 @@ export type PayoutMethodSettings = z.infer<typeof payoutMethodSettingsSchema>
 export type BusinessType = z.infer<typeof businessTypeSchema>
 export type UpdateCaseFlowConfigurationInput = z.infer<
   typeof updateCaseFlowConfigurationSchema
+>
+
+export const moveCaseFlowMerchantsSchema = z.strictObject({
+  revision: z.coerce.number().int().min(1),
+  reason: z
+    .string()
+    .trim()
+    .min(1, { error: 'Add a reason for moving these merchants.' })
+    .max(1000),
+})
+
+export type MoveCaseFlowMerchantsInput = z.infer<
+  typeof moveCaseFlowMerchantsSchema
 >

@@ -76,11 +76,33 @@ Success response:
 }
 ```
 
+## GET `/api/configuration/case-flow/merchant-move/preview`
+
+Shows what moving in-progress merchants onto the active version would change:
+merchant counts, rule differences per source version, open cases left on removed
+steps, and pending jobs that would be cancelled. Merchants move when they are not
+terminated and are pending, testing, or still have an open case or job.
+
+`POST` to the same path with the `PUT /case-flow` body previews unpublished rules.
+
+## POST `/api/configuration/case-flow/merchant-move`
+
+Moves those merchants onto the active version in one transaction, re-stamping
+their cases and jobs and recording an audit row per merchant. Open cases stay
+open. Jobs for rules that no longer exist are deleted, because a completed job
+would permanently block that target from being created again.
+
+Request body: `{ "revision": 13, "reason": "Removing EP Sub-Merchant Form" }`.
+A stale `revision` returns 409 with the current `revision`.
+
 ## PUT `/api/configuration/case-flow`
 
 Purpose:
 
 - Create, update, and deactivate case-flow rules in one revisioned transaction.
+- With `moveExistingMerchants: true`, also move in-progress merchants onto the
+  new version in the same transaction. `changeNote` is then required, and the
+  response's `merchantMove` holds the result.
 - Configure first cases after merchant form submission.
 - Configure cases created after a source case closes successfully.
 - Configure cases that cannot close until prerequisite queues have a

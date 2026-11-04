@@ -18,6 +18,11 @@ import { AppError } from '../../lib/errors'
 import { assertFileSizeLimit } from '../../lib/storage/file-limits'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchantType } from '../cases/agreement.config'
+import { requestCaseFlowCloseJobDrain } from '../cases/case-flow-worker'
+import {
+  moveMerchantsToActiveVersionTx,
+  rethrowMoveLockFailure,
+} from './case-flow-move.service'
 import {
   BUSINESS_TYPE_OPTIONS,
   businessTypeSchema,
@@ -779,87 +784,103 @@ export async function updateCaseFlowConfiguration(
   publishedBy: string,
 ) {
   const value = updateCaseFlowConfigurationSchema.parse(input)
-  return getDb().transaction(async (tx) => {
-    const [current] = await tx
-      .select()
-      .from(flowConfigurationRevisions)
-      .where(eq(flowConfigurationRevisions.id, 1))
-      .for('update')
-    if (!current || current.revision !== value.revision) {
-      throw new AppError(
-        409,
-        'Case flow configuration was updated by someone else. Reload and try again.',
-        {
-          revision: current?.revision ?? value.revision,
-        },
-      )
-    }
-    const queueById = await assertReferencedQueuesExistTx(tx, value)
-    await assertActiveFlowGraphValid(tx, value, queueById)
-    const queueSnapshot = await tx
-      .select({
-        id: queues.id,
-        name: queues.name,
-        slug: queues.slug,
-        prefix: queues.prefix,
-        workflowType: queues.workflowType,
-        lifecycle: queues.lifecycle,
-        isActive: queues.isActive,
-      })
-      .from(queues)
-      .orderBy(asc(queues.id))
-    const [version] = await tx
-      .insert(caseFlowVersions)
-      .values({
-        publishedBy,
-        changeNote: value.changeNote ?? null,
-        queueSnapshot,
-      })
-      .returning({ id: caseFlowVersions.id })
-    // Editor IDs belong to the previous version; every published rule gets a new ID.
-    if (value.startRules.length)
-      await tx.insert(caseFlowStartRules).values(
-        value.startRules.map(({ id: _id, ...rule }) => ({
-          ...rule,
-          flowVersionId: version.id,
-        })),
-      )
-    if (value.closeTriggers.length)
-      await tx.insert(caseFlowCloseTriggers).values(
-        value.closeTriggers.map(({ id: _id, ...rule }) => ({
-          ...rule,
-          flowVersionId: version.id,
-        })),
-      )
-    if (value.closeBlockers.length)
-      await tx.insert(caseFlowCloseBlockers).values(
-        value.closeBlockers.map(({ id: _id, ...rule }) => ({
-          ...rule,
-          flowVersionId: version.id,
-        })),
-      )
-    if (value.creationRequirements.length)
-      await tx.insert(caseFlowCreationRequirements).values(
-        value.creationRequirements.map(({ id: _id, ...rule }) => ({
-          ...rule,
-          flowVersionId: version.id,
-        })),
-      )
-    await tx
-      .update(caseFlowVersions)
-      .set({ publishedAt: new Date() })
-      .where(eq(caseFlowVersions.id, version.id))
-    await tx
-      .update(flowConfigurationRevisions)
-      .set({
-        activeFlowVersionId: version.id,
-        revision: current.revision + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(flowConfigurationRevisions.id, 1))
-    // Publishing never wakes or changes jobs pinned to earlier versions.
-    return readCaseFlowConfiguration(tx, version.id)
-  })
+  const published = await getDb()
+    .transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(flowConfigurationRevisions)
+        .where(eq(flowConfigurationRevisions.id, 1))
+        .for('update')
+      if (!current || current.revision !== value.revision) {
+        throw new AppError(
+          409,
+          'Case flow configuration was updated by someone else. Reload and try again.',
+          {
+            revision: current?.revision ?? value.revision,
+          },
+        )
+      }
+      const queueById = await assertReferencedQueuesExistTx(tx, value)
+      await assertActiveFlowGraphValid(tx, value, queueById)
+      const queueSnapshot = await tx
+        .select({
+          id: queues.id,
+          name: queues.name,
+          slug: queues.slug,
+          prefix: queues.prefix,
+          workflowType: queues.workflowType,
+          lifecycle: queues.lifecycle,
+          isActive: queues.isActive,
+        })
+        .from(queues)
+        .orderBy(asc(queues.id))
+      const [version] = await tx
+        .insert(caseFlowVersions)
+        .values({
+          publishedBy,
+          changeNote: value.changeNote ?? null,
+          queueSnapshot,
+        })
+        .returning({ id: caseFlowVersions.id })
+      // Editor IDs belong to the previous version; every published rule gets a new ID.
+      if (value.startRules.length)
+        await tx.insert(caseFlowStartRules).values(
+          value.startRules.map(({ id: _id, ...rule }) => ({
+            ...rule,
+            flowVersionId: version.id,
+          })),
+        )
+      if (value.closeTriggers.length)
+        await tx.insert(caseFlowCloseTriggers).values(
+          value.closeTriggers.map(({ id: _id, ...rule }) => ({
+            ...rule,
+            flowVersionId: version.id,
+          })),
+        )
+      if (value.closeBlockers.length)
+        await tx.insert(caseFlowCloseBlockers).values(
+          value.closeBlockers.map(({ id: _id, ...rule }) => ({
+            ...rule,
+            flowVersionId: version.id,
+          })),
+        )
+      if (value.creationRequirements.length)
+        await tx.insert(caseFlowCreationRequirements).values(
+          value.creationRequirements.map(({ id: _id, ...rule }) => ({
+            ...rule,
+            flowVersionId: version.id,
+          })),
+        )
+      await tx
+        .update(caseFlowVersions)
+        .set({ publishedAt: new Date() })
+        .where(eq(caseFlowVersions.id, version.id))
+      await tx
+        .update(flowConfigurationRevisions)
+        .set({
+          activeFlowVersionId: version.id,
+          revision: current.revision + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(flowConfigurationRevisions.id, 1))
+      // Publishing alone never wakes or changes jobs pinned to earlier versions.
+      // Moving merchants is the explicit opt-in, and commits with this version.
+      const merchantMove = value.moveExistingMerchants
+        ? await moveMerchantsToActiveVersionTx(tx, {
+            targetVersionId: version.id,
+            movedBy: publishedBy,
+            reason: value.changeNote ?? '',
+          })
+        : null
+      return {
+        ...(await readCaseFlowConfiguration(tx, version.id)),
+        merchantMove,
+      }
+    })
+    .catch(rethrowMoveLockFailure)
+
+  if (published.merchantMove) requestCaseFlowCloseJobDrain()
+  return published
 }
 
 async function assertReferencedQueuesExistTx(
