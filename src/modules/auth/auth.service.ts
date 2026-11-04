@@ -1,8 +1,9 @@
 import { and, eq, gt, isNull, lt, or, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
+  queues,
   refreshTokens,
   userPasswordTokens,
   userQueueAccess,
@@ -62,9 +63,37 @@ function generatePublicTokenString(): string {
   return Buffer.from(bytes).toString('base64url')
 }
 
+// What the frontend needs to show or hide work surfaces. The server re-checks
+// access on every request; this only decides what is displayed.
+async function getSessionWorkAccess(
+  user: typeof users.$inferSelect,
+  database: ReturnType<typeof getDb> | DbTransaction = getDb(),
+) {
+  const rows = await database
+    .select({
+      queueId: userQueueAccess.queueId,
+      workflowType: queues.workflowType,
+    })
+    .from(userQueueAccess)
+    .innerJoin(queues, eq(userQueueAccess.queueId, queues.id))
+    .where(
+      and(
+        eq(userQueueAccess.userId, user.id),
+        eq(userQueueAccess.accessType, 'work'),
+      ),
+    )
+
+  return {
+    workQueueIds: rows.map((row) => row.queueId),
+    canManageEpCases:
+      user.roleType !== 'agent' ||
+      rows.some((row) => row.workflowType === 'sub_merchant_form'),
+  }
+}
+
 function sanitizeUser(
   user: typeof users.$inferSelect,
-  workQueueIds: string[] = [],
+  workAccess?: Awaited<ReturnType<typeof getSessionWorkAccess>>,
 ) {
   return {
     id: user.id,
@@ -75,7 +104,8 @@ function sanitizeUser(
     roleType: user.roleType,
     status: user.status,
     queueViewScope: user.queueViewScope,
-    workQueueIds,
+    workQueueIds: workAccess?.workQueueIds ?? [],
+    canManageEpCases: workAccess?.canManageEpCases ?? user.roleType !== 'agent',
     createdByUserId: user.createdByUserId,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
@@ -127,23 +157,10 @@ async function issueSession(params: {
     sessionVersion: params.user.sessionVersion,
   })
 
-  const workQueueRows = await getDb()
-    .select({ queueId: userQueueAccess.queueId })
-    .from(userQueueAccess)
-    .where(
-      and(
-        eq(userQueueAccess.userId, params.user.id),
-        eq(userQueueAccess.accessType, 'work'),
-      ),
-    )
-
   return {
     accessToken,
     refreshToken,
-    user: sanitizeUser(
-      params.user,
-      workQueueRows.map((row) => row.queueId),
-    ),
+    user: sanitizeUser(params.user, await getSessionWorkAccess(params.user)),
   }
 }
 
@@ -348,23 +365,10 @@ export async function refreshSession(input: {
       sessionVersion: user.sessionVersion,
     })
 
-    const workQueueRows = await tx
-      .select({ queueId: userQueueAccess.queueId })
-      .from(userQueueAccess)
-      .where(
-        and(
-          eq(userQueueAccess.userId, user.id),
-          eq(userQueueAccess.accessType, 'work'),
-        ),
-      )
-
     return {
       accessToken,
       refreshToken: nextRefreshToken,
-      user: sanitizeUser(
-        user,
-        workQueueRows.map((row) => row.queueId),
-      ),
+      user: sanitizeUser(user, await getSessionWorkAccess(user, tx)),
     }
   })
 }

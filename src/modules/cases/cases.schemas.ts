@@ -61,6 +61,51 @@ export const bulkCreateCaseSchema = z.strictObject({
 
 export type BulkCreateCaseInput = z.infer<typeof bulkCreateCaseSchema>
 
+// ─── EP Sub-Merchant Page ───────────────────────────────────────────────────
+
+export const epMerchantSortableColumns = [
+  'createdAt',
+  'merchantNumber',
+  'businessName',
+  'ownerFullName',
+  'status',
+  'updatedAt',
+] as const
+
+// A merchant can match several: with two sub-merchants, one can be open while
+// the other has not been triggered.
+export const epProgressFilterValues = [
+  'not_triggered',
+  'open',
+  'unsuccessful',
+  'completed',
+] as const
+export type EpProgressFilterValue = (typeof epProgressFilterValues)[number]
+
+export const epWordpressFilterValues = ['successful', 'not_successful'] as const
+export type EpWordpressFilterValue = (typeof epWordpressFilterValues)[number]
+
+export const listEpMerchantsQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  search: z.string().trim().max(200).optional(),
+  // Comma-separated, like the merchants list. Terminated is always excluded.
+  status: z.string().optional(),
+  wordpress: z.string().optional(),
+  progress: z.string().optional(),
+  sortBy: z.enum(epMerchantSortableColumns).default('createdAt'),
+  sortOrder: z.enum(['asc', 'desc']).default('asc'),
+})
+
+export type ListEpMerchantsQuery = z.infer<typeof listEpMerchantsQuerySchema>
+
+export const triggerEpCaseSchema = z.strictObject({
+  merchantId: z.uuid(),
+  subMerchantId: z.uuid(),
+})
+
+export type TriggerEpCaseInput = z.infer<typeof triggerEpCaseSchema>
+
 export const updateCaseStatusSchema = z.strictObject({
   status: z.enum(caseStatusValues),
 })

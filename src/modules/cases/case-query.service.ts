@@ -13,7 +13,7 @@ import {
   sql,
 } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import {
   agreementCaseDetails,
   caseFiles,
@@ -81,166 +81,183 @@ import { getPortalPasswordCodeStatus } from './portal-password-code.service'
 import { getPortalApiCredentialsStatus } from './portal-api-credentials.service'
 
 export async function createCase(input: CreateCaseInput, actorId?: string) {
-  const db = getDb()
-
-  return db.transaction(async (tx) => {
-    // Verify merchant exists
-    const merchant = await tx.query.merchants.findFirst({
-      where: eq(merchants.id, input.merchantId),
-      columns: { id: true, businessName: true, priority: true },
-    })
-
-    if (!merchant) {
-      throw new AppError(404, 'Merchant not found.')
-    }
-
-    // Verify queue exists
+  return getDb().transaction(async (tx) => {
     const queue = await tx.query.queues.findFirst({
       where: eq(queues.id, input.queueId),
-      columns: {
-        id: true,
-        name: true,
-        slug: true,
-        workflowType: true,
-        lifecycle: true,
-        isActive: true,
-      },
+      columns: { workflowType: true },
     })
 
-    if (!queue) {
-      throw new AppError(404, 'Queue not found.')
-    }
-
-    if (queue.lifecycle !== 'active') {
+    // The EP trigger enforces eligibility, the Documents Review selection and
+    // duplicate protection, so it is the only way to create these manually.
+    if (queue?.workflowType === 'sub_merchant_form') {
       throw new AppError(
         409,
-        'This queue is inactive. Case creation is disabled.',
+        'EP Sub-Merchant cases can only be triggered from the EP Sub-Merchants page.',
       )
     }
 
-    if (queue.workflowType === 'live') {
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${merchant.id}), hashtext('live-case'))`,
-      )
-
-      const [existingLiveCase] = await tx
-        .select({ caseNumber: cases.caseNumber })
-        .from(cases)
-        .innerJoin(queues, eq(cases.queueId, queues.id))
-        .where(
-          and(
-            eq(cases.merchantId, merchant.id),
-            eq(queues.workflowType, 'live'),
-          ),
-        )
-        .limit(1)
-
-      if (existingLiveCase) {
-        throw new AppError(
-          409,
-          `Live case ${existingLiveCase.caseNumber} already exists for this merchant.`,
-        )
-      }
-    }
-
-    const selectedSubMerchant =
-      queue.workflowType === 'sub_merchant_form'
-        ? input.subMerchantId
-          ? await tx.query.subMerchantDraftTemplates.findFirst({
-              where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
-              columns: {
-                id: true,
-                name: true,
-                googleDriveWebViewLink: true,
-              },
-            })
-          : null
-        : null
-
-    if (queue.workflowType === 'sub_merchant_form' && !selectedSubMerchant) {
-      throw new AppError(
-        400,
-        'Select a valid sub-merchant before creating an EP Sub-Merchant Form case.',
-      )
-    }
-
-    await assertCreationRequirementsSatisfied(tx, {
-      merchantId: merchant.id,
-      targetQueueId: queue.id,
-    })
-
-    const stages = await ensureQueueStages(tx, {
-      id: queue.id,
-      name: queue.name,
-      slug: queue.slug,
-      workflowType: queue.workflowType,
-    })
-    const initialStage = stages[0]
-
-    if (!initialStage) {
-      throw new AppError(500, 'No initial stage configured for this queue.')
-    }
-
-    const caseNumber = await generateCaseNumber(tx, input.queueId)
-
-    const [created] = await tx
-      .insert(cases)
-      .values({
-        caseNumber,
-        queueId: input.queueId,
-        merchantId: input.merchantId,
-        subMerchantId: selectedSubMerchant?.id ?? null,
-        ownerId: null,
-        currentStageId: initialStage.id,
-        status: 'new',
-        priority: merchant.priority,
-        updatedAt: new Date(),
-      })
-      .returning()
-
-    if (!created) {
-      throw new AppError(500, 'Failed to create case.')
-    }
-
-    if (selectedSubMerchant) {
-      await tx.insert(subMerchantFormDetails).values({
-        caseId: created.id,
-        subMerchantKey: selectedSubMerchant.id,
-        subMerchantName: selectedSubMerchant.name,
-        draftUrl: selectedSubMerchant.googleDriveWebViewLink,
-      })
-    }
-
-    if (actorId) {
-      await tx.insert(caseHistory).values({
-        caseId: created.id,
-        actorId,
-        action: 'case_created_manually',
-        details: {
-          queueName: queue.name,
-          merchantName: merchant.businessName,
-          subMerchantId: selectedSubMerchant?.id ?? null,
-          subMerchantName: selectedSubMerchant?.name ?? null,
-        },
-      })
-    }
-
-    return {
-      id: created.id,
-      caseNumber: created.caseNumber,
-      queueId: created.queueId,
-      queueName: queue.name,
-      merchantId: created.merchantId,
-      merchantName: merchant.businessName,
-      ownerId: created.ownerId,
-      ownerName: null as string | null,
-      status: created.status,
-      priority: created.priority,
-      closedAt: created.closedAt,
-      createdAt: created.createdAt,
-      updatedAt: created.updatedAt,
-    }
+    return createCaseInTransaction(tx, input, actorId)
   })
+}
+
+export async function createCaseInTransaction(
+  tx: DbTransaction,
+  input: CreateCaseInput,
+  actorId?: string,
+) {
+  // Verify merchant exists
+  const merchant = await tx.query.merchants.findFirst({
+    where: eq(merchants.id, input.merchantId),
+    columns: { id: true, businessName: true, priority: true },
+  })
+
+  if (!merchant) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  // Verify queue exists
+  const queue = await tx.query.queues.findFirst({
+    where: eq(queues.id, input.queueId),
+    columns: {
+      id: true,
+      name: true,
+      slug: true,
+      workflowType: true,
+      lifecycle: true,
+      isActive: true,
+    },
+  })
+
+  if (!queue) {
+    throw new AppError(404, 'Queue not found.')
+  }
+
+  if (queue.lifecycle !== 'active') {
+    throw new AppError(
+      409,
+      'This queue is inactive. Case creation is disabled.',
+    )
+  }
+
+  if (queue.workflowType === 'live') {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${merchant.id}), hashtext('live-case'))`,
+    )
+
+    const [existingLiveCase] = await tx
+      .select({ caseNumber: cases.caseNumber })
+      .from(cases)
+      .innerJoin(queues, eq(cases.queueId, queues.id))
+      .where(
+        and(eq(cases.merchantId, merchant.id), eq(queues.workflowType, 'live')),
+      )
+      .limit(1)
+
+    if (existingLiveCase) {
+      throw new AppError(
+        409,
+        `Live case ${existingLiveCase.caseNumber} already exists for this merchant.`,
+      )
+    }
+  }
+
+  const selectedSubMerchant =
+    queue.workflowType === 'sub_merchant_form'
+      ? input.subMerchantId
+        ? await tx.query.subMerchantDraftTemplates.findFirst({
+            where: eq(subMerchantDraftTemplates.id, input.subMerchantId),
+            columns: {
+              id: true,
+              name: true,
+              googleDriveWebViewLink: true,
+            },
+          })
+        : null
+      : null
+
+  if (queue.workflowType === 'sub_merchant_form' && !selectedSubMerchant) {
+    throw new AppError(
+      400,
+      'Select a valid sub-merchant before creating an EP Sub-Merchant Form case.',
+    )
+  }
+
+  await assertCreationRequirementsSatisfied(tx, {
+    merchantId: merchant.id,
+    targetQueueId: queue.id,
+  })
+
+  const stages = await ensureQueueStages(tx, {
+    id: queue.id,
+    name: queue.name,
+    slug: queue.slug,
+    workflowType: queue.workflowType,
+  })
+  const initialStage = stages[0]
+
+  if (!initialStage) {
+    throw new AppError(500, 'No initial stage configured for this queue.')
+  }
+
+  const caseNumber = await generateCaseNumber(tx, input.queueId)
+
+  const [created] = await tx
+    .insert(cases)
+    .values({
+      caseNumber,
+      queueId: input.queueId,
+      merchantId: input.merchantId,
+      subMerchantId: selectedSubMerchant?.id ?? null,
+      ownerId: null,
+      currentStageId: initialStage.id,
+      status: 'new',
+      priority: merchant.priority,
+      updatedAt: new Date(),
+    })
+    .returning()
+
+  if (!created) {
+    throw new AppError(500, 'Failed to create case.')
+  }
+
+  if (selectedSubMerchant) {
+    await tx.insert(subMerchantFormDetails).values({
+      caseId: created.id,
+      subMerchantKey: selectedSubMerchant.id,
+      subMerchantName: selectedSubMerchant.name,
+      draftUrl: selectedSubMerchant.googleDriveWebViewLink,
+    })
+  }
+
+  if (actorId) {
+    await tx.insert(caseHistory).values({
+      caseId: created.id,
+      actorId,
+      action: 'case_created_manually',
+      details: {
+        queueName: queue.name,
+        merchantName: merchant.businessName,
+        subMerchantId: selectedSubMerchant?.id ?? null,
+        subMerchantName: selectedSubMerchant?.name ?? null,
+      },
+    })
+  }
+
+  return {
+    id: created.id,
+    caseNumber: created.caseNumber,
+    queueId: created.queueId,
+    queueName: queue.name,
+    merchantId: created.merchantId,
+    merchantName: merchant.businessName,
+    ownerId: created.ownerId,
+    ownerName: null as string | null,
+    status: created.status,
+    priority: created.priority,
+    closedAt: created.closedAt,
+    createdAt: created.createdAt,
+    updatedAt: created.updatedAt,
+  }
 }
 
 // Each merchant gets its own transaction so one rejected merchant (for example

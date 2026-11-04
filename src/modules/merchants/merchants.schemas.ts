@@ -534,6 +534,7 @@ export const listMerchantsQuerySchema = z.object({
   businessScope: z.string().optional(),
   createdAtFrom: z.string().optional(),
   createdAtTo: z.string().optional(),
+  epStatus: z.string().optional(),
   sortBy: z.enum(sortableColumns).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 })

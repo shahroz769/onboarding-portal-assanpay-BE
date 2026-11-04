@@ -15,6 +15,62 @@ Route prefix:
 All case routes require authentication. Manual case creation is restricted to
 `super_admin` and `admin`; agents are constrained by queue access.
 
+`POST /api/cases` and `POST /api/cases/bulk-create` reject EP Sub-Merchant Form
+queues with `409`. Those cases are created only through
+`POST /api/cases/ep-sub-merchant/trigger`.
+
+## GET `/api/cases/ep-sub-merchant/merchants`
+
+Purpose:
+
+- List non-terminated merchants for the EP Sub-Merchants page.
+
+Access:
+
+- `super_admin`, `admin`, and agents with working access to an EP queue.
+- The session user's `canManageEpCases` flag mirrors this for the UI.
+
+Query params:
+
+- `cursor`, `limit` (1-100, default 30), `search`
+- `status`: comma-separated `pending`, `testing`, `live`
+- `wordpress`: comma-separated `successful`, `not_successful`
+- `progress`: comma-separated `not_triggered`, `open`, `unsuccessful`, `completed`. A merchant with several sub-merchants can match more than one, and is `completed` only when every selected sub-merchant has a successful case.
+- `sortBy`: `createdAt` (default), `merchantNumber`, `businessName`, `ownerFullName`, `status`, `updatedAt`
+- `sortOrder`: `asc` (default), `desc`
+
+Each merchant includes `wordpress`, `isEligible`, `subMerchants` (the Documents
+Review selection, each with `canTrigger` and `latestCase`), and `otherCases` (EP
+cases outside that selection).
+
+## POST `/api/cases/ep-sub-merchant/trigger`
+
+Purpose:
+
+- Create one EP case for one merchant and sub-merchant. The queue is set by the server.
+
+Access: same as the list above.
+
+Body:
+
+```json
+{
+  "merchantId": "uuid",
+  "subMerchantId": "uuid"
+}
+```
+
+Rules:
+
+- The merchant must not be terminated or deleted, and the EP queue must be active.
+- The merchant needs a WordPress case closed as successful.
+- The sub-merchant must be in the merchant's latest Documents Review selection.
+- Any existing case for that sub-merchant must be closed as unsuccessful, which makes this a re-trigger.
+- Concurrent triggers for the same pair are serialized, so only one succeeds.
+
+Rule violations return `409`. Success returns `201` with the same shape as
+`POST /api/cases`. The case starts as `new` with no owner.
+
 ## POST `/api/cases/bulk-create`
 
 Purpose:

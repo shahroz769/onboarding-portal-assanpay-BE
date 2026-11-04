@@ -44,6 +44,11 @@ import {
 import { isCaseSlaBreached } from '../cases/case-sla'
 import { triggerStartCasesForMerchant } from '../cases/case-flow.service'
 import {
+  buildEpCaseStatusFilter,
+  getEpQueueIds,
+  getLatestEpCases,
+} from '../cases/ep-sub-merchant.service'
+import {
   getLimitsAndMdrSettings,
   getPaymentMethodSettings,
   getPayoutMethodSettings,
@@ -615,6 +620,13 @@ export async function listMerchants(query: ListMerchantsQuery) {
     }
   }
 
+  const epQueueIds = await getEpQueueIds()
+
+  if (query.epStatus) {
+    const epStatusFilter = buildEpCaseStatusFilter(query.epStatus, epQueueIds)
+    if (epStatusFilter) conditions.push(epStatusFilter)
+  }
+
   const orderFn = query.sortOrder === 'desc' ? desc : asc
   const sortSpec = sortColumnMap[query.sortBy]
   const cursor = query.cursor
@@ -688,8 +700,12 @@ export async function listMerchants(query: ListMerchantsQuery) {
           id: pageRows[pageRows.length - 1]!.id,
         })
       : null
+  const latestEpCases = await getLatestEpCases(
+    pageRows.map((row) => row.id),
+    epQueueIds,
+  )
   const items = pageRows.map((pageRow) => {
-    const row = { ...pageRow }
+    const row = { ...pageRow, epCases: latestEpCases.get(pageRow.id) ?? [] }
     delete (row as { cursorValue?: unknown }).cursorValue
     return row
   })

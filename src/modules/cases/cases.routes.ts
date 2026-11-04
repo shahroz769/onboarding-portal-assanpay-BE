@@ -16,6 +16,7 @@ import {
   createCommentSchema,
   emailRecipientSelectionSchema,
   listCasesQuerySchema,
+  listEpMerchantsQuerySchema,
   markLiveLimitsAppliedSchema,
   savePortalApiCredentialsSchema,
   markTestingLimitsAppliedSchema,
@@ -27,6 +28,7 @@ import {
   sendLiveEmailSchema,
   sendMidCreationEmailSchema,
   selectSubMerchantFormSchema,
+  triggerEpCaseSchema,
   updateCasePrioritySchema,
   updateCaseStatusSchema,
 } from './cases.schemas'
@@ -108,6 +110,7 @@ import {
   retryFailedCaseFlowCloseJob,
 } from './case-flow.service'
 import { confirmCaseEmailDelivered } from './case-email-delivery'
+import { listEpMerchants, triggerEpCase } from './ep-sub-merchant.service'
 
 export const caseRoutes = new Hono<AppEnv>()
 
@@ -142,6 +145,21 @@ caseRoutes.get('/owners', async (c) => {
   const owners = await listCaseOwners()
   return c.json(owners)
 })
+
+// GET /api/cases/ep-sub-merchant/merchants — EP page list (admins, EP working agents)
+caseRoutes.get(
+  '/ep-sub-merchant/merchants',
+  zodValidator('query', listEpMerchantsQuerySchema),
+  async (c) => c.json(await listEpMerchants(c.req.valid('query'), c.var.auth)),
+)
+
+// POST /api/cases/ep-sub-merchant/trigger — Create one EP case for one sub-merchant
+caseRoutes.post(
+  '/ep-sub-merchant/trigger',
+  zodValidator('json', triggerEpCaseSchema),
+  async (c) =>
+    c.json(await triggerEpCase(c.req.valid('json'), c.var.auth), 201),
+)
 
 // GET /api/cases — List cases (all authenticated users)
 caseRoutes.get('/', zodValidator('query', listCasesQuerySchema), async (c) => {
