@@ -113,22 +113,6 @@ function sanitizeUser(
   }
 }
 
-async function assertUniqueUser(input: { email: string; username: string }) {
-  const existingUser = await getDb().query.users.findFirst({
-    where: or(eq(users.email, input.email), eq(users.username, input.username)),
-  })
-
-  if (!existingUser) {
-    return
-  }
-
-  if (existingUser.email === input.email) {
-    throw new AppError(409, 'Email is already in use.')
-  }
-
-  throw new AppError(409, 'Username is already in use.')
-}
-
 async function issueSession(params: {
   user: typeof users.$inferSelect
   userAgent?: string
@@ -162,38 +146,6 @@ async function issueSession(params: {
     refreshToken,
     user: sanitizeUser(params.user, await getSessionWorkAccess(params.user)),
   }
-}
-
-export async function registerSuperAdmin(input: {
-  name: string
-  email: string
-  username: string
-  password: string
-}) {
-  if (!env.ALLOW_SUPER_ADMIN_REGISTRATION) {
-    throw new AppError(403, 'Super Admin registration is disabled.')
-  }
-
-  await assertUniqueUser({
-    email: input.email,
-    username: input.username,
-  })
-
-  const passwordHash = await Bun.password.hash(input.password)
-
-  const [createdUser] = await getDb()
-    .insert(users)
-    .values({
-      name: input.name,
-      email: input.email,
-      username: input.username,
-      passwordHash,
-      roleType: 'super_admin',
-      status: 'active',
-    })
-    .returning()
-
-  return sanitizeUser(createdUser)
 }
 
 /**

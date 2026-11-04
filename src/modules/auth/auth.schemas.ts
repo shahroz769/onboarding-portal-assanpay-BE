@@ -45,13 +45,6 @@ function validateQueueAccess(
   }
 }
 
-export const registerSuperAdminSchema = z.object({
-  name: z.string().trim().min(2).max(120),
-  email: z.email().transform((value) => value.toLowerCase()),
-  username: z.string().trim().min(2).max(64),
-  password: z.string().min(8).max(128),
-})
-
 export const loginSchema = z
   .object({
     identifier: z.string().trim().min(2).max(255).optional(),

@@ -14,6 +14,7 @@ export type StorageObjectLifecycle =
   | 'current'
   | 'superseded'
   | 'failed'
+  | 'deleted'
 
 export type RecordStorageObjectInput = {
   providerObjectId: string

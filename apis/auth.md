@@ -56,11 +56,10 @@ Non-browser clients (e.g. curl) are not subject to CORS and are not blocked by a
 ### Rate limits
 
 - `/login`: 15 failed attempts per IP per 15 minutes, and 10 failed attempts per account per 15 minutes. Only failures count. Over the limit: `429`.
-- `/register-super-admin`: 15 failed attempts per IP per 15 minutes.
 
 ## Common User Object
 
-Returned by login, refresh, register and set-password:
+Returned by login, refresh and set-password:
 
 ```json
 {
@@ -97,53 +96,6 @@ Allowed `gender` values:
 - `female`
 
 `queueViewScope` is `all` or `selected`. `workQueueIds` lists the queues the user may work in.
-
-## POST `/api/auth/register-super-admin`
-
-Purpose:
-
-- Bootstraps a `super_admin` user
-- Works only when `ALLOW_SUPER_ADMIN_REGISTRATION=true`
-
-Auth:
-
-- No auth required
-
-Request body:
-
-```json
-{
-  "name": "Super Admin",
-  "email": "admin@assanpay.com",
-  "username": "admin01",
-  "password": "secret123"
-}
-```
-
-Field rules:
-
-- `name`: string, trimmed, min 2, max 120
-- `email`: valid email, normalized to lowercase
-- `username`: string, trimmed, min 2, max 64
-- `password`: string, min 8, max 128
-
-Success response:
-
-- Status: `201`
-
-```json
-{
-  "user": { "...": "Common User Object with roleType super_admin" }
-}
-```
-
-Possible errors:
-
-- `400` Invalid body
-- `403` Super Admin registration is disabled.
-- `409` Email is already in use.
-- `409` Username is already in use.
-- `429` Too many attempts.
 
 ## POST `/api/auth/login`
 

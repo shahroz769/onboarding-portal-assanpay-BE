@@ -180,15 +180,92 @@ export const bankNames = [
 ] as const
 
 const trimmedStringSchema = z.string().trim().min(1, 'This field is required.')
+
+function boundedTextSchema(label: string, maxLength: number) {
+  return trimmedStringSchema.max(
+    maxLength,
+    `${label} must be ${maxLength} characters or fewer.`,
+  )
+}
+
+// Domains reserved for documentation and testing (RFC 2606); no real business
+// or mailbox can use them.
+function isReservedDomain(domain: string) {
+  const normalized = domain.toLowerCase().replace(/\.$/, '')
+  return (
+    /(^|\.)example\.(com|net|org)$/.test(normalized) ||
+    /\.(example|test|invalid|localhost)$/.test(normalized)
+  )
+}
+
+function submitterEmailSchema(requiredMessage: string) {
+  return z
+    .string()
+    .trim()
+    .max(255, 'Email must be 255 characters or fewer.')
+    .pipe(z.email(requiredMessage))
+    .transform(toLower)
+    .refine(
+      (value) => !isReservedDomain(value.split('@')[1] ?? ''),
+      'Please use a real email address.',
+    )
+}
+
+function isPrivateIpv4(hostname: string) {
+  const match = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(hostname)
+  if (!match) return false
+
+  const first = Number(match[1])
+  const second = Number(match[2])
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  )
+}
+
+// Staff open this link from the review screens, so it must be a public website:
+// no script or file URLs, and nothing pointing at an internal network.
+function isPublicWebsiteUrl(value: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+  return (
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    !url.username &&
+    !url.password &&
+    hostname.includes('.') &&
+    // URL normalizes every IPv4 spelling to dotted form; IPv6 keeps brackets.
+    !hostname.startsWith('[') &&
+    !isPrivateIpv4(hostname) &&
+    !isReservedDomain(hostname) &&
+    !/\.(local|internal)$/.test(hostname)
+  )
+}
+
 const bareDomainPattern =
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#].*)?$/i
-const businessWebsiteSchema = z
+const storedBusinessWebsiteSchema = z
   .string()
   .trim()
+  .max(500, 'Business website must be 500 characters or fewer.')
   .transform((value) =>
     bareDomainPattern.test(value) ? `https://${value}` : value,
   )
   .pipe(z.url('Business website must be a valid URL.'))
+export const businessWebsiteSchema = storedBusinessWebsiteSchema.refine(
+  isPublicWebsiteUrl,
+  'Business website must be a public http or https website.',
+)
 export const localMobileNumberSchema = z
   .string()
   .trim()
@@ -197,28 +274,21 @@ export const digitsOnlyPhoneNumberSchema = z
   .string()
   .trim()
   .min(1, 'Business phone number is required.')
+  .max(32, 'Business phone number must be 32 digits or fewer.')
   .regex(/^\d+$/, 'Business phone number must contain numbers only.')
 
 export const scalarMerchantSchema = z.strictObject({
-  email: z
-    .string()
-    .trim()
-    .pipe(z.email('Submitter email must be a valid email.'))
-    .transform(toLower),
+  email: submitterEmailSchema('Submitter email must be a valid email.'),
   activeWhatsappNumber: localMobileNumberSchema,
-  ownerFullName: trimmedStringSchema,
+  ownerFullName: boundedTextSchema('Owner full name', 160),
   ownerPhone: localMobileNumberSchema,
-  businessName: trimmedStringSchema,
+  businessName: boundedTextSchema('Business name', 200),
   businessPhone: digitsOnlyPhoneNumberSchema,
-  businessEmail: z
-    .string()
-    .trim()
-    .pipe(z.email('Business email must be a valid email.'))
-    .transform(toLower),
-  businessAddress: trimmedStringSchema,
+  businessEmail: submitterEmailSchema('Business email must be a valid email.'),
+  businessAddress: boundedTextSchema('Business address', 1000),
   businessWebsite: businessWebsiteSchema,
   websiteCms: z.enum(websiteCmsValues),
-  businessDescription: trimmedStringSchema,
+  businessDescription: boundedTextSchema('Business description', 5000),
   businessRegistrationDate: z
     .string()
     .trim()
@@ -233,23 +303,26 @@ export const scalarMerchantSchema = z.strictObject({
       return date <= today
     }, 'Business registration date cannot be in the future.')
     .transform((value) => new Date(value).toISOString().slice(0, 10)),
-  businessNature: trimmedStringSchema,
+  businessNature: boundedTextSchema('Nature of business', 160),
   merchantType: z.enum(merchantTypes),
   estimatedMonthlyTransactions: z.coerce
     .number()
     .int('Estimated monthly transactions must be a whole number.')
-    .positive('Estimated monthly transactions must be greater than zero.'),
+    .positive('Estimated monthly transactions must be greater than zero.')
+    .max(2_147_483_647, 'Estimated monthly transactions is too large.'),
   estimatedMonthlyVolume: z.coerce
     .number()
     .positive('Estimated monthly volume must be greater than zero.')
+    .max(999_999_999_999.99, 'Estimated monthly volume is too large.')
     .transform((value) => value.toFixed(2)),
-  accountTitle: trimmedStringSchema,
+  accountTitle: boundedTextSchema('Account title', 200),
   bankName: z.enum(bankNames),
-  branchName: trimmedStringSchema,
-  accountNumberIban: trimmedStringSchema,
+  branchName: boundedTextSchema('Branch name', 160),
+  accountNumberIban: boundedTextSchema('Account number / IBAN', 64),
   swiftCode: z
     .string()
     .trim()
+    .max(64, 'SWIFT code must be 64 characters or fewer.')
     .optional()
     .transform((value) => (value ? value : null)),
   nextOfKinRelation: z.enum(kinRelations),
@@ -264,7 +337,10 @@ export const storedMerchantScalarSchema = z.strictObject({
   businessPhone: scalarMerchantSchema.shape.businessPhone,
   businessEmail: scalarMerchantSchema.shape.businessEmail,
   businessAddress: scalarMerchantSchema.shape.businessAddress,
-  businessWebsite: scalarMerchantSchema.shape.businessWebsite,
+  // A resubmission re-checks stored values it did not change, so a website
+  // accepted before the public-URL rule must not block it. Changed websites
+  // are checked against businessWebsiteSchema by the resubmission route.
+  businessWebsite: storedBusinessWebsiteSchema,
   websiteCms: scalarMerchantSchema.shape.websiteCms,
   businessDescription: scalarMerchantSchema.shape.businessDescription,
   businessRegistrationDate: scalarMerchantSchema.shape.businessRegistrationDate,
@@ -359,6 +435,7 @@ export async function parseMerchantFormData(
     }
 
     assertFileSizeLimit(file, `Document "${key}"`)
+    assertPublicUploadFile(file, `Document "${key}"`)
 
     const mimeType = normalizeMimeType(file)
     await assertFileContentSignature({
@@ -473,25 +550,61 @@ function assertRequiredDocuments(
   }
 }
 
-export function normalizeMimeType(file: File) {
-  if (
-    allowedFileMimeTypes.includes(
-      file.type as (typeof allowedFileMimeTypes)[number],
+// Smaller than any real scan or PDF; the smallest genuine upload so far is 961 B.
+const MIN_PUBLIC_FILE_SIZE_BYTES = 500
+const MAX_FILE_NAME_LENGTH = 255
+
+export function assertPublicUploadFile(file: File, label: string) {
+  if (file.size < MIN_PUBLIC_FILE_SIZE_BYTES) {
+    throw new AppError(
+      400,
+      `${label} is too small to be a valid document. Please upload a clear copy.`,
     )
-  ) {
-    return file.type as (typeof allowedFileMimeTypes)[number]
   }
 
-  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (file.name.length > MAX_FILE_NAME_LENGTH) {
+    throw new AppError(
+      400,
+      `${label} has a file name longer than ${MAX_FILE_NAME_LENGTH} characters. Please rename it.`,
+    )
+  }
 
-  if (!extension || !(extension in extensionToMimeType)) {
+  if (/[/\\]/.test(file.name)) {
+    throw new AppError(400, `${label} has an invalid file name.`)
+  }
+}
+
+// The name is kept on the stored file, so its extension must be an allowed one
+// and agree with the declared type: a valid PNG named ".htaccess" is refused.
+export function normalizeMimeType(file: File) {
+  const nameParts = file.name.split('.')
+  const extension =
+    nameParts.length > 1 ? nameParts.pop()?.toLowerCase() : undefined
+  const extensionMimeType =
+    extension && Object.hasOwn(extensionToMimeType, extension)
+      ? extensionToMimeType[extension]
+      : undefined
+
+  if (!extensionMimeType) {
     throw new AppError(
       415,
       `Document "${file.name}" has an unsupported file type.`,
     )
   }
 
-  return extensionToMimeType[extension]
+  if (
+    allowedFileMimeTypes.includes(
+      file.type as (typeof allowedFileMimeTypes)[number],
+    ) &&
+    file.type !== extensionMimeType
+  ) {
+    throw new AppError(
+      415,
+      `Document "${file.name}" does not match its declared file type.`,
+    )
+  }
+
+  return extensionMimeType
 }
 
 function toLower(value: string) {
@@ -568,6 +681,7 @@ export const bulkPrioritySchema = z.object({
 })
 export const terminateMerchantSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
+  deleteDriveFiles: z.boolean().default(false),
 })
 export type TerminateMerchantInput = z.infer<typeof terminateMerchantSchema>
 
@@ -581,4 +695,5 @@ export type PermanentlyDeleteMerchantInput = z.infer<
 export const bulkTerminateMerchantsSchema = z.object({
   ids: z.array(z.uuid()).min(1).max(100),
   reason: z.string().trim().min(1).max(1000),
+  deleteDriveFiles: z.boolean().default(false),
 })

@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 
+import { AppError } from '../../lib/errors'
 import { requireAuth } from '../../middleware/auth'
 import { requireRoles } from '../../middleware/rbac'
 import { zodValidator } from '../../lib/validators'
@@ -18,6 +20,7 @@ import {
   bulkSoftDeleteMerchants,
   bulkTerminateMerchants,
   bulkUpdatePriority,
+  deleteMerchantDriveFiles,
   getMerchantForm,
   getMerchantHeader,
   getMerchantHistory,
@@ -33,6 +36,28 @@ import {
 } from './merchants.service'
 
 export const merchantRoutes = new Hono<AppEnv>()
+
+// Bun drops a request after 10 idle seconds, and deleting a merchant's Drive
+// files can take longer than that.
+const DRIVE_DELETE_REQUEST_TIMEOUT_SECONDS = 120
+
+function allowLongDriveRequest(c: Context<AppEnv>) {
+  const server = c.env as
+    | { timeout?: (request: Request, seconds: number) => void }
+    | undefined
+  server?.timeout?.(c.req.raw, DRIVE_DELETE_REQUEST_TIMEOUT_SECONDS)
+}
+
+// Destroying KYC files keeps the same bar as permanent delete, even though
+// admins may terminate.
+function assertCanDeleteDriveFiles(
+  c: Context<AppEnv>,
+  input: { deleteDriveFiles: boolean },
+) {
+  if (input.deleteDriveFiles && c.get('auth').roleType !== 'super_admin') {
+    throw new AppError(403, 'Only a Super Admin can delete Google Drive files.')
+  }
+}
 
 // All routes require authentication
 merchantRoutes.use('*', requireAuth)
@@ -116,7 +141,22 @@ merchantRoutes.patch(
     const auth = c.get('auth')
     const id = c.req.param('id')
     const input = c.req.valid('json')
+    assertCanDeleteDriveFiles(c, input)
+    if (input.deleteDriveFiles) allowLongDriveRequest(c)
     const result = await terminateMerchant(id, auth.userId, input)
+    return c.json(result)
+  },
+)
+
+// DELETE /api/merchants/:id/drive-files — Delete a terminated merchant's Drive files only
+merchantRoutes.delete(
+  '/:id/drive-files',
+  requireRoles('super_admin'),
+  async (c) => {
+    const auth = c.get('auth')
+    const id = c.req.param('id')
+    allowLongDriveRequest(c)
+    const result = await deleteMerchantDriveFiles(id, auth.userId)
     return c.json(result)
   },
 )
@@ -155,6 +195,7 @@ merchantRoutes.post(
   async (c) => {
     const auth = c.get('auth')
     const input = c.req.valid('json')
+    assertCanDeleteDriveFiles(c, input)
     const result = await bulkTerminateMerchants(input.ids, auth.userId, input)
     return c.json(result)
   },

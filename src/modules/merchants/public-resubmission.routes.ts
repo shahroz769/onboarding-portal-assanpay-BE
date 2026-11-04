@@ -33,6 +33,8 @@ import {
 } from '../cases/field-labels'
 import { getResubmissionContext } from '../cases/case-documents-review.service'
 import {
+  assertPublicUploadFile,
+  businessWebsiteSchema,
   getAllowedDocumentTypes,
   getRequiredDocumentTypes,
   normalizeMimeType,
@@ -286,6 +288,7 @@ resubmissionRoutes.post('/:token', async (c) => {
         )
       }
       assertFileSizeLimit(file, DOCUMENT_TYPE_LABELS[existing.documentType])
+      assertPublicUploadFile(file, DOCUMENT_TYPE_LABELS[existing.documentType])
       const mimeType = normalizeMimeType(file)
       await assertFileContentSignature({
         file,
@@ -299,6 +302,17 @@ resubmissionRoutes.post('/:token', async (c) => {
       throw new AppError(
         400,
         `Document "${fieldName}" cannot be uploaded and removed together.`,
+      )
+    }
+  }
+
+  const submittedWebsite = submittedTextFields.get('businessWebsite')
+  if (submittedWebsite !== undefined) {
+    const website = businessWebsiteSchema.safeParse(submittedWebsite)
+    if (!website.success) {
+      throw new AppError(
+        400,
+        website.error.issues[0]?.message ?? 'Business website is invalid.',
       )
     }
   }

@@ -88,7 +88,13 @@ import {
   markStorageObjectsLifecycle,
   recordStorageObject,
 } from '../../lib/storage/ownership'
+import { withQueryTags } from '../../db/query-tags'
 import { clearPortalApiCredentials } from '../cases/portal-api-credentials.service'
+import {
+  claimSubmissionQuota,
+  recordCreatedSubmission,
+  type SubmissionClient,
+} from './submission-attempts.service'
 
 type UploadedDocumentRecord = {
   documentType: MerchantDocumentType
@@ -237,6 +243,16 @@ async function findSubmissionByKeyHash(submissionKeyHash: string) {
   }
 }
 
+export async function isExistingSubmissionKey(submissionKey: string) {
+  const [existing] = await getDb()
+    .select({ id: merchants.id })
+    .from(merchants)
+    .where(eq(merchants.submissionKeyHash, await hashToken(submissionKey)))
+    .limit(1)
+
+  return Boolean(existing)
+}
+
 // Rolls back an attempt whose key another request already used.
 class SubmissionKeyReplayError extends Error {}
 
@@ -256,6 +272,8 @@ function isSubmissionKeyConflict(error: unknown) {
 type CreateMerchantSubmissionOptions = {
   // Client-generated Idempotency-Key; stored only as a SHA-256 hash.
   submissionKey?: string | null
+  // The public caller, counted against the per-IP limit and logged.
+  client?: SubmissionClient
   storage?: FileStorageProvider
 }
 
@@ -267,6 +285,7 @@ export async function createMerchantSubmission(
   input: MerchantFormSubmission,
   {
     submissionKey = null,
+    client,
     storage = new GoogleDriveStorageProvider(),
   }: CreateMerchantSubmissionOptions = {},
 ) {
@@ -389,6 +408,7 @@ export async function createMerchantSubmission(
       if (await findOpenDuplicateMerchant(tx, input)) {
         throw new AppError(409, DUPLICATE_SUBMISSION_MESSAGE)
       }
+      if (client) await claimSubmissionQuota(tx, client)
 
       const [createdMerchant] = await tx
         .insert(merchants)
@@ -446,6 +466,7 @@ export async function createMerchantSubmission(
         : []
 
       await triggerStartCasesForMerchant(tx, merchantId)
+      if (client) await recordCreatedSubmission(tx, client, merchantId)
 
       return {
         merchant: createdMerchant,
@@ -674,6 +695,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
       liveAt: merchants.liveAt,
       ownerFullName: merchants.ownerFullName,
       updatedAt: merchants.updatedAt,
+      driveFilesDeletedAt: merchants.driveFilesDeletedAt,
       // Served by the partial cases_open_merchant_idx index. Columns are
       // qualified by hand: single-table selects render them unqualified, so
       // "id" would resolve to cases.id inside the subquery.
@@ -845,82 +867,10 @@ export async function permanentlyDeleteMerchant(
       throw new AppError(400, 'Merchant name confirmation does not match.')
     }
 
-    const ownedStorageObjects = await tx
-      .select({
-        provider: storageObjects.provider,
-        providerObjectId: storageObjects.providerObjectId,
-        objectKind: storageObjects.objectKind,
-      })
-      .from(storageObjects)
-      .where(eq(storageObjects.merchantId, merchantId))
-
-    const ownedGoogleDriveObjects = ownedStorageObjects.filter(
-      (object) => object.provider === 'google_drive',
-    )
-    const linkedMerchantFiles = await tx
-      .select({ providerObjectId: merchantDocuments.googleDriveFileId })
-      .from(merchantDocuments)
-      .where(eq(merchantDocuments.merchantId, merchantId))
-    const linkedCaseFiles = await tx
-      .select({ providerObjectId: caseFiles.googleDriveFileId })
-      .from(caseFiles)
-      .innerJoin(cases, eq(caseFiles.caseId, cases.id))
-      .where(eq(cases.merchantId, merchantId))
-    const unsupportedProviders = new Set(
-      ownedStorageObjects
-        .filter((object) => object.provider !== 'google_drive')
-        .map((object) => object.provider),
-    )
-
-    if (unsupportedProviders.size > 0) {
-      throw new AppError(
-        409,
-        `Merchant storage includes unsupported providers: ${Array.from(unsupportedProviders).join(', ')}.`,
-      )
-    }
-
-    const rootFolderIds = new Set(
-      [
-        merchant.googleDrivePrivateFolderId,
-        merchant.googleDrivePublicFolderId,
-      ].filter((folderId): folderId is string => Boolean(folderId)),
-    )
-    const ownedFolderIds = new Set(
-      ownedGoogleDriveObjects
-        .filter((object) => object.objectKind === 'folder')
-        .map((object) => object.providerObjectId),
-    )
-    const unownedRootFolderIds = Array.from(rootFolderIds).filter(
-      (folderId) => !ownedFolderIds.has(folderId),
-    )
-    const ownedProviderObjectIds = new Set(
-      ownedGoogleDriveObjects.map((object) => object.providerObjectId),
-    )
-    const unownedLinkedFileIds = [...linkedMerchantFiles, ...linkedCaseFiles]
-      .map((file) => file.providerObjectId)
-      .filter((fileId) => !ownedProviderObjectIds.has(fileId))
-
-    if (unownedRootFolderIds.length > 0 || unownedLinkedFileIds.length > 0) {
-      throw new AppError(
-        409,
-        'Merchant Drive ownership is incomplete. Run pending migrations before deleting this merchant.',
-      )
-    }
-
-    const storage = new GoogleDriveStorageProvider()
-    const nonRootObjectIds = Array.from(
-      new Set(
-        ownedGoogleDriveObjects
-          .map((object) => object.providerObjectId)
-          .filter((objectId) => !rootFolderIds.has(objectId)),
-      ),
-    )
-
-    await Promise.all(
-      nonRootObjectIds.map((objectId) => storage.deleteFile(objectId)),
-    )
-    await Promise.all(
-      Array.from(rootFolderIds).map((folderId) => storage.deleteFile(folderId)),
+    const drivePlan = await getMerchantDriveDeletionPlan(tx, merchant)
+    await deleteMerchantDriveObjects(
+      new GoogleDriveStorageProvider(),
+      drivePlan,
     )
 
     await tx.delete(emailLog).where(
@@ -942,9 +892,215 @@ export async function permanentlyDeleteMerchant(
 
     return {
       id: deletedMerchant.id,
-      deletedStorageObjectCount: ownedGoogleDriveObjects.length,
+      deletedStorageObjectCount: drivePlan.objectCount,
     }
   })
+}
+
+// Drive allows only so many writes at once, and a merchant can own many files.
+const DRIVE_DELETE_BATCH_SIZE = 10
+
+type MerchantDriveDeletionPlan = {
+  nonRootObjectIds: string[]
+  rootFolderIds: string[]
+  objectCount: number
+}
+
+/**
+ * Everything to delete for a merchant, limited to objects in the ownership
+ * ledger. Refuses when a root folder or linked file is missing from it, so
+ * nothing this merchant cannot be shown to own is ever deleted.
+ */
+async function getMerchantDriveDeletionPlan(
+  db: DbTransaction | ReturnType<typeof getDb>,
+  merchant: {
+    id: string
+    googleDrivePrivateFolderId: string | null
+    googleDrivePublicFolderId: string | null
+  },
+): Promise<MerchantDriveDeletionPlan> {
+  const ownedStorageObjects = await db
+    .select({
+      provider: storageObjects.provider,
+      providerObjectId: storageObjects.providerObjectId,
+      objectKind: storageObjects.objectKind,
+    })
+    .from(storageObjects)
+    .where(eq(storageObjects.merchantId, merchant.id))
+
+  const ownedGoogleDriveObjects = ownedStorageObjects.filter(
+    (object) => object.provider === 'google_drive',
+  )
+  const linkedMerchantFiles = await db
+    .select({ providerObjectId: merchantDocuments.googleDriveFileId })
+    .from(merchantDocuments)
+    .where(eq(merchantDocuments.merchantId, merchant.id))
+  const linkedCaseFiles = await db
+    .select({ providerObjectId: caseFiles.googleDriveFileId })
+    .from(caseFiles)
+    .innerJoin(cases, eq(caseFiles.caseId, cases.id))
+    .where(eq(cases.merchantId, merchant.id))
+  const unsupportedProviders = new Set(
+    ownedStorageObjects
+      .filter((object) => object.provider !== 'google_drive')
+      .map((object) => object.provider),
+  )
+
+  if (unsupportedProviders.size > 0) {
+    throw new AppError(
+      409,
+      `Merchant storage includes unsupported providers: ${Array.from(unsupportedProviders).join(', ')}.`,
+    )
+  }
+
+  const rootFolderIds = new Set(
+    [
+      merchant.googleDrivePrivateFolderId,
+      merchant.googleDrivePublicFolderId,
+    ].filter((folderId): folderId is string => Boolean(folderId)),
+  )
+  const ownedFolderIds = new Set(
+    ownedGoogleDriveObjects
+      .filter((object) => object.objectKind === 'folder')
+      .map((object) => object.providerObjectId),
+  )
+  const unownedRootFolderIds = Array.from(rootFolderIds).filter(
+    (folderId) => !ownedFolderIds.has(folderId),
+  )
+  const ownedProviderObjectIds = new Set(
+    ownedGoogleDriveObjects.map((object) => object.providerObjectId),
+  )
+  const unownedLinkedFileIds = [...linkedMerchantFiles, ...linkedCaseFiles]
+    .map((file) => file.providerObjectId)
+    .filter((fileId) => !ownedProviderObjectIds.has(fileId))
+
+  if (unownedRootFolderIds.length > 0 || unownedLinkedFileIds.length > 0) {
+    throw new AppError(
+      409,
+      'Merchant Drive ownership is incomplete. Run pending migrations before deleting this merchant.',
+    )
+  }
+
+  return {
+    nonRootObjectIds: Array.from(
+      new Set(
+        ownedGoogleDriveObjects
+          .map((object) => object.providerObjectId)
+          .filter((objectId) => !rootFolderIds.has(objectId)),
+      ),
+    ),
+    rootFolderIds: Array.from(rootFolderIds),
+    objectCount: ownedGoogleDriveObjects.length,
+  }
+}
+
+// Already-deleted objects count as success, so a partial failure can be retried.
+async function deleteMerchantDriveObjects(
+  storage: FileStorageProvider,
+  plan: MerchantDriveDeletionPlan,
+) {
+  for (
+    let i = 0;
+    i < plan.nonRootObjectIds.length;
+    i += DRIVE_DELETE_BATCH_SIZE
+  ) {
+    await Promise.all(
+      plan.nonRootObjectIds
+        .slice(i, i + DRIVE_DELETE_BATCH_SIZE)
+        .map((objectId) => storage.deleteFile(objectId)),
+    )
+  }
+  await Promise.all(
+    plan.rootFolderIds.map((folderId) => storage.deleteFile(folderId)),
+  )
+}
+
+/**
+ * Moves a terminated merchant's Drive files and folders to the Drive trash. The
+ * merchant, its cases and its document records stay, and the portal offers no
+ * way to bring the files back.
+ */
+export async function deleteMerchantDriveFiles(
+  merchantId: string,
+  actorId: string,
+  storage: FileStorageProvider = new GoogleDriveStorageProvider(),
+) {
+  const db = getDb()
+  const [merchant] = await db
+    .select({
+      id: merchants.id,
+      status: merchants.status,
+      googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
+      googleDrivePublicFolderId: merchants.googleDrivePublicFolderId,
+      driveFilesDeletedAt: merchants.driveFilesDeletedAt,
+    })
+    .from(merchants)
+    .where(and(eq(merchants.id, merchantId), isNull(merchants.deletedAt)))
+
+  if (!merchant) {
+    throw new AppError(404, 'Merchant not found.')
+  }
+
+  if (merchant.status !== 'terminated') {
+    throw new AppError(
+      409,
+      'Only a terminated merchant can have its Google Drive files deleted.',
+    )
+  }
+
+  if (merchant.driveFilesDeletedAt) {
+    throw new AppError(
+      409,
+      "This merchant's Google Drive files are already deleted.",
+    )
+  }
+
+  const plan = await getMerchantDriveDeletionPlan(db, merchant)
+  await deleteMerchantDriveObjects(storage, plan)
+
+  const now = new Date()
+  await db
+    .update(merchants)
+    .set({
+      driveFilesDeletedAt: now,
+      driveFilesDeletedBy: actorId,
+      updatedAt: now,
+    })
+    .where(eq(merchants.id, merchantId))
+  await markStorageObjectsLifecycle(
+    [...plan.nonRootObjectIds, ...plan.rootFolderIds],
+    'deleted',
+  )
+
+  return {
+    id: merchantId,
+    deletedStorageObjectCount: plan.objectCount,
+    driveFilesDeletedAt: now,
+  }
+}
+
+// Termination has already committed by now, so a Drive failure is reported
+// rather than thrown; the merchants list offers the deletion again.
+async function deleteDriveFilesAfterTermination(
+  merchantId: string,
+  actorId: string,
+) {
+  try {
+    const { deletedStorageObjectCount } = await deleteMerchantDriveFiles(
+      merchantId,
+      actorId,
+    )
+    return { status: 'deleted' as const, deletedStorageObjectCount }
+  } catch (error) {
+    console.error('[merchant-terminate.drive-files]', { merchantId, error })
+    return {
+      status: 'failed' as const,
+      message:
+        error instanceof AppError
+          ? error.message
+          : 'Google Drive files could not be deleted.',
+    }
+  }
 }
 
 async function closeOpenCasesAsUnsuccessful(
@@ -1043,7 +1199,12 @@ export async function terminateMerchant(
     throw new AppError(409, 'Merchant is already terminated or does not exist.')
   }
 
-  return result
+  return {
+    ...result,
+    driveFiles: input.deleteDriveFiles
+      ? await deleteDriveFilesAfterTermination(merchantId, actorId)
+      : null,
+  }
 }
 
 // Bulk endpoints are strict: an unknown or deleted id fails the whole request
@@ -1097,10 +1258,31 @@ export async function bulkTerminateMerchants(
           })
         : 0
 
-    return { terminatedCount: updatedRows.length, closedCaseCount }
+    return {
+      updatedIds,
+      terminatedCount: updatedRows.length,
+      closedCaseCount,
+    }
   })
 
-  return result
+  const { updatedIds, ...summary } = result
+
+  // Too slow for one request across many merchants. Anything left behind by a
+  // failure or restart stays offered on the merchants list.
+  if (input.deleteDriveFiles && updatedIds.length > 0) {
+    void withQueryTags({ job: 'merchant-drive-file-deletion' }, async () => {
+      for (const merchantId of updatedIds) {
+        await deleteDriveFilesAfterTermination(merchantId, actorId)
+      }
+    }).catch((error) => {
+      console.error('[merchant-terminate.drive-files]', error)
+    })
+  }
+
+  return {
+    ...summary,
+    driveFilesQueuedCount: input.deleteDriveFiles ? updatedIds.length : 0,
+  }
 }
 
 export async function bulkSoftDeleteMerchants(ids: string[]) {
@@ -1520,6 +1702,7 @@ function toFormMerchant(merchant: Awaited<ReturnType<typeof requireMerchant>>) {
     businessScope: merchant.businessScope,
     currency: merchant.currency,
     liveAt: merchant.liveAt,
+    driveFilesDeletedAt: merchant.driveFilesDeletedAt,
     submittedAt: merchant.submittedAt,
     createdAt: merchant.createdAt,
     updatedAt: merchant.updatedAt,

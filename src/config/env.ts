@@ -123,10 +123,8 @@ const envSchema = z.object({
     .optional(),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
-  ALLOW_SUPER_ADMIN_REGISTRATION: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((value) => value === 'true'),
+  // Successful public onboarding submissions allowed per IP in a rolling 24h.
+  PUBLIC_SUBMISSION_LIMIT_PER_IP: z.coerce.number().int().positive().default(3),
   COOKIE_DOMAIN: z.string().min(1).optional(),
   COOKIE_SECURE: z
     .enum(['true', 'false'])

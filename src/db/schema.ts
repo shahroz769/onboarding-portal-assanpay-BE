@@ -563,6 +563,15 @@ export const merchants = pgTable(
     // SHA-256 of the public form's Idempotency-Key; a retried submission
     // returns this merchant instead of creating another one.
     submissionKeyHash: varchar('submission_key_hash', { length: 64 }),
+    // Set once a terminated merchant's Drive files are gone; document rows
+    // stay, so their links must no longer be offered.
+    driveFilesDeletedAt: timestamp('drive_files_deleted_at', {
+      withTimezone: true,
+    }),
+    driveFilesDeletedBy: uuid('drive_files_deleted_by').references(
+      () => users.id,
+      { onDelete: 'set null' },
+    ),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
@@ -624,6 +633,9 @@ export const merchants = pgTable(
     merchantsOwnerFullNameTrgmIdx: index(
       'merchants_owner_full_name_trgm_idx',
     ).using('gin', sql`${table.ownerFullName} gin_trgm_ops`),
+    merchantsDriveFilesDeletedByIdx: index(
+      'merchants_drive_files_deleted_by_idx',
+    ).on(table.driveFilesDeletedBy),
     merchantsSubmissionKeyHashUnique: uniqueIndex(
       'merchants_submission_key_hash_unique',
     )
@@ -637,6 +649,48 @@ export const merchants = pgTable(
       'merchants_volume_nonnegative',
       sql`${table.estimatedMonthlyVolume} >= 0`,
     ),
+  }),
+)
+
+export const publicSubmissionOutcomeEnum = pgEnum('public_submission_outcome', [
+  'created',
+  'replayed',
+  'rate_limited',
+  'rejected',
+  'error',
+])
+
+// Every public onboarding attempt, accepted or not. Created rows drive the
+// per-IP limit; merchant_id outlives a permanent delete as NULL so that limit
+// and the audit trail still hold.
+export const publicSubmissionAttempts = pgTable(
+  'public_submission_attempts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ipAddress: varchar('ip_address', { length: 64 }).notNull(),
+    userAgent: varchar('user_agent', { length: 512 }),
+    outcome: publicSubmissionOutcomeEnum('outcome').notNull(),
+    statusCode: integer('status_code').notNull(),
+    errorMessage: varchar('error_message', { length: 500 }),
+    merchantId: uuid('merchant_id').references(() => merchants.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    publicSubmissionAttemptsIpCreatedIdx: index(
+      'public_submission_attempts_ip_created_idx',
+    )
+      .on(table.ipAddress, table.createdAt)
+      .where(sql`${table.outcome} = 'created'`),
+    publicSubmissionAttemptsCreatedIdx: index(
+      'public_submission_attempts_created_idx',
+    ).on(table.createdAt),
+    publicSubmissionAttemptsMerchantIdx: index(
+      'public_submission_attempts_merchant_idx',
+    ).on(table.merchantId),
   }),
 )
 
@@ -1543,6 +1597,7 @@ export const storageObjectLifecycleEnum = pgEnum('storage_object_lifecycle', [
   'current',
   'superseded',
   'failed',
+  'deleted',
 ])
 
 export const storageObjects = pgTable(

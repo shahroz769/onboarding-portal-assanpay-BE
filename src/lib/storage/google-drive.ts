@@ -223,23 +223,64 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     }
   }
 
+  /**
+   * Moves a file or folder to the Drive trash, which Google empties after 30
+   * days. Never hard-deletes, whatever the service account is allowed to do, so
+   * a removal stays recoverable in Drive during that time.
+   */
   async deleteFile(fileId: string) {
     const accessToken = await getGoogleAccessToken()
-    const response = await fetchGoogleApi(
-      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true`,
+    const stateResponse = await fetchGoogleApi(
+      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=trashed,capabilities(canTrash)`,
       {
-        method: 'DELETE',
+        method: 'GET',
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
       },
-      `Unable to connect to Google Drive while deleting file "${fileId}".`,
+      `Unable to connect to Google Drive while checking file "${fileId}".`,
+    )
+
+    if (stateResponse.status === 404) return
+
+    if (!stateResponse.ok) {
+      throw await toStorageError(
+        stateResponse,
+        `Failed to check Google Drive file "${fileId}".`,
+      )
+    }
+
+    const state = (await stateResponse.json()) as {
+      trashed?: boolean
+      capabilities?: { canTrash?: boolean }
+    }
+
+    if (state.trashed) return
+
+    if (!state.capabilities?.canTrash) {
+      throw new AppError(
+        502,
+        `The service account is not allowed to trash Google Drive file "${fileId}".`,
+      )
+    }
+
+    const response = await fetchGoogleApi(
+      `${GOOGLE_DRIVE_FILES_URL}/${fileId}?supportsAllDrives=true&fields=id`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ trashed: true }),
+      },
+      `Unable to connect to Google Drive while trashing file "${fileId}".`,
     )
 
     if (!response.ok && response.status !== 404) {
       throw await toStorageError(
         response,
-        `Failed to delete Google Drive file "${fileId}".`,
+        `Failed to trash Google Drive file "${fileId}".`,
       )
     }
   }

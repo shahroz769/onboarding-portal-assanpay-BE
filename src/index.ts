@@ -27,6 +27,7 @@ import { resendWebhookRoutes } from './modules/email/resend-webhook.routes'
 import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
 import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
+import { purgeExpiredSubmissionAttempts } from './modules/merchants/submission-attempts.service'
 import { notificationRoutes } from './modules/notifications/notifications.routes'
 import { queueRoutes } from './modules/queues/queues.routes'
 import { userRoutes } from './modules/users/users.routes'
@@ -148,7 +149,7 @@ app.route('/api/webhooks/resend', resendWebhookRoutes)
 
 // Rotated tokens are kept until they expire: refresh-token reuse detection
 // needs the row to recognise a stolen copy for the token's whole lifetime.
-async function purgeExpiredRefreshTokens() {
+async function purgeExpiredRecords() {
   try {
     // Await inside the callback: drizzle queries run when awaited.
     await withQueryTags({ job: 'refresh-token-cleanup' }, async () => {
@@ -172,12 +173,20 @@ async function purgeExpiredRefreshTokens() {
   } catch (error) {
     console.error('[cleanup] Failed to purge refresh tokens:', error)
   }
+
+  try {
+    await withQueryTags({ job: 'submission-attempt-cleanup' }, () =>
+      purgeExpiredSubmissionAttempts(),
+    )
+  } catch (error) {
+    console.error('[cleanup] Failed to purge submission attempts:', error)
+  }
 }
 
 // Run cleanup immediately on startup, then every 6 hours
-void purgeExpiredRefreshTokens()
+void purgeExpiredRecords()
 const refreshTokenCleanupInterval = setInterval(
-  () => void purgeExpiredRefreshTokens(),
+  () => void purgeExpiredRecords(),
   6 * 60 * 60 * 1000,
 )
 
