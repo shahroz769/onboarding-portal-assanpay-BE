@@ -90,6 +90,7 @@ import {
 } from '../../lib/storage/ownership'
 import { withQueryTags } from '../../db/query-tags'
 import { clearPortalApiCredentials } from '../cases/portal-api-credentials.service'
+import { consumeOpenResubmissionTokens } from '../cases/case-resubmission-tokens.service'
 import {
   claimSubmissionQuota,
   recordCreatedSubmission,
@@ -1145,6 +1146,11 @@ async function closeOpenCasesAsUnsuccessful(
   if (closedCases.length === 0) {
     return 0
   }
+
+  await consumeOpenResubmissionTokens(
+    tx,
+    closedCases.map((caseRow) => caseRow.id),
+  )
 
   await tx.insert(caseHistory).values(
     closedCases.map((caseRow) => ({

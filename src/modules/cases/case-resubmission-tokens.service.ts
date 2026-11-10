@@ -1,7 +1,7 @@
-import { and, eq, isNull, or } from 'drizzle-orm'
+import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
-import { caseResubmissionTokens } from '../../db/schema'
+import { getDb, type DbTransaction } from '../../db/client'
+import { caseResubmissionTokens, cases, merchants } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
 
@@ -64,6 +64,47 @@ export async function issueToken(
   return { token: tokenString, tokenId }
 }
 
+export const INACTIVE_RESUBMISSION_LINK_MESSAGE =
+  'This resubmission link is no longer active.'
+
+type ResubmissionTarget = {
+  caseStatus: (typeof cases.$inferSelect)['status']
+  merchantStatus: (typeof merchants.$inferSelect)['status']
+  merchantDeletedAt: Date | null
+}
+
+/**
+ * A link only works while its case is open and its merchant is neither
+ * terminated nor deleted. Closing a case consumes its links, but links issued
+ * before that rule may still be unconsumed, so the case is checked as well.
+ */
+export function assertResubmissionTargetOpen(target: ResubmissionTarget) {
+  if (
+    target.caseStatus === 'closed' ||
+    target.merchantStatus === 'terminated' ||
+    target.merchantDeletedAt !== null
+  ) {
+    throw new AppError(410, INACTIVE_RESUBMISSION_LINK_MESSAGE)
+  }
+}
+
+/** Consumes every unconsumed resubmission link of the given cases. */
+export async function consumeOpenResubmissionTokens(
+  tx: DbTransaction,
+  caseIds: string[],
+) {
+  if (caseIds.length === 0) return
+  await tx
+    .update(caseResubmissionTokens)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        inArray(caseResubmissionTokens.caseId, caseIds),
+        isNull(caseResubmissionTokens.consumedAt),
+      ),
+    )
+}
+
 export async function validateToken(token: string): Promise<ValidatedToken> {
   const db = getDb()
   const tokenHash = await hashToken(token)
@@ -72,8 +113,13 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
       id: caseResubmissionTokens.id,
       caseId: caseResubmissionTokens.caseId,
       consumedAt: caseResubmissionTokens.consumedAt,
+      caseStatus: cases.status,
+      merchantStatus: merchants.status,
+      merchantDeletedAt: merchants.deletedAt,
     })
     .from(caseResubmissionTokens)
+    .innerJoin(cases, eq(caseResubmissionTokens.caseId, cases.id))
+    .innerJoin(merchants, eq(cases.merchantId, merchants.id))
     .where(
       or(
         eq(caseResubmissionTokens.tokenHash, tokenHash),
@@ -89,6 +135,8 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
   if (row.consumedAt) {
     throw new AppError(410, 'This resubmission link has already been used.')
   }
+
+  assertResubmissionTargetOpen(row)
 
   return { caseId: row.caseId, tokenId: row.id }
 }

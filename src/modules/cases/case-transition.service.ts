@@ -18,6 +18,7 @@ import {
 import { requestCaseFlowCloseJobDrain } from './case-flow-worker'
 import { isCaseSlaBreached } from './case-sla'
 import { clearPortalApiCredentials } from './portal-api-credentials.service'
+import { consumeOpenResubmissionTokens } from './case-resubmission-tokens.service'
 
 export type LockedCaseRow = {
   id: string
@@ -326,6 +327,11 @@ export async function transitionCaseState(
 
       if (input.afterUpdate) {
         await input.afterUpdate(tx, locked, updatedRow, derivedStatus)
+      }
+
+      // A closed case takes no more merchant resubmissions.
+      if (derivedStatus === 'closed' && locked.status !== 'closed') {
+        await consumeOpenResubmissionTokens(tx, [locked.id])
       }
 
       // The API credentials are only needed until the WordPress website is

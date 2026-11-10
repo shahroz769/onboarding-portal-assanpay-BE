@@ -24,7 +24,11 @@ import {
   supersedeStorageObjects,
 } from '../../lib/storage/ownership'
 import type { AppEnv } from '../../types/auth'
-import { validateToken } from '../cases/case-resubmission-tokens.service'
+import {
+  assertResubmissionTargetOpen,
+  INACTIVE_RESUBMISSION_LINK_MESSAGE,
+  validateToken,
+} from '../cases/case-resubmission-tokens.service'
 import {
   DOCUMENT_TYPE_LABELS,
   getDocumentIdFromFieldName,
@@ -531,6 +535,28 @@ resubmissionRoutes.post('/:token', async (c) => {
     })
 
     await db.transaction(async (tx) => {
+      // Re-check under lock: the case may have closed, or the merchant been
+      // terminated, while the files were uploading. Merchant before case, the
+      // same order terminateMerchant locks them in.
+      const [lockedMerchant] = await tx
+        .select({ status: merchants.status, deletedAt: merchants.deletedAt })
+        .from(merchants)
+        .where(eq(merchants.id, caseRow.merchantId))
+        .for('update')
+      const [lockedCase] = await tx
+        .select({ status: cases.status })
+        .from(cases)
+        .where(eq(cases.id, caseRow.id))
+        .for('update')
+      if (!lockedMerchant || !lockedCase) {
+        throw new AppError(410, INACTIVE_RESUBMISSION_LINK_MESSAGE)
+      }
+      assertResubmissionTargetOpen({
+        caseStatus: lockedCase.status,
+        merchantStatus: lockedMerchant.status,
+        merchantDeletedAt: lockedMerchant.deletedAt,
+      })
+
       // Consume the token in the same transaction as the completed
       // resubmission. If any database write fails, the token remains usable.
       // Concurrent attempts may upload into isolated attempt folders, but only
@@ -645,14 +671,29 @@ resubmissionRoutes.post('/:token', async (c) => {
           .where(inArray(caseFieldReviews.id, removedFieldIds))
       }
 
-      await tx
-        .update(cases)
-        .set({
-          status: 'working',
-          currentStageId: workingStage.id,
-          updatedAt: now,
-        })
-        .where(eq(cases.id, caseRow.id))
+      // Only a case waiting on the merchant moves back to working. A case
+      // that was unassigned meanwhile (back to new) keeps its status, so it
+      // never becomes working without an owner.
+      if (lockedCase.status === 'awaiting_merchant') {
+        await tx
+          .update(cases)
+          .set({
+            status: 'working',
+            currentStageId: workingStage.id,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(cases.id, caseRow.id),
+              eq(cases.status, 'awaiting_merchant'),
+            ),
+          )
+      } else {
+        await tx
+          .update(cases)
+          .set({ updatedAt: now })
+          .where(eq(cases.id, caseRow.id))
+      }
 
       await tx.insert(caseHistory).values({
         caseId: caseRow.id,
