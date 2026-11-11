@@ -23,6 +23,12 @@ import {
 } from '../configuration/configuration.service'
 import { getDocumentIdFromFieldName, isDocumentFieldName } from './field-labels'
 import { issueToken } from './case-resubmission-tokens.service'
+import {
+  markManualMerchantRequestSent,
+  openMerchantRequest,
+  resolveMerchantRequest,
+} from './merchant-request.service'
+import { writeCaseState } from './case-state-machine'
 import type {
   SendLiveEmailInput,
   SendMidCreationEmailInput,
@@ -333,79 +339,115 @@ export async function confirmResubmissionEmailManual(
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_merchant stage configured.')
 
-  if (row.status === 'working') {
-    const [reservedCase] = await db
-      .update(cases)
-      .set({
-        status: 'awaiting_merchant',
-        currentStageId: awaitingStage.id,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-      .returning({ id: cases.id })
-    if (!reservedCase)
-      throw new AppError(
-        409,
-        'This case has already been sent for resubmission.',
-      )
-  }
+  // Reserve with a request, so a failed or interrupted upload returns the
+  // case to working instead of leaving it waiting for nothing.
+  const requestId =
+    row.status === 'working'
+      ? await db.transaction(async (tx) => {
+          const [reservedCase] = await writeCaseState(tx, {
+            event: 'request_merchant',
+            where: eq(cases.id, caseId),
+            set: { currentStageId: awaitingStage.id },
+          })
+          if (!reservedCase)
+            throw new AppError(
+              409,
+              'This case has already been sent for resubmission.',
+            )
+          return openMerchantRequest(tx, {
+            kind: 'document_resubmission_manual',
+            caseId,
+            actorId: userId,
+            releaseStageId: row.currentStageId,
+          })
+        })
+      : null
 
-  const { savedFile } = await uploadEmailProofFile(
-    caseId,
-    userId,
-    input.file,
-    channel === 'whatsapp'
-      ? RESUBMISSION_WHATSAPP_PROOF_KIND
-      : RESUBMISSION_EMAIL_PROOF_KIND,
-    row.caseNumber,
-    row.merchantId,
-    row.merchantName,
-    row.queueName,
+  const { savedFile } = await withMerchantRequestUndo(requestId, () =>
+    uploadEmailProofFile(
+      caseId,
+      userId,
+      input.file,
+      channel === 'whatsapp'
+        ? RESUBMISSION_WHATSAPP_PROOF_KIND
+        : RESUBMISSION_EMAIL_PROOF_KIND,
+      row.caseNumber,
+      row.merchantId,
+      row.merchantName,
+      row.queueName,
+    ),
   )
 
   const now = new Date()
-  await db.transaction(async (tx) => {
-    if (row.status === 'working') {
+  // Undone like the upload if it fails; the request is resolved inside it.
+  await withMerchantRequestUndo(requestId, () =>
+    db.transaction(async (tx) => {
+      if (requestId) await markManualMerchantRequestSent(tx, requestId)
+      if (row.status === 'working') {
+        await tx.insert(caseHistory).values({
+          caseId,
+          actorId: userId,
+          action: 'rejections_prepared',
+          details: {
+            total: rejectedFieldNames.length,
+            rejected: rejectedFieldNames.length,
+            approved: 0,
+            rejectedFields: rejectedFieldNames,
+            rejectedFieldLabels,
+            rejectedFieldDetails,
+          },
+        })
+      }
       await tx.insert(caseHistory).values({
         caseId,
         actorId: userId,
-        action: 'rejections_prepared',
+        action:
+          channel === 'whatsapp'
+            ? 'resubmission_whatsapp_sent_manual'
+            : 'resubmission_email_sent_manual',
         details: {
-          total: rejectedFieldNames.length,
-          rejected: rejectedFieldNames.length,
-          approved: 0,
+          tokenId: input.tokenId,
           rejectedFields: rejectedFieldNames,
           rejectedFieldLabels,
           rejectedFieldDetails,
+          recipient:
+            channel === 'whatsapp'
+              ? row.merchantWhatsappNumber
+              : recipient.email,
+          emailRecipient: recipient.email,
+          recipientEmailType: recipient.recipientEmailType,
+          whatsappRecipient: row.merchantWhatsappNumber,
+          screenshotFileId: savedFile.id,
+          channel,
+          manual: true,
         },
+        createdAt: now,
       })
-    }
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action:
-        channel === 'whatsapp'
-          ? 'resubmission_whatsapp_sent_manual'
-          : 'resubmission_email_sent_manual',
-      details: {
-        tokenId: input.tokenId,
-        rejectedFields: rejectedFieldNames,
-        rejectedFieldLabels,
-        rejectedFieldDetails,
-        recipient:
-          channel === 'whatsapp' ? row.merchantWhatsappNumber : recipient.email,
-        emailRecipient: recipient.email,
-        recipientEmailType: recipient.recipientEmailType,
-        whatsappRecipient: row.merchantWhatsappNumber,
-        screenshotFileId: savedFile.id,
-        channel,
-        manual: true,
-      },
-      createdAt: now,
-    })
-  })
+    }),
+  )
 
   return { status: 'sent', fileId: savedFile.id }
+}
+
+/** Runs the slow step of a reserved request; undoes the request if it throws. */
+async function withMerchantRequestUndo<T>(
+  requestId: string | null,
+  step: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await step()
+  } catch (error) {
+    if (requestId) {
+      await resolveMerchantRequest(requestId, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      }).catch((undoError) => {
+        // Recovery resolves it later.
+        console.error('[merchant-request.undo]', { requestId, undoError })
+      })
+    }
+    throw error
+  }
 }
 
 // ─── Agreement email preview & manual confirm ────────────────────────────────
@@ -574,62 +616,77 @@ export async function confirmAgreementEmailManual(
   if (!awaitingStage)
     throw new AppError(500, 'No awaiting_merchant stage configured.')
 
-  const [reservedCase] = await db
-    .update(cases)
-    .set({
-      status: 'awaiting_merchant',
-      currentStageId: awaitingStage.id,
-      updatedAt: new Date(),
+  const requestId = await db.transaction(async (tx) => {
+    const [reservedCase] = await writeCaseState(tx, {
+      event: 'request_merchant',
+      where: eq(cases.id, caseId),
+      set: { currentStageId: awaitingStage.id },
     })
-    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-    .returning({ id: cases.id })
-  if (!reservedCase)
-    throw new AppError(409, 'This case has already been sent to the merchant.')
+    if (!reservedCase)
+      throw new AppError(
+        409,
+        'This case has already been sent to the merchant.',
+      )
+    return openMerchantRequest(tx, {
+      kind: 'agreement_manual',
+      caseId,
+      actorId: userId,
+      releaseStageId: caseRow.currentStageId,
+    })
+  })
 
-  const { savedFile } = await uploadEmailProofFile(
-    caseId,
-    userId,
-    input.file,
-    channel === 'whatsapp'
-      ? AGREEMENT_WHATSAPP_PROOF_KIND
-      : AGREEMENT_EMAIL_PROOF_KIND,
-    caseRow.caseNumber,
-    caseRow.merchantId,
-    caseRow.merchantName,
-    caseRow.queueName,
+  const { savedFile } = await withMerchantRequestUndo(requestId, () =>
+    uploadEmailProofFile(
+      caseId,
+      userId,
+      input.file,
+      channel === 'whatsapp'
+        ? AGREEMENT_WHATSAPP_PROOF_KIND
+        : AGREEMENT_EMAIL_PROOF_KIND,
+      caseRow.caseNumber,
+      caseRow.merchantId,
+      caseRow.merchantName,
+      caseRow.queueName,
+    ),
   )
 
   const now = new Date()
-  await db.transaction(async (tx) => {
-    await tx
-      .update(agreementCaseDetails)
-      .set({
-        emailStatus: 'sent',
-        emailSentAt: now,
-        emailRecipient: recipient.email,
-        lastRejectionRemarks: remarks,
-        updatedAt: now,
-      })
-      .where(eq(agreementCaseDetails.caseId, caseId))
+  // Undone like the upload if it fails; the request is resolved inside it.
+  await withMerchantRequestUndo(requestId, () =>
+    db.transaction(async (tx) => {
+      await markManualMerchantRequestSent(tx, requestId)
+      await tx
+        .update(agreementCaseDetails)
+        .set({
+          emailStatus: 'sent',
+          // A manual copy: not the automatic email any earlier log row tracks.
+          emailLogId: null,
+          emailSentAt: now,
+          emailRecipient: recipient.email,
+          lastRejectionRemarks: remarks,
+          updatedAt: now,
+        })
+        .where(eq(agreementCaseDetails.caseId, caseId))
 
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action:
-        channel === 'whatsapp'
-          ? 'agreement_whatsapp_sent_manual'
-          : 'agreement_email_sent_manual',
-      details: {
-        recipient: recipient.email,
-        recipientEmailType: recipient.recipientEmailType,
-        remarks,
-        screenshotFileId: savedFile.id,
-        channel,
-        manual: true,
-      },
-      createdAt: now,
-    })
-  })
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action:
+          channel === 'whatsapp'
+            ? 'agreement_whatsapp_sent_manual'
+            : 'agreement_email_sent_manual',
+        details: {
+          recipient: recipient.email,
+          recipientEmailType: recipient.recipientEmailType,
+          remarks,
+          screenshotFileId: savedFile.id,
+          channel,
+          manual: true,
+        },
+        createdAt: now,
+      })
+    }),
+  )
 
   return { status: 'sent', fileId: savedFile.id }
 }

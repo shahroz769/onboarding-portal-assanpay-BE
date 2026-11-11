@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, or } from 'drizzle-orm'
+import { and, eq, inArray, isNull, or, type SQL } from 'drizzle-orm'
 
 import { getDb, type DbTransaction } from '../../db/client'
 import { caseResubmissionTokens, cases, merchants } from '../../db/schema'
@@ -15,6 +15,30 @@ export type ValidatedToken = {
   tokenId: string
 }
 
+export type ResubmissionTokenConsumedReason = NonNullable<
+  (typeof caseResubmissionTokens.$inferSelect)['consumedReason']
+>
+
+type TokenExecutor = ReturnType<typeof getDb> | DbTransaction
+
+/**
+ * The only writer of consumed_at. A link is active until it is consumed, once,
+ * for a reason; migration 0106 rejects reactivating or re-consuming it.
+ * Returns the links consumed by this call.
+ */
+export async function consumeResubmissionTokens(
+  db: TokenExecutor,
+  where: SQL,
+  reason: ResubmissionTokenConsumedReason,
+  now = new Date(),
+) {
+  return db
+    .update(caseResubmissionTokens)
+    .set({ consumedAt: now, consumedReason: reason })
+    .where(and(where, isNull(caseResubmissionTokens.consumedAt)))
+    .returning({ id: caseResubmissionTokens.id })
+}
+
 function generateTokenString(): string {
   const bytes = new Uint8Array(64)
   crypto.getRandomValues(bytes)
@@ -27,45 +51,51 @@ export async function issueToken(
   caseId: string,
   createdByUserId: string,
 ): Promise<IssuedToken> {
-  const db = getDb()
+  return getDb().transaction((tx) =>
+    issueTokenInTransaction(tx, caseId, createdByUserId),
+  )
+}
+
+/** issueToken inside the caller's transaction. */
+export async function issueTokenInTransaction(
+  tx: DbTransaction,
+  caseId: string,
+  createdByUserId: string,
+): Promise<IssuedToken> {
   const tokenString = generateTokenString()
   const tokenHash = await hashToken(tokenString)
-  const tokenId = await db.transaction(async (tx) => {
-    // A case may have only one usable resubmission link. Superseding older
-    // previews also prevents a link from a previous rejection round from
-    // loading the current round's rejected fields.
-    await tx
-      .update(caseResubmissionTokens)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(caseResubmissionTokens.caseId, caseId),
-          isNull(caseResubmissionTokens.consumedAt),
-        ),
-      )
 
-    const [row] = await tx
-      .insert(caseResubmissionTokens)
-      .values({
-        caseId,
-        token: null,
-        tokenHash,
-        createdBy: createdByUserId,
-      })
-      .returning({ id: caseResubmissionTokens.id })
+  // A case may have only one usable resubmission link. Superseding older
+  // previews also prevents a link from a previous rejection round from
+  // loading the current round's rejected fields.
+  await consumeResubmissionTokens(
+    tx,
+    eq(caseResubmissionTokens.caseId, caseId),
+    'superseded',
+  )
 
-    if (!row) {
-      throw new AppError(500, 'Failed to issue resubmission token.')
-    }
+  const [row] = await tx
+    .insert(caseResubmissionTokens)
+    .values({
+      caseId,
+      token: null,
+      tokenHash,
+      createdBy: createdByUserId,
+    })
+    .returning({ id: caseResubmissionTokens.id })
 
-    return row.id
-  })
+  if (!row) {
+    throw new AppError(500, 'Failed to issue resubmission token.')
+  }
 
-  return { token: tokenString, tokenId }
+  return { token: tokenString, tokenId: row.id }
 }
 
 export const INACTIVE_RESUBMISSION_LINK_MESSAGE =
   'This resubmission link is no longer active.'
+
+export const USED_RESUBMISSION_LINK_MESSAGE =
+  'This resubmission link has already been used.'
 
 type ResubmissionTarget = {
   caseStatus: (typeof cases.$inferSelect)['status']
@@ -88,21 +118,17 @@ export function assertResubmissionTargetOpen(target: ResubmissionTarget) {
   }
 }
 
-/** Consumes every unconsumed resubmission link of the given cases. */
+/** Invalidates every active resubmission link of the given cases. */
 export async function consumeOpenResubmissionTokens(
   tx: DbTransaction,
   caseIds: string[],
 ) {
   if (caseIds.length === 0) return
-  await tx
-    .update(caseResubmissionTokens)
-    .set({ consumedAt: new Date() })
-    .where(
-      and(
-        inArray(caseResubmissionTokens.caseId, caseIds),
-        isNull(caseResubmissionTokens.consumedAt),
-      ),
-    )
+  await consumeResubmissionTokens(
+    tx,
+    inArray(caseResubmissionTokens.caseId, caseIds),
+    'invalidated',
+  )
 }
 
 export async function validateToken(token: string): Promise<ValidatedToken> {
@@ -113,6 +139,7 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
       id: caseResubmissionTokens.id,
       caseId: caseResubmissionTokens.caseId,
       consumedAt: caseResubmissionTokens.consumedAt,
+      consumedReason: caseResubmissionTokens.consumedReason,
       caseStatus: cases.status,
       merchantStatus: merchants.status,
       merchantDeletedAt: merchants.deletedAt,
@@ -133,7 +160,14 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
   }
 
   if (row.consumedAt) {
-    throw new AppError(410, 'This resubmission link has already been used.')
+    // Links consumed before the reason was recorded keep the old message.
+    throw new AppError(
+      410,
+      row.consumedReason === 'superseded' ||
+        row.consumedReason === 'invalidated'
+        ? INACTIVE_RESUBMISSION_LINK_MESSAGE
+        : USED_RESUBMISSION_LINK_MESSAGE,
+    )
   }
 
   assertResubmissionTargetOpen(row)

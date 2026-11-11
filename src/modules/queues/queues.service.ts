@@ -6,7 +6,7 @@ import type { Queue, QueueStage } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import {
   isActiveToLifecycle,
-  lifecycleToIsActive,
+  queueLifecycleFields,
   validateStageDefinitions,
   type QueueActivationIssue,
   type QueueLifecycle,
@@ -318,8 +318,7 @@ export async function updateQueue(id: string, input: UpdateQueueInput) {
         name: input.name ?? bumped.name,
         prefix: input.prefix ?? bumped.prefix,
         workflowType: input.workflowType ?? bumped.workflowType,
-        lifecycle: nextLifecycle,
-        isActive: lifecycleToIsActive(nextLifecycle),
+        ...queueLifecycleFields(bumped.lifecycle, nextLifecycle),
         slaHours: input.slaHours ?? bumped.slaHours,
       })
       .where(eq(queues.id, id))
@@ -365,10 +364,7 @@ export async function updateQueueStatus(
 
     const [updated] = await tx
       .update(queues)
-      .set({
-        lifecycle,
-        isActive: lifecycleToIsActive(lifecycle),
-      })
+      .set(queueLifecycleFields(bumped.lifecycle, lifecycle))
       .where(eq(queues.id, id))
       .returning()
 

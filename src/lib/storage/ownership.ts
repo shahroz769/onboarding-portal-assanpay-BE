@@ -1,6 +1,6 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, type SQL } from 'drizzle-orm'
 
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { storageObjects } from '../../db/schema'
 import type { NewStorageObject, StorageObject } from '../../db/schema'
 import { AppError } from '../errors'
@@ -60,63 +60,108 @@ export async function recordStorageObject(input: RecordStorageObjectInput) {
   return row
 }
 
-export async function markStorageObjectsLifecycle(
-  providerObjectIds: string[],
-  lifecycle: StorageObjectLifecycle,
+/**
+ * The storage-object lifecycle. An object starts as provisioning while its
+ * attempt is in flight, becomes current in the same transaction that commits
+ * the rows pointing at it, and is superseded when a newer file replaces it.
+ * Only provisioning objects can fail, so failed-attempt cleanup never deletes
+ * a committed object. Migration 0105 enforces the same moves.
+ *
+ *   provisioning ──▶ current ──▶ superseded ──▶ deleted
+ *        │             └──────────────────────▶ deleted
+ *        └──▶ failed ──▶ deleted
+ */
+export const STORAGE_LIFECYCLE_TRANSITIONS: Record<
+  StorageObjectLifecycle,
+  readonly StorageObjectLifecycle[]
+> = {
+  provisioning: ['current', 'failed', 'deleted'],
+  current: ['superseded', 'deleted'],
+  superseded: ['deleted'],
+  failed: ['deleted'],
+  deleted: [],
+}
+
+function sourcesFor(target: StorageObjectLifecycle) {
+  return (
+    Object.keys(STORAGE_LIFECYCLE_TRANSITIONS) as StorageObjectLifecycle[]
+  ).filter((from) => STORAGE_LIFECYCLE_TRANSITIONS[from].includes(target))
+}
+
+type StorageExecutor = ReturnType<typeof getDb> | DbTransaction
+
+/**
+ * The only writer of storage_objects.lifecycle. Moves the matched objects to
+ * `target`, leaving any that cannot make that move as they are.
+ */
+async function moveStorageObjects(
+  db: StorageExecutor,
+  where: SQL,
+  target: StorageObjectLifecycle,
 ) {
+  return db
+    .update(storageObjects)
+    .set({ lifecycle: target, updatedAt: new Date() })
+    .where(and(where, inArray(storageObjects.lifecycle, sourcesFor(target))))
+    .returning({
+      id: storageObjects.id,
+      providerObjectId: storageObjects.providerObjectId,
+    })
+}
+
+function byProviderObjectIds(providerObjectIds: string[]) {
+  return and(
+    eq(storageObjects.provider, STORAGE_PROVIDER),
+    inArray(storageObjects.providerObjectId, providerObjectIds),
+  )!
+}
+
+/**
+ * Commits an attempt's objects. Call it inside the transaction that writes
+ * the rows pointing at them, so they are current exactly when those rows are.
+ */
+export async function markAttemptObjectsCurrent(
+  db: StorageExecutor,
+  attemptId: string,
+) {
+  return moveStorageObjects(
+    db,
+    eq(storageObjects.attemptId, attemptId),
+    'current',
+  )
+}
+
+/** Records Drive objects as removed from Drive. */
+export async function markStorageObjectsDeleted(providerObjectIds: string[]) {
   if (providerObjectIds.length === 0) return
-
-  const db = getDb()
-  await db
-    .update(storageObjects)
-    .set({
-      lifecycle,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(storageObjects.provider, STORAGE_PROVIDER),
-        inArray(storageObjects.providerObjectId, providerObjectIds),
-      ),
-    )
+  await moveStorageObjects(
+    getDb(),
+    byProviderObjectIds(providerObjectIds),
+    'deleted',
+  )
 }
 
+/** Fails the attempt's objects that never committed. */
 export async function markAttemptObjectsFailed(attemptId: string) {
-  const db = getDb()
-  await db
-    .update(storageObjects)
-    .set({
-      lifecycle: 'failed',
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(storageObjects.attemptId, attemptId),
-        inArray(storageObjects.lifecycle, ['provisioning', 'current']),
-      ),
-    )
+  return moveStorageObjects(
+    getDb(),
+    eq(storageObjects.attemptId, attemptId),
+    'failed',
+  )
 }
 
+/** Marks replaced files superseded; unknown ids are ignored. */
 export async function supersedeStorageObjects(providerObjectIds: string[]) {
   const uniqueIds = Array.from(
     new Set(providerObjectIds.filter((id): id is string => Boolean(id))),
   )
   if (uniqueIds.length === 0) return
 
-  const db = getDb()
-  const existing = await db.query.storageObjects.findMany({
-    where: and(
-      eq(storageObjects.provider, STORAGE_PROVIDER),
-      inArray(storageObjects.providerObjectId, uniqueIds),
-    ),
-    columns: {
-      providerObjectId: true,
-    },
-  })
-  const knownIds = existing.map((row) => row.providerObjectId)
-  if (knownIds.length === 0) return
-
-  await markStorageObjectsLifecycle(knownIds, 'superseded')
+  await moveStorageObjects(
+    getDb(),
+    byProviderObjectIds(uniqueIds),
+    'superseded',
+  )
 }
 
 export async function listAttemptStorageObjects(attemptId: string) {
@@ -127,19 +172,19 @@ export async function listAttemptStorageObjects(attemptId: string) {
 }
 
 /**
- * Deletes only Drive objects that were created by this attempt and recorded
- * in the ownership ledger. Never deletes find-or-create results without a
+ * Deletes only Drive objects that were created by this attempt, recorded in
+ * the ownership ledger, and never committed. Never deletes find-or-create results without a
  * matching ownership row for the attempt.
  */
 export async function cleanupFailedAttemptObjects(input: {
   attemptId: string
   storage: FileStorageProvider
 }) {
-  const objects = await listAttemptStorageObjects(input.attemptId)
   await markAttemptObjectsFailed(input.attemptId)
-
-  const deletable = objects
-    .filter((row) => row.lifecycle !== 'superseded')
+  // Committed (current, superseded) objects are never deleted here; failed
+  // ones from an earlier cleanup are retried.
+  const deletable = (await listAttemptStorageObjects(input.attemptId))
+    .filter((row) => row.lifecycle === 'failed')
     .sort((left, right) => rankForCleanup(right) - rankForCleanup(left))
 
   for (const object of deletable) {
@@ -165,6 +210,10 @@ export function isPendingClaimObjectId(providerObjectId: string) {
   return providerObjectId.startsWith('pending-root:')
 }
 
+/**
+ * Binds the created root folder to its claim. The claim stays provisioning
+ * until the merchant row points at the folder (markAttemptObjectsCurrent).
+ */
 export async function finalizeRootClaim(input: {
   claim: StorageObject
   providerObjectId: string
@@ -177,7 +226,6 @@ export async function finalizeRootClaim(input: {
     .set({
       providerObjectId: input.providerObjectId,
       parentProviderObjectId: input.parentProviderObjectId,
-      lifecycle: 'current',
       updatedAt: now,
       metadata: {
         ...asRecord(input.claim.metadata),

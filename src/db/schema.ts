@@ -199,8 +199,8 @@ export const queues = pgTable(
     lifecycle: queueLifecycleEnum('lifecycle').default('inactive').notNull(),
     revision: integer('revision').default(1).notNull(),
     slaHours: integer('sla_hours').default(24).notNull(),
-    /** Kept in sync with lifecycle: active ↔ true, draft/inactive ↔ false. */
-    isActive: boolean('is_active').default(true).notNull(),
+    /** Mirrors lifecycle (active ↔ true); a check constraint enforces it. */
+    isActive: boolean('is_active').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1247,6 +1247,20 @@ export const emailLogStatusEnum = pgEnum('email_log_status', [
   'suppressed',
 ])
 
+// Why a resubmission link stopped working. Null on links consumed before the
+// column existed.
+export const resubmissionTokenConsumedReasonEnum = pgEnum(
+  'resubmission_token_consumed_reason',
+  [
+    // The merchant submitted with it.
+    'used',
+    // A newer link was issued for the case.
+    'superseded',
+    // The case closed, the merchant was terminated, or the email failed.
+    'invalidated',
+  ],
+)
+
 export const caseResubmissionTokens = pgTable(
   'case_resubmission_tokens',
   {
@@ -1257,6 +1271,7 @@ export const caseResubmissionTokens = pgTable(
     token: varchar('token', { length: 86 }).unique(),
     tokenHash: varchar('token_hash', { length: 64 }).unique(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    consumedReason: resubmissionTokenConsumedReasonEnum('consumed_reason'),
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -1648,6 +1663,60 @@ export const storageObjects = pgTable(
       .where(
         sql`(${table.metadata}->>'role') = 'merchant_root' AND ${table.lifecycle} IN ('provisioning', 'current')`,
       ),
+  }),
+)
+
+// A case reserved as awaiting_merchant while its email is sent (or its manual
+// proof uploaded). Written in the reservation's transaction and resolved once:
+// on success, or by undoing the reservation. A request left unresolved by a
+// crash or error is resolved by the recovery job (merchant-request.service).
+export const caseMerchantRequestKindEnum = pgEnum(
+  'case_merchant_request_kind',
+  [
+    'document_resubmission',
+    'agreement',
+    'document_resubmission_manual',
+    'agreement_manual',
+  ],
+)
+
+export const caseMerchantRequests = pgTable(
+  'case_merchant_requests',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => cases.id, { onDelete: 'cascade' }),
+    kind: caseMerchantRequestKindEnum('kind').notNull(),
+    actorId: uuid('actor_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    /** The email being sent; null for a manual proof. */
+    emailLogId: uuid('email_log_id').references(() => emailLog.id, {
+      onDelete: 'set null',
+    }),
+    /** The resubmission link the email carries. */
+    tokenId: uuid('token_id'),
+    /** Stage the case returns to if the request is undone. */
+    releaseStageId: uuid('release_stage_id'),
+    /** What the resolver writes to case history and details. */
+    details: jsonb('details').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    outcome: varchar('outcome', { length: 20 }),
+  },
+  (table) => ({
+    caseMerchantRequestsCaseIdx: index('case_merchant_requests_case_idx').on(
+      table.caseId,
+    ),
+    caseMerchantRequestsEmailLogIdx: index(
+      'case_merchant_requests_email_log_idx',
+    ).on(table.emailLogId),
+    caseMerchantRequestsPendingIdx: index('case_merchant_requests_pending_idx')
+      .on(table.createdAt)
+      .where(sql`${table.resolvedAt} is null`),
   }),
 )
 

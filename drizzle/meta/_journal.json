@@ -701,6 +701,62 @@
       "when": 1793750400000,
       "tag": "0100_submission_attempts_and_drive_file_deletion",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1793836800000,
+      "tag": "0101_case_state_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1793923200000,
+      "tag": "0102_audit_cases_reopened_in_error",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1794009600000,
+      "tag": "0103_merchant_state_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1794096000000,
+      "tag": "0104_queue_lifecycle_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1794182400000,
+      "tag": "0105_storage_lifecycle_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1794268800000,
+      "tag": "0106_resubmission_token_consumed_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1794355200000,
+      "tag": "0107_reset_resubmitted_document_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1794441600000,
+      "tag": "0108_case_merchant_requests",
+      "breakpoints": true
     }
   ]
 }

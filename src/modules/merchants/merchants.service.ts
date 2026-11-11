@@ -84,13 +84,18 @@ import {
 import {
   cleanupFailedAttemptObjects,
   createStorageAttemptId,
-  listAttemptStorageObjects,
-  markStorageObjectsLifecycle,
+  markAttemptObjectsCurrent,
+  markStorageObjectsDeleted,
   recordStorageObject,
 } from '../../lib/storage/ownership'
 import { withQueryTags } from '../../db/query-tags'
 import { clearPortalApiCredentials } from '../cases/portal-api-credentials.service'
 import { consumeOpenResubmissionTokens } from '../cases/case-resubmission-tokens.service'
+import { writeCaseState } from '../cases/case-state-machine'
+import {
+  initialMerchantState,
+  writeMerchantState,
+} from './merchant-state-machine'
 import {
   claimSubmissionQuota,
   recordCreatedSubmission,
@@ -439,7 +444,7 @@ export async function createMerchantSubmission(
           nextOfKinRelation: input.nextOfKinRelation,
           googleDrivePrivateFolderId: folderId,
           submissionKeyHash,
-          status: 'pending',
+          ...initialMerchantState,
           submittedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -467,6 +472,9 @@ export async function createMerchantSubmission(
         : []
 
       await triggerStartCasesForMerchant(tx, merchantId)
+      // Committed with the merchant, so a later failure never cleans them up.
+      await attachMerchantToAttemptObjects(tx, attemptId, merchantId)
+      await markAttemptObjectsCurrent(tx, attemptId)
       if (client) await recordCreatedSubmission(tx, client, merchantId)
 
       return {
@@ -474,13 +482,6 @@ export async function createMerchantSubmission(
         documents: createdDocuments,
       }
     })
-
-    const attemptObjects = await listAttemptStorageObjects(attemptId)
-    await attachMerchantToAttemptObjects(attemptId, merchantId)
-    await markStorageObjectsLifecycle(
-      attemptObjects.map((object) => object.providerObjectId),
-      'current',
-    )
 
     return {
       merchant: sanitizeMerchantRecord(result.merchant),
@@ -510,10 +511,11 @@ export async function createMerchantSubmission(
 }
 
 async function attachMerchantToAttemptObjects(
+  tx: DbTransaction,
   attemptId: string,
   merchantId: string,
 ) {
-  await getDb()
+  await tx
     .update(storageObjects)
     .set({
       merchantId,
@@ -816,23 +818,17 @@ export async function softDeleteMerchant(merchantId: string) {
     throw new AppError(409, 'Only terminated merchants can be deleted.')
   }
 
-  const [deleted] = await db
-    .update(merchants)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(
-      and(
-        eq(merchants.id, merchantId),
-        eq(merchants.status, 'terminated'),
-        isNull(merchants.deletedAt),
-      ),
-    )
-    .returning({ id: merchants.id })
+  const [deleted] = await writeMerchantState(db, {
+    event: 'soft_deleted',
+    where: eq(merchants.id, merchantId),
+    set: { deletedAt: new Date() },
+  })
 
   if (!deleted) {
     throw new AppError(404, 'Merchant not found.')
   }
 
-  return deleted
+  return { id: deleted.id }
 }
 
 export async function permanentlyDeleteMerchant(
@@ -1060,18 +1056,19 @@ export async function deleteMerchantDriveFiles(
   await deleteMerchantDriveObjects(storage, plan)
 
   const now = new Date()
-  await db
-    .update(merchants)
-    .set({
+  await writeMerchantState(db, {
+    event: 'drive_files_deleted',
+    where: eq(merchants.id, merchantId),
+    set: {
       driveFilesDeletedAt: now,
       driveFilesDeletedBy: actorId,
       updatedAt: now,
-    })
-    .where(eq(merchants.id, merchantId))
-  await markStorageObjectsLifecycle(
-    [...plan.nonRootObjectIds, ...plan.rootFolderIds],
-    'deleted',
-  )
+    },
+  })
+  await markStorageObjectsDeleted([
+    ...plan.nonRootObjectIds,
+    ...plan.rootFolderIds,
+  ])
 
   return {
     id: merchantId,
@@ -1113,9 +1110,10 @@ async function closeOpenCasesAsUnsuccessful(
     now: Date
   },
 ) {
-  const closedCases = await tx
-    .update(cases)
-    .set({
+  const closedCases = await writeCaseState(tx, {
+    event: 'merchant_terminated',
+    where: inArray(cases.merchantId, input.merchantIds),
+    set: {
       currentStageId: sql`(
         select ${queueStages.id}
         from ${queueStages}
@@ -1124,7 +1122,6 @@ async function closeOpenCasesAsUnsuccessful(
         order by ${queueStages.order}
         limit 1
       )`,
-      status: 'closed',
       closeOutcome: 'unsuccessful',
       slaBreached: sql`${sql.param(input.now, cases.createdAt)} > ${cases.createdAt} + (
         select ${queues.slaHours} * interval '1 hour'
@@ -1134,14 +1131,8 @@ async function closeOpenCasesAsUnsuccessful(
       closeReason: input.reason,
       closedAt: input.now,
       updatedAt: input.now,
-    })
-    .where(
-      and(
-        inArray(cases.merchantId, input.merchantIds),
-        ne(cases.status, 'closed'),
-      ),
-    )
-    .returning({ id: cases.id })
+    },
+  })
 
   if (closedCases.length === 0) {
     return 0
@@ -1173,17 +1164,11 @@ export async function terminateMerchant(
   const now = new Date()
 
   const result = await db.transaction(async (tx) => {
-    const [updated] = await tx
-      .update(merchants)
-      .set({ status: 'terminated', updatedAt: now })
-      .where(
-        and(
-          eq(merchants.id, merchantId),
-          ne(merchants.status, 'terminated'),
-          isNull(merchants.deletedAt),
-        ),
-      )
-      .returning({ id: merchants.id, status: merchants.status })
+    const [updated] = await writeMerchantState(tx, {
+      event: 'terminated',
+      where: eq(merchants.id, merchantId),
+      set: { updatedAt: now },
+    })
 
     if (!updated) {
       return null
@@ -1239,17 +1224,11 @@ export async function bulkTerminateMerchants(
 
   const result = await db.transaction(async (tx) => {
     await assertMerchantsExist(tx, ids)
-    const updatedRows = await tx
-      .update(merchants)
-      .set({ status: 'terminated', updatedAt: now })
-      .where(
-        and(
-          inArray(merchants.id, ids),
-          ne(merchants.status, 'terminated'),
-          isNull(merchants.deletedAt),
-        ),
-      )
-      .returning({ id: merchants.id })
+    const updatedRows = await writeMerchantState(tx, {
+      event: 'terminated',
+      where: inArray(merchants.id, ids),
+      set: { updatedAt: now },
+    })
 
     const updatedIds = updatedRows.map((row) => row.id)
     // Terminated merchants no longer need their portal API credentials.
@@ -1295,17 +1274,11 @@ export async function bulkSoftDeleteMerchants(ids: string[]) {
   const db = getDb()
   await assertMerchantsExist(db, ids)
 
-  const result = await db
-    .update(merchants)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(
-      and(
-        inArray(merchants.id, ids),
-        eq(merchants.status, 'terminated'),
-        isNull(merchants.deletedAt),
-      ),
-    )
-    .returning({ id: merchants.id })
+  const result = await writeMerchantState(db, {
+    event: 'soft_deleted',
+    where: inArray(merchants.id, ids),
+    set: { deletedAt: new Date() },
+  })
 
   return { deletedCount: result.length }
 }

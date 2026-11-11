@@ -22,27 +22,6 @@ export type CaseListStatusFilterValue =
 
 const caseListStatusFilterValueSet = new Set<string>(caseListStatusFilterValues)
 
-// Status transitions that may be requested directly. Only Awaiting Merchant →
-// Working (e.g. after a bounced merchant email). Closing goes through
-// advance / close-unsuccessful so readiness checks and merchant updates run.
-const allowedStatusTransitions: Record<
-  CaseStatusValue,
-  readonly CaseStatusValue[]
-> = {
-  new: [],
-  working: [],
-  awaiting_merchant: ['working'],
-  closed: [],
-}
-
-/** Validates that a status transition is allowed. */
-export function isValidStatusTransition(
-  current: CaseStatusValue,
-  next: CaseStatusValue,
-): boolean {
-  return allowedStatusTransitions[current].includes(next)
-}
-
 // ─── Request Schemas ────────────────────────────────────────────────────────
 
 export const createCaseSchema = z.strictObject({

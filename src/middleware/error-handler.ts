@@ -69,6 +69,35 @@ export function errorHandler(error: Error, c: Context<AppEnv>) {
     )
   }
 
+  // The cases_enforce_state trigger (migration 0101) rejected an illegal case
+  // state. Its message names the rule; log it, as reaching this means an app
+  // path skipped its own check.
+  if (databaseError?.code === 'P7601') {
+    console.error(`[request ${c.get('requestId')}]`, error)
+    return c.json(
+      { error: 'This case change is not allowed in its current state.' },
+      409,
+    )
+  }
+
+  // Same for the merchant triggers (migration 0103).
+  if (databaseError?.code === 'P7602') {
+    console.error(`[request ${c.get('requestId')}]`, error)
+    return c.json(
+      { error: 'This is not allowed for the merchant in its current state.' },
+      409,
+    )
+  }
+
+  // Queue, storage-object and resubmission-link triggers (0104-0106).
+  if (databaseError?.code === 'P7603') {
+    console.error(`[request ${c.get('requestId')}]`, error)
+    return c.json(
+      { error: 'This change is not allowed in its current state.' },
+      409,
+    )
+  }
+
   if (databaseError?.code === '23505') {
     return c.json(
       {

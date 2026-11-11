@@ -28,6 +28,7 @@ import { merchantFormRoutes } from './modules/merchants/form.routes'
 import { merchantRoutes } from './modules/merchants/merchants.routes'
 import { resubmissionRoutes } from './modules/merchants/public-resubmission.routes'
 import { purgeExpiredSubmissionAttempts } from './modules/merchants/submission-attempts.service'
+import { recoverStaleMerchantRequests } from './modules/cases/merchant-request.service'
 import { notificationRoutes } from './modules/notifications/notifications.routes'
 import { queueRoutes } from './modules/queues/queues.routes'
 import { userRoutes } from './modules/users/users.routes'
@@ -285,12 +286,38 @@ function drainCaseFlowCloseJobs() {
 setCaseFlowCloseJobDrainHandler(requestCaseFlowWorkerRun)
 void drainCaseFlowCloseJobs()
 
+// Resolves merchant requests (resubmission and Agreement sends, manual
+// proofs) that a crash or error left open: runs at startup, so a restart
+// mid-send is recovered, then every 5 minutes.
+let merchantRequestRecovery: Promise<void> | null = null
+function recoverMerchantRequests() {
+  if (merchantRequestRecovery || shuttingDown) return
+  merchantRequestRecovery = withQueryTags(
+    { job: 'merchant-request-recovery' },
+    async () => {
+      await recoverStaleMerchantRequests()
+    },
+  )
+    .catch((error) => {
+      console.error('[merchant-request.recovery]', error)
+    })
+    .finally(() => {
+      merchantRequestRecovery = null
+    })
+}
+recoverMerchantRequests()
+const merchantRequestRecoveryInterval = setInterval(
+  recoverMerchantRequests,
+  5 * 60 * 1000,
+)
+
 async function shutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
   console.info(`[shutdown] ${signal} received; draining background work.`)
 
   clearInterval(refreshTokenCleanupInterval)
+  clearInterval(merchantRequestRecoveryInterval)
   if (caseFlowWorkerTimer) {
     clearTimeout(caseFlowWorkerTimer)
     caseFlowWorkerTimer = null

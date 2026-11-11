@@ -1,6 +1,7 @@
 import { and, asc, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
+import { agreementEmailStatusSql } from '../cases/agreement-email-status'
 import {
   agreementCaseDetails,
   cases,
@@ -486,7 +487,8 @@ function awaitingPhysicalAgreementConditions() {
   return [
     eq(queues.workflowType, 'agreement'),
     eq(cases.status, 'awaiting_merchant'),
-    eq(agreementCaseDetails.emailStatus, 'sent'),
+    // Not a bounced email: that one never reached the client.
+    sql`${agreementEmailStatusSql} = 'sent'`,
     isNull(agreementCaseDetails.receivedAgreementFileId),
     isNull(merchants.deletedAt),
   ]

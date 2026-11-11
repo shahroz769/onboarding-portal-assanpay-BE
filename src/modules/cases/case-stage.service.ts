@@ -11,7 +11,11 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { resolveUniqueStageForStatus } from '../queues/queue-stage-defaults'
-import { isValidStatusTransition } from './cases.schemas'
+import { isManualStatusChangeAllowed } from './case-state-machine'
+import {
+  LIVE_WITHOUT_TESTING_MESSAGE,
+  writeMerchantState,
+} from '../merchants/merchant-state-machine'
 import type {
   CaseStatusValue,
   CloseUnsuccessfulInput,
@@ -70,7 +74,7 @@ export async function updateCaseStatus(
 
   const currentStatus = existing.status as CaseStatusValue
 
-  if (!isValidStatusTransition(currentStatus, input.status)) {
+  if (!isManualStatusChangeAllowed(currentStatus, input.status)) {
     throw new AppError(
       400,
       `Invalid status transition from "${currentStatus}" to "${input.status}".`,
@@ -85,6 +89,7 @@ export async function updateCaseStatus(
   const targetStage = resolveUniqueStageForStatus(stages, input.status)
 
   const updated = await transitionCaseState({
+    event: 'manual_resume',
     caseId,
     actorId: userId,
     targetStage,
@@ -497,6 +502,8 @@ export async function advanceStage(caseId: string, userId: string) {
     targetStage.category === 'closed' ? 'closed_successful' : 'stage_advanced'
 
   const result = await transitionCaseState({
+    event:
+      targetStage.category === 'closed' ? 'close_successful' : 'advance_stage',
     caseId,
     actorId: userId,
     targetStage,
@@ -520,24 +527,23 @@ export async function advanceStage(caseId: string, userId: string) {
       }
 
       if (queue != null && queue.workflowType === 'testing') {
-        await tx
-          .update(merchants)
-          .set({
-            status: 'testing',
-            updatedAt: now,
-          })
-          .where(eq(merchants.id, caseData.merchantId))
+        await writeMerchantState(tx, {
+          event: 'testing_completed',
+          where: eq(merchants.id, caseData.merchantId),
+          set: { updatedAt: now },
+        })
       }
 
       if (queue != null && queue.workflowType === 'live') {
-        await tx
-          .update(merchants)
-          .set({
-            status: 'live',
-            liveAt: now,
-            updatedAt: now,
-          })
-          .where(eq(merchants.id, caseData.merchantId))
+        // Rolls the close back unless the merchant is in testing.
+        const [wentLive] = await writeMerchantState(tx, {
+          event: 'went_live',
+          where: eq(merchants.id, caseData.merchantId),
+          set: { liveAt: now, updatedAt: now },
+        })
+        if (!wentLive) {
+          throw new AppError(409, LIVE_WITHOUT_TESTING_MESSAGE)
+        }
       }
     },
   })
@@ -609,6 +615,7 @@ export async function closeUnsuccessful(
   const now = new Date()
 
   return transitionCaseState({
+    event: 'close_unsuccessful',
     caseId,
     actorId: userId,
     targetStage: terminalStage,

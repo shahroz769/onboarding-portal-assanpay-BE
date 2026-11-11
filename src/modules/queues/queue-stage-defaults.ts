@@ -7,6 +7,7 @@ import type {
   CaseStatusValue,
   StageCategoryValue,
 } from '../cases/cases.schemas'
+import { getStatusForStage } from '../cases/case-state-machine'
 import {
   getStageTemplateDefinitions,
   type QueueWorkflowType,
@@ -22,37 +23,6 @@ type QueueStageSeedInput = {
   name: string
   slug: string
   workflowType: QueueWorkflowType
-}
-
-function getStatusForStage(
-  stage: Pick<QueueStage, 'category' | 'slug' | 'name'>,
-): CaseStatusValue {
-  const normalizedSlug = stage.slug.trim().toLowerCase()
-  const normalizedName = stage.name.trim().toLowerCase()
-
-  if (
-    normalizedSlug === 'awaiting_merchant' ||
-    normalizedSlug === 'awaiting-merchant' ||
-    normalizedName === 'awaiting client' ||
-    normalizedName === 'awaiting merchant'
-  ) {
-    return 'awaiting_merchant'
-  }
-
-  if (normalizedSlug === 'working' || normalizedName === 'working') {
-    return 'working'
-  }
-
-  switch (stage.category) {
-    case 'new':
-      return 'new'
-    case 'in_progress':
-      return 'working'
-    case 'closed':
-      return 'closed'
-  }
-
-  return 'working'
 }
 
 function stageMatchesStatus(

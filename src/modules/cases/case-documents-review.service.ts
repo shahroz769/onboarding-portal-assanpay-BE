@@ -6,7 +6,6 @@ import {
   caseFieldReviews,
   documentReviewDetails,
   caseHistory,
-  caseResubmissionTokens,
   cases,
   merchantDocuments,
   merchants,
@@ -16,7 +15,7 @@ import {
 import { AppError } from '../../lib/errors'
 import { env } from '../../config/env'
 import { ensureQueueStages } from '../queues/queue-stage-defaults'
-import { sendEmail } from '../email/email.service'
+import { deliverEmail, prepareEmail } from '../email/email.service'
 import {
   DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
   DocumentResubmissionEmail,
@@ -36,7 +35,15 @@ import {
   isDocumentFieldName,
   isMerchantFieldName,
 } from './field-labels'
-import { issueToken } from './case-resubmission-tokens.service'
+import {
+  issueToken,
+  issueTokenInTransaction,
+} from './case-resubmission-tokens.service'
+import {
+  openMerchantRequest,
+  resolveMerchantRequest,
+} from './merchant-request.service'
+import { writeCaseState } from './case-state-machine'
 import type {
   SaveDocumentReviewSubMerchantInput,
   SaveFieldReviewsInput,
@@ -633,125 +640,86 @@ export async function sendForResubmission(
     )
   }
 
+  // 5. Reserve the case, issue the link and record the email in one
+  // transaction, with a request that is resolved once the send finishes (or
+  // by recovery if it never does).
   const reservedAt = new Date()
-  const [reservedCase] = await db
-    .update(cases)
-    .set({
-      status: 'awaiting_merchant',
-      currentStageId: awaitingStage.id,
-      updatedAt: reservedAt,
+  const reserved = await db.transaction(async (tx) => {
+    const [reservedCase] = await writeCaseState(tx, {
+      event: 'request_merchant',
+      where: eq(cases.id, caseId),
+      set: { currentStageId: awaitingStage.id, updatedAt: reservedAt },
     })
-    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-    .returning({ id: cases.id })
 
-  if (!reservedCase) {
-    throw new AppError(409, 'This case has already been sent for resubmission.')
-  }
+    if (!reservedCase) {
+      throw new AppError(
+        409,
+        'This case has already been sent for resubmission.',
+      )
+    }
 
-  // 5. Issue token
-  const issued = await issueToken(caseId, userId)
-
-  const preparedAt = new Date()
-
-  // 6. Send the email
-  const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
-  const emailResult = await sendEmail({
-    to: recipient.email,
-    ...extraRecipients,
-    subject: DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
-    template: 'document-resubmission',
-    react: DocumentResubmissionEmail({
-      merchantName: row.merchantName,
-      ownerName: row.merchantOwnerName,
-      rejections,
-      resubmissionUrl,
-    }),
-    caseId,
-    merchantId: row.merchantId,
-    idempotencyKey: `resubmit/${caseId}/${issued.tokenId}`,
-    metadata: {
-      tokenId: issued.tokenId,
-      rejectedFields: rejectedFieldNames,
-      recipientEmailType: recipient.recipientEmailType,
-    },
-  })
-
-  // 7a. Email failed — invalidate the token, leave case in working
-  if (emailResult.status === 'failed') {
-    await db
-      .update(caseResubmissionTokens)
-      .set({ consumedAt: new Date() })
-      .where(eq(caseResubmissionTokens.id, issued.tokenId))
-
-    await db
-      .update(cases)
-      .set({
-        status: 'working',
-        currentStageId: row.currentStageId,
-        updatedAt: new Date(),
-      })
-      .where(eq(cases.id, caseId))
-
-    await db.insert(caseHistory).values({
+    const issued = await issueTokenInTransaction(tx, caseId, userId)
+    const email = buildEmail(issued)
+    const prepared = await prepareEmail(tx, email)
+    const requestId = await openMerchantRequest(tx, {
+      kind: 'document_resubmission',
       caseId,
       actorId: userId,
-      action: 'resubmission_email_failed',
+      releaseStageId: row.currentStageId,
+      tokenId: issued.tokenId,
+      emailLogId: prepared.emailLogId,
       details: {
-        tokenId: issued.tokenId,
-        emailLogId: emailResult.emailLogId,
-        error: emailResult.error ?? null,
+        rejectedFields: rejectedFieldNames,
+        rejectedFieldLabels,
+        rejectedFieldDetails,
+        recipient: recipient.email,
+        recipientEmailType: recipient.recipientEmailType,
       },
     })
+    return { email, prepared, requestId }
+  })
 
+  function buildEmail(issued: { token: string; tokenId: string }) {
+    const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
     return {
-      status: 'failed',
-      emailLogId: emailResult.emailLogId,
-      error: emailResult.error,
+      to: recipient.email,
+      ...extraRecipients,
+      subject: DOCUMENT_RESUBMISSION_EMAIL_SUBJECT,
+      template: 'document-resubmission',
+      react: DocumentResubmissionEmail({
+        merchantName: row.merchantName,
+        ownerName: row.merchantOwnerName,
+        rejections,
+        resubmissionUrl,
+      }),
+      caseId,
+      merchantId: row.merchantId,
+      idempotencyKey: `resubmit/${caseId}/${issued.tokenId}`,
+      metadata: {
+        tokenId: issued.tokenId,
+        rejectedFields: rejectedFieldNames,
+        recipientEmailType: recipient.recipientEmailType,
+      },
     }
   }
 
-  // 7b. Email sent — record the rejection batch and move case to awaiting_merchant
-  const sentAt = new Date()
-  await db.transaction(async (tx) => {
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'rejections_prepared',
-      details: {
-        total: rejectedFieldNames.length,
-        rejected: rejectedFieldNames.length,
-        approved: 0,
-        rejectedFields: rejectedFieldNames,
-        rejectedFieldLabels,
-        rejectedFieldDetails,
-      },
-      createdAt: preparedAt,
-    })
+  // 6. Send, then resolve: on failure the case returns to working and the
+  // link is invalidated; on success the history is written.
+  const emailResult = await deliverEmail(reserved.prepared, reserved.email)
+  await resolveMerchantRequest(
+    reserved.requestId,
+    emailResult.status === 'sent'
+      ? { status: 'sent' }
+      : { status: 'failed', error: emailResult.error ?? null },
+  )
 
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'resubmission_email_sent',
-      details: {
-        tokenId: issued.tokenId,
-        rejectedFields: rejectedFieldNames,
-        rejectedFieldLabels,
-        rejectedFieldDetails,
+  return emailResult.status === 'sent'
+    ? { status: 'sent', emailLogId: emailResult.emailLogId }
+    : {
+        status: 'failed',
         emailLogId: emailResult.emailLogId,
-        recipient: recipient.email,
-        cc: emailResult.cc,
-        bcc: emailResult.bcc,
-        replyTo: emailResult.replyTo,
-        recipientEmailType: recipient.recipientEmailType,
-      },
-      createdAt: sentAt,
-    })
-  })
-
-  return {
-    status: 'sent',
-    emailLogId: emailResult.emailLogId,
-  }
+        error: emailResult.error,
+      }
 }
 
 // ─── Resubmission Links ─────────────────────────────────────────────────────

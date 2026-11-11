@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, isNull } from 'drizzle-orm'
+import { and, count, eq, inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 
 import { getDb } from '../../db/client'
@@ -18,15 +18,16 @@ import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import {
   cleanupFailedAttemptObjects,
   createStorageAttemptId,
-  listAttemptStorageObjects,
-  markStorageObjectsLifecycle,
+  markAttemptObjectsCurrent,
   recordStorageObject,
   supersedeStorageObjects,
 } from '../../lib/storage/ownership'
 import type { AppEnv } from '../../types/auth'
 import {
   assertResubmissionTargetOpen,
+  consumeResubmissionTokens,
   INACTIVE_RESUBMISSION_LINK_MESSAGE,
+  USED_RESUBMISSION_LINK_MESSAGE,
   validateToken,
 } from '../cases/case-resubmission-tokens.service'
 import {
@@ -36,6 +37,7 @@ import {
   MERCHANT_FIELD_LABELS,
 } from '../cases/field-labels'
 import { getResubmissionContext } from '../cases/case-documents-review.service'
+import { writeCaseState } from '../cases/case-state-machine'
 import {
   assertPublicUploadFile,
   businessWebsiteSchema,
@@ -562,33 +564,26 @@ resubmissionRoutes.post('/:token', async (c) => {
       // Concurrent attempts may upload into isolated attempt folders, but only
       // the request that atomically consumes the token can commit; the other
       // request falls through to failed-attempt storage cleanup.
-      const [consumedToken] = await tx
-        .update(caseResubmissionTokens)
-        .set({ consumedAt: now })
-        .where(
-          and(
-            eq(caseResubmissionTokens.id, validated.tokenId),
-            isNull(caseResubmissionTokens.consumedAt),
-          ),
-        )
-        .returning({ id: caseResubmissionTokens.id })
+      const [consumedToken] = await consumeResubmissionTokens(
+        tx,
+        eq(caseResubmissionTokens.id, validated.tokenId),
+        'used',
+        now,
+      )
 
       if (!consumedToken) {
-        throw new AppError(410, 'This resubmission link has already been used.')
+        throw new AppError(410, USED_RESUBMISSION_LINK_MESSAGE)
       }
 
       // Clean up any legacy sibling tokens created before the one-active-token
       // constraint was deployed. They must not survive into a later rejection
       // round.
-      await tx
-        .update(caseResubmissionTokens)
-        .set({ consumedAt: now })
-        .where(
-          and(
-            eq(caseResubmissionTokens.caseId, caseRow.id),
-            isNull(caseResubmissionTokens.consumedAt),
-          ),
-        )
+      await consumeResubmissionTokens(
+        tx,
+        eq(caseResubmissionTokens.caseId, caseRow.id),
+        'superseded',
+        now,
+      )
 
       await tx
         .update(merchants)
@@ -633,6 +628,8 @@ resubmissionRoutes.post('/:token', async (c) => {
             googleDriveWebViewLink: info.uploaded.webViewLink,
             googleDriveDownloadLink: info.uploaded.downloadLink,
             googleDriveFolderId: info.uploaded.folderId,
+            // A new file is unreviewed, like its field review below.
+            status: 'pending',
             updatedAt: now,
           })
           .where(eq(merchantDocuments.id, info.docId))
@@ -675,19 +672,11 @@ resubmissionRoutes.post('/:token', async (c) => {
       // that was unassigned meanwhile (back to new) keeps its status, so it
       // never becomes working without an owner.
       if (lockedCase.status === 'awaiting_merchant') {
-        await tx
-          .update(cases)
-          .set({
-            status: 'working',
-            currentStageId: workingStage.id,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(cases.id, caseRow.id),
-              eq(cases.status, 'awaiting_merchant'),
-            ),
-          )
+        await writeCaseState(tx, {
+          event: 'merchant_responded',
+          where: eq(cases.id, caseRow.id),
+          set: { currentStageId: workingStage.id, updatedAt: now },
+        })
       } else {
         await tx
           .update(cases)
@@ -720,13 +709,10 @@ resubmissionRoutes.post('/:token', async (c) => {
           ),
         },
       })
-    })
 
-    const attemptObjects = await listAttemptStorageObjects(attemptId)
-    await markStorageObjectsLifecycle(
-      attemptObjects.map((object) => object.providerObjectId),
-      'current',
-    )
+      // Committed with the documents, so a later failure never cleans them up.
+      await markAttemptObjectsCurrent(tx, attemptId)
+    })
 
     const supersededFileIds = [
       ...Array.from(uploadedByField.values()).map(

@@ -37,6 +37,11 @@ import {
   calculateCaseFlowRetryDelay,
   classifyCaseFlowFailure,
 } from './case-flow-retry'
+import { initialCaseState } from './case-state-machine'
+import {
+  canMerchantOpenCases,
+  lockMerchantForNewCase,
+} from '../merchants/merchant-state-machine'
 
 export async function getMerchantFlowVersionId(
   tx: DbTransaction,
@@ -442,15 +447,8 @@ async function createConfiguredCase(
     subMerchant: FlowSubMerchant | null
   },
 ): Promise<CreatedFlowCase> {
-  const merchant = await tx.query.merchants.findFirst({
-    where: eq(merchants.id, input.merchantId),
-    columns: {
-      id: true,
-      businessName: true,
-      priority: true,
-      flowVersionId: true,
-    },
-  })
+  // 404 if missing, 409 if terminated; locked against a concurrent termination.
+  const merchant = await lockMerchantForNewCase(tx, input.merchantId)
 
   const queue = await tx.query.queues.findFirst({
     where: eq(queues.id, input.targetQueueId),
@@ -464,9 +462,6 @@ async function createConfiguredCase(
     },
   })
 
-  if (!merchant) {
-    throw new AppError(404, 'Merchant not found.')
-  }
   if (!queue) {
     throw new AppError(404, 'Target queue not found.')
   }
@@ -503,9 +498,7 @@ async function createConfiguredCase(
       queueId: queue.id,
       merchantId: merchant.id,
       subMerchantId: input.subMerchant?.id ?? null,
-      ownerId: null,
-      currentStageId: initialStage.id,
-      status: 'new',
+      ...initialCaseState(initialStage.id),
       priority: merchant.priority,
       updatedAt: now,
     })
@@ -979,6 +972,18 @@ export async function processCaseFlowCloseJobs(batchSize = 5) {
           await jobTx.execute(
             sql`select pg_advisory_xact_lock(hashtext(${job.merchantId}), hashtext(${job.targetQueueId}))`,
           )
+
+          // A terminated merchant gets no new cases; finish the job instead
+          // of retrying it forever.
+          const [merchant] = await jobTx
+            .select({
+              status: merchants.status,
+              deletedAt: merchants.deletedAt,
+            })
+            .from(merchants)
+            .where(eq(merchants.id, job.merchantId))
+            .limit(1)
+          if (merchant && !canMerchantOpenCases(merchant)) return
 
           const flowVersionId = await getMerchantFlowVersionId(
             jobTx,

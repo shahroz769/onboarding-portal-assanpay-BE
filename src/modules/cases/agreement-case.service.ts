@@ -12,7 +12,7 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
-import { sendEmail } from '../email/email.service'
+import { deliverEmail, prepareEmail } from '../email/email.service'
 import {
   AgreementEmail,
   agreementEmailSubject,
@@ -27,6 +27,12 @@ import {
   AGREEMENT_FINAL_FILE_KIND,
 } from './agreement.config'
 import { assertCanWorkCase } from './case-access.service'
+import { writeCaseState } from './case-state-machine'
+import { getAgreementEmailStatus } from './agreement-email-status'
+import {
+  openMerchantRequest,
+  resolveMerchantRequest,
+} from './merchant-request.service'
 
 import {
   assertAutoEmailEnabled,
@@ -149,7 +155,8 @@ export async function uploadAgreementFinalAgreement(
   const existingDetails = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
   })
-  if (existingDetails?.emailStatus === 'sent') {
+  // A bounced email reads as failed, so its Final Agreement can be replaced.
+  if ((await getAgreementEmailStatus(db, caseId)) === 'sent') {
     throw new AppError(
       400,
       'The Final Agreement cannot be replaced after the email has been sent.',
@@ -315,20 +322,7 @@ export async function sendAgreementToClient(
     )
   }
 
-  const [reservedCase] = await db
-    .update(cases)
-    .set({
-      status: 'awaiting_merchant',
-      currentStageId: awaitingStage.id,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(cases.id, caseId), eq(cases.status, 'working')))
-    .returning({ id: cases.id })
-  if (!reservedCase) {
-    throw new AppError(409, 'This case has already been sent to the merchant.')
-  }
-
-  const emailResult = await sendEmail({
+  const email = {
     to: recipient.email,
     ...extraRecipients,
     subject: agreementEmailSubject(caseRow.merchantName),
@@ -351,52 +345,48 @@ export async function sendAgreementToClient(
       remarks,
       recipientEmailType: recipient.recipientEmailType,
     },
-  })
-
-  const now = new Date()
-  if (emailResult.status === 'failed') {
-    await db
-      .update(cases)
-      .set({
-        status: 'working',
-        currentStageId: caseRow.currentStageId,
-        updatedAt: now,
-      })
-      .where(eq(cases.id, caseId))
   }
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(agreementCaseDetails)
-      .set({
-        emailStatus: emailResult.status,
-        emailLogId: emailResult.emailLogId,
-        emailSentAt: emailResult.status === 'sent' ? now : null,
-        emailRecipient: recipient.email,
-        lastRejectionRemarks: remarks,
-        updatedAt: now,
-      })
-      .where(eq(agreementCaseDetails.caseId, caseId))
+  // Reserve the case and record the email together, with a request that is
+  // resolved once the send finishes (or by recovery if it never does).
+  const reserved = await db.transaction(async (tx) => {
+    const [reservedCase] = await writeCaseState(tx, {
+      event: 'request_merchant',
+      where: eq(cases.id, caseId),
+      set: { currentStageId: awaitingStage.id },
+    })
+    if (!reservedCase) {
+      throw new AppError(
+        409,
+        'This case has already been sent to the merchant.',
+      )
+    }
 
-    await tx.insert(caseHistory).values({
+    const prepared = await prepareEmail(tx, email)
+    const requestId = await openMerchantRequest(tx, {
+      kind: 'agreement',
       caseId,
       actorId: userId,
-      action:
-        emailResult.status === 'sent'
-          ? 'agreement_email_sent'
-          : 'agreement_email_failed',
+      releaseStageId: caseRow.currentStageId,
+      emailLogId: prepared.emailLogId,
       details: {
-        emailLogId: emailResult.emailLogId,
         recipient: recipient.email,
-        cc: emailResult.cc,
-        bcc: emailResult.bcc,
-        replyTo: emailResult.replyTo,
         recipientEmailType: recipient.recipientEmailType,
         remarks,
-        error: emailResult.error ?? null,
       },
     })
+    return { prepared, requestId }
   })
+
+  // Send, then resolve: on failure the case returns to working; either way
+  // the Agreement details and history record the outcome.
+  const emailResult = await deliverEmail(reserved.prepared, email)
+  await resolveMerchantRequest(
+    reserved.requestId,
+    emailResult.status === 'sent'
+      ? { status: 'sent' }
+      : { status: 'failed', error: emailResult.error ?? null },
+  )
 
   if (emailResult.status === 'failed') {
     return {
@@ -431,7 +421,10 @@ export async function uploadReceivedAgreement(
   const details = await db.query.agreementCaseDetails.findFirst({
     where: eq(agreementCaseDetails.caseId, caseId),
   })
-  if (!details?.finalAgreementFileId || details.emailStatus !== 'sent') {
+  if (
+    !details?.finalAgreementFileId ||
+    (await getAgreementEmailStatus(db, caseId)) !== 'sent'
+  ) {
     throw new AppError(
       400,
       'Send the Agreement email before uploading the received copy.',
@@ -513,14 +506,11 @@ export async function uploadReceivedAgreement(
       .set({ receivedAgreementFileId: caseFile.id, updatedAt: now })
       .where(eq(agreementCaseDetails.caseId, caseId))
 
-    await tx
-      .update(cases)
-      .set({
-        status: 'working',
-        currentStageId: workingStage.id,
-        updatedAt: now,
-      })
-      .where(and(eq(cases.id, caseId), eq(cases.status, 'awaiting_merchant')))
+    await writeCaseState(tx, {
+      event: 'merchant_responded',
+      where: eq(cases.id, caseId),
+      set: { currentStageId: workingStage.id, updatedAt: now },
+    })
 
     await tx.insert(caseHistory).values({
       caseId,

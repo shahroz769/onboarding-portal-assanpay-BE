@@ -4,6 +4,7 @@ import {
   type QueueLifecycle,
   type QueueWorkflowType,
 } from '../../contracts/queues'
+import { AppError } from '../../lib/errors'
 
 export {
   QUEUE_LIFECYCLES,
@@ -14,6 +15,37 @@ export {
 
 export function lifecycleToIsActive(lifecycle: QueueLifecycle): boolean {
   return lifecycle === 'active'
+}
+
+/**
+ * The queue lifecycle. A draft queue has never been activated; once it is
+ * active or inactive it never returns to draft. Activation also needs the
+ * readiness checks in queues.service. Migration 0104 enforces the same moves
+ * and keeps is_active mirrored.
+ *
+ *   draft ──▶ active ◀──▶ inactive ◀── draft
+ */
+export const QUEUE_LIFECYCLE_TRANSITIONS: Record<
+  QueueLifecycle,
+  readonly QueueLifecycle[]
+> = {
+  draft: ['draft', 'active', 'inactive'],
+  active: ['active', 'inactive'],
+  inactive: ['inactive', 'active'],
+}
+
+/**
+ * The lifecycle columns to write for a move, with is_active mirrored.
+ * Throws 409 for a move the lifecycle does not allow.
+ */
+export function queueLifecycleFields(
+  current: QueueLifecycle,
+  next: QueueLifecycle,
+) {
+  if (!QUEUE_LIFECYCLE_TRANSITIONS[current].includes(next)) {
+    throw new AppError(409, `A queue cannot move from ${current} to ${next}.`)
+  }
+  return { lifecycle: next, isActive: lifecycleToIsActive(next) }
 }
 
 export function isActiveToLifecycle(isActive: boolean): QueueLifecycle {

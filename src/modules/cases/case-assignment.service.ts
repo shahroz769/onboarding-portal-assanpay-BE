@@ -6,10 +6,14 @@ import { AppError } from '../../lib/errors'
 import { notifyAssignment } from '../notifications/notifications.service'
 import type { CaseStatusValue } from './cases.schemas'
 import { assertOwnerCanWorkCases } from './case-access.service'
+import { writeCaseState } from './case-state-machine'
 import {
   loadQueueStageForCase,
   transitionCaseState,
 } from './case-transition.service'
+
+const AWAITING_MERCHANT_UNASSIGN_MESSAGE =
+  'This case is waiting on the merchant and cannot be unassigned. Transfer it to another owner instead.'
 
 export async function bulkAssignCases(
   caseIds: string[],
@@ -66,6 +70,18 @@ export async function bulkAssignCases(
     )
     if (closedCase) {
       throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
+    }
+
+    // Rows are locked above, so the status cannot change before the update.
+    if (
+      ownerId === null &&
+      existingCases.some(
+        (caseRecord) =>
+          caseRecord.status === 'awaiting_merchant' &&
+          caseRecord.ownerId !== null,
+      )
+    ) {
+      throw new AppError(409, AWAITING_MERCHANT_UNASSIGN_MESSAGE)
     }
 
     await assertOwnerCanWorkCases(ownerId, uniqueCaseIds, tx)
@@ -138,26 +154,27 @@ export async function bulkAssignCases(
         if (!stages) {
           throw new AppError(500, 'Queue stages are not configured.')
         }
-        await tx
-          .update(cases)
-          .set({
+        await writeCaseState(tx, {
+          event: 'return_to_pool',
+          where: inArray(cases.id, queueCaseIds),
+          set: {
             ownerId: null,
             currentStageId: stages.newStageId,
-            status: 'new',
             closeOutcome: null,
             closeReason: null,
             closedAt: null,
             slaBreached: null,
             updatedAt: now,
-          })
-          .where(inArray(cases.id, queueCaseIds))
+          },
+        })
       }
     } else {
       const changedCaseIds = changedCases.map((caseRecord) => caseRecord.id)
-      await tx
-        .update(cases)
-        .set({ ownerId, updatedAt: now })
-        .where(inArray(cases.id, changedCaseIds))
+      await writeCaseState(tx, {
+        event: 'change_owner',
+        where: inArray(cases.id, changedCaseIds),
+        set: { ownerId, updatedAt: now },
+      })
 
       for (const queueId of queueIds) {
         const workingCaseIds = changedCases
@@ -172,14 +189,11 @@ export async function bulkAssignCases(
         if (!stages) {
           throw new AppError(500, 'Queue stages are not configured.')
         }
-        await tx
-          .update(cases)
-          .set({
-            currentStageId: stages.workingStageId,
-            status: 'working',
-            updatedAt: now,
-          })
-          .where(inArray(cases.id, workingCaseIds))
+        await writeCaseState(tx, {
+          event: 'start_work',
+          where: inArray(cases.id, workingCaseIds),
+          set: { currentStageId: stages.workingStageId, updatedAt: now },
+        })
       }
     }
 
@@ -312,6 +326,16 @@ export async function assignCase(
     throw new AppError(400, 'Closed cases cannot be assigned or transferred.')
   }
 
+  // The status guard in transitionCaseState rejects a status that changed
+  // after this read, so this check cannot be raced.
+  if (
+    ownerId === null &&
+    existingCase.ownerId !== null &&
+    existingCase.status === 'awaiting_merchant'
+  ) {
+    throw new AppError(409, AWAITING_MERCHANT_UNASSIGN_MESSAGE)
+  }
+
   if (ownerId && !nextOwner) {
     throw new AppError(404, 'User not found.')
   }
@@ -370,6 +394,12 @@ export async function assignCase(
         : 'owner_assigned'
 
   const updated = await transitionCaseState({
+    event:
+      ownerId === null
+        ? 'return_to_pool'
+        : shouldStartWorking
+          ? 'start_work'
+          : 'change_owner',
     caseId,
     actorId,
     targetStage,
@@ -567,6 +597,7 @@ export async function takeOwnership(caseId: string, userId: string) {
   }
 
   return transitionCaseState({
+    event: 'start_work',
     caseId,
     actorId: userId,
     targetStage: nextStage,

@@ -65,6 +65,9 @@ import {
   refreshStaleCaseEmailDelivery,
 } from './case-email-delivery'
 import { generateCaseNumber } from './case-number'
+import { initialCaseState, writeCaseState } from './case-state-machine'
+import { agreementEmailStatusSql } from './agreement-email-status'
+import { lockMerchantForNewCase } from '../merchants/merchant-state-machine'
 import {
   ensureInheritedSubMerchantFormDetails,
   getCaseDetailMerchant,
@@ -105,15 +108,8 @@ export async function createCaseInTransaction(
   input: CreateCaseInput,
   actorId?: string,
 ) {
-  // Verify merchant exists
-  const merchant = await tx.query.merchants.findFirst({
-    where: eq(merchants.id, input.merchantId),
-    columns: { id: true, businessName: true, priority: true },
-  })
-
-  if (!merchant) {
-    throw new AppError(404, 'Merchant not found.')
-  }
+  // 404 if missing, 409 if terminated; locked against a concurrent termination.
+  const merchant = await lockMerchantForNewCase(tx, input.merchantId)
 
   // Verify queue exists
   const queue = await tx.query.queues.findFirst({
@@ -208,9 +204,7 @@ export async function createCaseInTransaction(
       queueId: input.queueId,
       merchantId: input.merchantId,
       subMerchantId: selectedSubMerchant?.id ?? null,
-      ownerId: null,
-      currentStageId: initialStage.id,
-      status: 'new',
+      ...initialCaseState(initialStage.id),
       priority: merchant.priority,
       updatedAt: new Date(),
     })
@@ -705,7 +699,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
             draftKey: agreementCaseDetails.draftKey,
             draftLabel: agreementCaseDetails.draftLabel,
             draftUrl: agreementCaseDetails.draftUrl,
-            emailStatus: agreementCaseDetails.emailStatus,
+            emailStatus: agreementEmailStatusSql,
             emailLogId: agreementCaseDetails.emailLogId,
             emailSentAt: agreementCaseDetails.emailSentAt,
             emailRecipient: agreementCaseDetails.emailRecipient,
@@ -801,13 +795,11 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     }) ?? null
 
   if (currentStage && currentStage.id !== caseData.currentStageId) {
-    await db
-      .update(cases)
-      .set({
-        currentStageId: currentStage.id,
-        updatedAt: new Date(),
-      })
-      .where(eq(cases.id, caseId))
+    await writeCaseState(db, {
+      event: 'repair_stage',
+      where: eq(cases.id, caseId),
+      set: { currentStageId: currentStage.id },
+    })
   }
 
   let agreementRecord = agreement

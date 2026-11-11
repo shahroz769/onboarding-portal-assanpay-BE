@@ -13,6 +13,7 @@ import {
   cleanupFailedAttemptObjects,
   createStorageAttemptId,
   finalizeRootClaim,
+  markAttemptObjectsCurrent,
 } from '../../lib/storage/ownership'
 
 export const PRIVATE_KYC_PENDING_PATH = [
@@ -133,24 +134,30 @@ export async function ensureMerchantRootFolder(input: {
       parentProviderObjectId: folder.parentFolderId,
     })
 
-    const updated = await db
-      .update(merchants)
-      .set(
-        input.visibility === 'public'
-          ? {
-              googleDrivePublicFolderId: folder.folderId,
-              updatedAt: new Date(),
-            }
-          : {
-              googleDrivePrivateFolderId: folder.folderId,
-              updatedAt: new Date(),
-            },
-      )
-      .where(andMerchantMissingRoot(input.merchantId, input.visibility))
-      .returning({
-        googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
-        googleDrivePublicFolderId: merchants.googleDrivePublicFolderId,
-      })
+    // The root becomes current with the merchant row that points at it; a
+    // root that lost the race stays provisioning and is cleaned up below.
+    const updated = await db.transaction(async (tx) => {
+      const rows = await tx
+        .update(merchants)
+        .set(
+          input.visibility === 'public'
+            ? {
+                googleDrivePublicFolderId: folder.folderId,
+                updatedAt: new Date(),
+              }
+            : {
+                googleDrivePrivateFolderId: folder.folderId,
+                updatedAt: new Date(),
+              },
+        )
+        .where(andMerchantMissingRoot(input.merchantId, input.visibility))
+        .returning({
+          googleDrivePrivateFolderId: merchants.googleDrivePrivateFolderId,
+          googleDrivePublicFolderId: merchants.googleDrivePublicFolderId,
+        })
+      if (rows.length > 0) await markAttemptObjectsCurrent(tx, attemptId)
+      return rows
+    })
 
     const committedFolderId =
       input.visibility === 'public'

@@ -3,7 +3,7 @@ import { render } from '@react-email/render'
 import { eq, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
-import { getDb } from '../../db/client'
+import { getDb, type DbTransaction } from '../../db/client'
 import { emailLog } from '../../db/schema'
 import { getResendClient } from './email.client'
 
@@ -50,7 +50,27 @@ export type SendEmailResult = {
 export async function sendEmail(
   input: SendEmailInput,
 ): Promise<SendEmailResult> {
-  const db = getDb()
+  const prepared = await prepareEmail(getDb(), input)
+  return deliverEmail(prepared, input)
+}
+
+export type PreparedEmail = {
+  emailLogId: string
+  fromAddress: string
+  toAddress: string
+  cc: string[]
+  bcc: string[]
+  replyTo: string[]
+}
+
+/**
+ * Step 1 of sendEmail: records the email in `email_log` as queued. Pass a
+ * transaction to record it together with the change that triggers it.
+ */
+export async function prepareEmail(
+  db: ReturnType<typeof getDb> | DbTransaction,
+  input: SendEmailInput,
+): Promise<PreparedEmail> {
   const fromAddress = input.from ?? env.EMAIL_FROM
   const replyTo =
     input.replyTo && input.replyTo.length > 0
@@ -64,7 +84,6 @@ export async function sendEmail(
   // BCC are dropped (and kept in metadata) so test sends never reach people.
   const cc = testRecipientOverride ? [] : (input.cc ?? [])
   const bcc = testRecipientOverride ? [] : (input.bcc ?? [])
-  const recipients = { cc, bcc, replyTo }
 
   // 1. Pre-create the log row in `queued` state
   const [logRow] = await db
@@ -94,7 +113,27 @@ export async function sendEmail(
     })
     .returning({ id: emailLog.id })
 
-  const emailLogId = logRow!.id
+  return {
+    emailLogId: logRow!.id,
+    fromAddress,
+    toAddress,
+    cc,
+    bcc,
+    replyTo,
+  }
+}
+
+/**
+ * Step 2 of sendEmail: renders and sends a prepared email, then records the
+ * outcome on its log row. Never throws on provider errors.
+ */
+export async function deliverEmail(
+  prepared: PreparedEmail,
+  input: SendEmailInput,
+): Promise<SendEmailResult> {
+  const db = getDb()
+  const { emailLogId, fromAddress, toAddress, cc, bcc, replyTo } = prepared
+  const recipients = { cc, bcc, replyTo }
 
   const markFailed = async (message: string) => {
     await db

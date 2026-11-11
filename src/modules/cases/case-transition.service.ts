@@ -4,8 +4,12 @@ import { getDb, type DbTransaction } from '../../db/client'
 import { caseHistory, cases, queueStages, queues } from '../../db/schema'
 import type { QueueStage } from '../../db/schema'
 import { AppError } from '../../lib/errors'
-import { getStatusForStage } from '../queues/queue-stage-defaults'
 import type { CaseStatusValue } from './cases.schemas'
+import {
+  getStatusForStage,
+  writeCaseState,
+  type CaseEvent,
+} from './case-state-machine'
 import { assertCanWorkQueue } from './case-access.service'
 import {
   assertCloseBlockersSatisfied,
@@ -56,6 +60,8 @@ type StaleGuard = {
 }
 
 export type TransitionCaseStateInput = {
+  /** The lifecycle event; see CASE_TRANSITIONS in case-state-machine.ts. */
+  event: CaseEvent
   caseId: string
   actorId: string
   targetStage: TargetStage
@@ -191,7 +197,7 @@ export async function transitionCaseState(
       const derivedStatus = getStatusForStage(input.targetStage)
       const now = new Date()
 
-      const updateData: Record<string, unknown> = {
+      const updateData: Parameters<typeof writeCaseState>[1]['set'] = {
         currentStageId: input.targetStage.id,
         status: derivedStatus,
         updatedAt: now,
@@ -287,24 +293,11 @@ export async function transitionCaseState(
         )
       }
 
-      const [updated] = await tx
-        .update(cases)
-        .set(updateData)
-        .where(and(...predicates))
-        .returning({
-          id: cases.id,
-          ownerId: cases.ownerId,
-          currentStageId: cases.currentStageId,
-          queueId: cases.queueId,
-          merchantId: cases.merchantId,
-          status: cases.status,
-          closeOutcome: cases.closeOutcome,
-          closeReason: cases.closeReason,
-          closedAt: cases.closedAt,
-          slaBreached: cases.slaBreached,
-          createdAt: cases.createdAt,
-          updatedAt: cases.updatedAt,
-        })
+      const [updated] = await writeCaseState(tx, {
+        event: input.event,
+        where: and(...predicates)!,
+        set: updateData,
+      })
 
       if (!updated) {
         throw new AppError(
@@ -314,8 +307,18 @@ export async function transitionCaseState(
       }
 
       const updatedRow: LockedCaseRow = {
-        ...updated,
+        id: updated.id,
+        ownerId: updated.ownerId,
+        currentStageId: updated.currentStageId,
+        queueId: updated.queueId,
+        merchantId: updated.merchantId,
         status: updated.status as CaseStatusValue,
+        closeOutcome: updated.closeOutcome,
+        closeReason: updated.closeReason,
+        closedAt: updated.closedAt,
+        slaBreached: updated.slaBreached,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
       }
 
       await tx.insert(caseHistory).values({
