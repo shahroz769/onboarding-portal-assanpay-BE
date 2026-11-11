@@ -40,6 +40,7 @@ import {
   WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX,
   WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX,
 } from './case-constants'
+import { notSentEmailFields } from './case-email-send-state'
 
 export async function getTestingLimitsAppliedEntry(caseId: string) {
   const db = getDb()
@@ -393,10 +394,7 @@ export async function ensureInheritedSubMerchantFormDetails(input: {
         subMerchantKey: subMerchant.id,
         subMerchantName: subMerchant.name,
         draftUrl: subMerchant.googleDriveWebViewLink,
-        emailStatus: 'not_sent',
-        emailLogId: null,
-        emailSentAt: null,
-        emailRecipient: null,
+        ...notSentEmailFields(),
         updatedAt: now,
       })
       .onConflictDoNothing()

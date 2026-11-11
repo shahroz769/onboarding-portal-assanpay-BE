@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, sql } from 'drizzle-orm'
+import { and, count, eq, inArray } from 'drizzle-orm'
 import * as z from 'zod'
 
 import { getDb } from '../../db/client'
@@ -43,6 +43,10 @@ import {
   openMerchantRequest,
   resolveMerchantRequest,
 } from './merchant-request.service'
+import {
+  type ReviewedDocumentMove,
+  recordFieldReviews,
+} from './document-review-state'
 import { writeCaseState } from './case-state-machine'
 import type {
   SaveDocumentReviewSubMerchantInput,
@@ -170,31 +174,16 @@ export async function saveFieldReviews(
       : []
 
   await db.transaction(async (tx) => {
-    await tx
-      .insert(caseFieldReviews)
-      .values(reviewValues)
-      .onConflictDoUpdate({
-        target: [caseFieldReviews.caseId, caseFieldReviews.fieldName],
-        set: {
-          status: sql`excluded.status`,
-          remarks: sql`excluded.remarks`,
-          reviewedBy: userId,
-          updatedAt: now,
-        },
-      })
-
-    for (const move of documentMoves) {
-      await tx
-        .update(merchantDocuments)
-        .set({
-          status: move.status,
-          googleDriveWebViewLink: move.googleDriveWebViewLink,
-          googleDriveDownloadLink: move.googleDriveDownloadLink,
-          googleDriveFolderId: move.googleDriveFolderId,
-          updatedAt: now,
-        })
-        .where(eq(merchantDocuments.id, move.documentId))
-    }
+    // A cleared review (back to pending) resets its document as well.
+    await recordFieldReviews(tx, {
+      caseId,
+      reviewerId: userId,
+      decisions: reviewValues,
+      documentMoves,
+      updatesDocuments:
+        queue != null && queue.workflowType === 'document_review',
+      now,
+    })
 
     if (queue == null || queue.workflowType !== 'document_review') {
       const rejected = reviewValues.filter(
@@ -273,13 +262,7 @@ async function assertReviewableFieldNames(
 
 // ─── Close Unsuccessful ─────────────────────────────────────────────────────
 
-type PreparedDocumentMove = {
-  documentId: string
-  status: 'approved' | 'rejected'
-  googleDriveWebViewLink: string
-  googleDriveDownloadLink: string | null
-  googleDriveFolderId: string
-}
+type PreparedDocumentMove = ReviewedDocumentMove
 
 async function prepareDocumentReviewDocumentMoves(input: {
   caseId: string

@@ -1,14 +1,7 @@
 import { and, asc, eq, gt } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
-import {
-  agreementCaseDetails,
-  caseFieldReviews,
-  cases,
-  merchants,
-  queues,
-  queueStages,
-} from '../../db/schema'
+import { cases, merchants, queues, queueStages } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { resolveUniqueStageForStatus } from '../queues/queue-stage-defaults'
 import { isManualStatusChangeAllowed } from './case-state-machine'
@@ -27,17 +20,12 @@ import {
   loadQueueStageForCase,
   transitionCaseState,
 } from './case-transition.service'
-
 import {
-  ensureInheritedSubMerchantFormDetails,
-  getDocumentReviewDetails,
-  getLatestDocumentReviewDetailsForMerchant,
-  getLiveLimitsAppliedEntry,
-  getMidCreationCredentials,
-  getMidCreationCredentialsSentEntry,
-  getWordpressWebsiteDetails,
-} from './case-detail-lookups'
-import { hasPortalApiCredentials } from './portal-api-credentials.service'
+  closeOnlyFromWorkingMessage,
+  getCloseChecklistBlockers,
+  hasCloseChecklist,
+  loadCloseChecklistFacts,
+} from './case-close-checklist'
 
 export async function updateCaseStatus(
   caseId: string,
@@ -185,270 +173,21 @@ export async function advanceStage(caseId: string, userId: string) {
 
   let targetStage = null
 
-  if (queue != null && queue.workflowType === 'document_review') {
+  if (hasCloseChecklist(queue.workflowType)) {
     if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'Documents-review cases can only be closed successfully from working.',
-      )
+      throw new AppError(400, closeOnlyFromWorkingMessage(queue.workflowType))
     }
 
-    const documentReviewDetail = await getDocumentReviewDetails(caseId)
-    if (!documentReviewDetail?.subMerchants.length) {
-      throw new AppError(
-        400,
-        'Select at least one sub-merchant before closing this case.',
-      )
-    }
-
-    const [activeRejection] = await db
-      .select({ id: caseFieldReviews.id })
-      .from(caseFieldReviews)
-      .where(
-        and(
-          eq(caseFieldReviews.caseId, caseId),
-          eq(caseFieldReviews.status, 'rejected'),
-        ),
-      )
-      .limit(1)
-    if (activeRejection) {
-      throw new AppError(
-        400,
-        'Resolve all rejected fields and documents before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'sub_merchant_form') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'EP Sub-Merchant Form cases can only be closed successfully from working.',
-      )
-    }
-
-    const details = await ensureInheritedSubMerchantFormDetails({
-      caseId,
-      merchantId: caseData.merchantId,
-      actorId: userId,
-    })
-
-    if (!details) {
-      throw new AppError(
-        400,
-        'Select a sub-merchant in the document review case before closing this case.',
-      )
-    }
-
-    if (!details.finalFormId) {
-      throw new AppError(400, 'Upload the Final Form before closing this case.')
-    }
-
-    if (details.emailStatus !== 'sent' || !details.emailProofId) {
-      throw new AppError(
-        400,
-        'Upload the sent-email screenshot before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'agreement') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'Agreement cases can only be closed successfully from working.',
-      )
-    }
-
-    const details = await db.query.agreementCaseDetails.findFirst({
-      where: eq(agreementCaseDetails.caseId, caseId),
-    })
-
-    if (!details?.finalAgreementFileId) {
-      throw new AppError(
-        400,
-        'Upload the Final Agreement before closing this case.',
-      )
-    }
-
-    if (!details.receivedAgreementFileId) {
-      throw new AppError(
-        400,
-        'Upload the signed physical agreement received by the office before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'mid') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'MID Creation cases can only be closed successfully from working.',
-      )
-    }
-
-    const credentials = await getMidCreationCredentials(caseData.merchantId)
-    if (!credentials) {
-      throw new AppError(
-        400,
-        'Save the email, MID, and Branch Code for both merchant IDs before closing this case.',
-      )
-    }
-
-    if (
-      !credentials.branchCode.trim() ||
-      !credentials.internalEmail.trim() ||
-      !credentials.internalBranchCode.trim()
-    ) {
-      throw new AppError(
-        400,
-        'Save the email, MID, and Branch Code for both merchant IDs before closing this case.',
-      )
-    }
-
-    if (!(await hasPortalApiCredentials(caseData.merchantId))) {
-      throw new AppError(
-        400,
-        'Save the API Key and API Secret for the internal merchant ID before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'testing') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'Testing cases can only be closed successfully from working.',
-      )
-    }
-
-    const credentialsSentEntry =
-      await getMidCreationCredentialsSentEntry(caseId)
-    if (!credentialsSentEntry) {
-      throw new AppError(
-        400,
-        'Send merchant portal credentials by auto Resend, manual Gmail, or WhatsApp before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'live') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'Live cases can only be closed successfully from working.',
-      )
-    }
-
-    const limitsAppliedEntry = await getLiveLimitsAppliedEntry(caseId)
-    if (!limitsAppliedEntry) {
-      throw new AppError(
-        400,
-        'Confirm live limits were applied before closing this case.',
-      )
-    }
-
-    targetStage = await db.query.queueStages.findFirst({
-      where: and(
-        eq(queueStages.queueId, caseData.queueId),
-        eq(queueStages.category, 'closed'),
-      ),
-    })
-
-    if (!targetStage) {
-      throw new AppError(500, 'No closed stage configured.')
-    }
-  } else if (queue != null && queue.workflowType === 'wordpress') {
-    if (caseData.status !== 'working' || currentStage.slug !== 'working') {
-      throw new AppError(
-        400,
-        'WordPress Website cases can only be closed successfully from working.',
-      )
-    }
-
-    const details = await getWordpressWebsiteDetails(caseId)
-    if (!details.clonedWebsiteLink) {
-      throw new AppError(
-        400,
-        'Save the cloned WordPress website link before closing this case.',
-      )
-    }
-
-    if (details.screenshots.length === 0) {
-      throw new AppError(
-        400,
-        'Upload the home page screenshot before closing this case.',
-      )
-    }
-
-    const documentReview = await getLatestDocumentReviewDetailsForMerchant(
-      caseData.merchantId,
+    const [blocker] = getCloseChecklistBlockers(
+      await loadCloseChecklistFacts({
+        workflowType: queue.workflowType,
+        caseId,
+        merchantId: caseData.merchantId,
+        actorId: userId,
+      }),
     )
-    if (
-      !documentReview?.subMerchants.length ||
-      documentReview.subMerchants.some(
-        (subMerchant) =>
-          !details.subMerchantLogoScreenshots.some(
-            (screenshot) => screenshot.subMerchantId === subMerchant.id,
-          ),
-      )
-    ) {
-      throw new AppError(
-        400,
-        'Upload one website logo screenshot for each selected sub-merchant before closing this case.',
-      )
-    }
-
-    if (details.assanpayCheckoutScreenshots.length === 0) {
-      throw new AppError(
-        400,
-        'Upload the AssanPay checkout page screenshot before closing this case.',
-      )
+    if (blocker) {
+      throw new AppError(400, blocker)
     }
 
     targetStage = await db.query.queueStages.findFirst({

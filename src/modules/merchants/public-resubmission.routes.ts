@@ -38,6 +38,7 @@ import {
 } from '../cases/field-labels'
 import { getResubmissionContext } from '../cases/case-documents-review.service'
 import { writeCaseState } from '../cases/case-state-machine'
+import { recordMerchantResubmission } from '../cases/document-review-state'
 import {
   assertPublicUploadFile,
   businessWebsiteSchema,
@@ -617,56 +618,20 @@ resubmissionRoutes.post('/:token', async (c) => {
         })
         .where(eq(merchants.id, caseRow.merchantId))
 
-      for (const [, info] of uploadedByField.entries()) {
-        await tx
-          .update(merchantDocuments)
-          .set({
-            originalName: info.uploaded.fileName,
-            mimeType: info.uploaded.mimeType,
-            sizeBytes: info.uploaded.sizeBytes,
-            googleDriveFileId: info.uploaded.fileId,
-            googleDriveWebViewLink: info.uploaded.webViewLink,
-            googleDriveDownloadLink: info.uploaded.downloadLink,
-            googleDriveFolderId: info.uploaded.folderId,
-            // A new file is unreviewed, like its field review below.
-            status: 'pending',
-            updatedAt: now,
-          })
-          .where(eq(merchantDocuments.id, info.docId))
-      }
-
-      for (const [fieldName] of removeActions) {
-        const docId = getDocumentIdFromFieldName(fieldName)!
-        await tx
-          .delete(merchantDocuments)
-          .where(eq(merchantDocuments.id, docId))
-      }
-
-      if (resubmittedFieldIds.length > 0) {
-        await tx
-          .update(caseFieldReviews)
-          .set({
-            status: 'pending',
-            remarks: null,
-            resubmittedAt: now,
-          })
-          .where(inArray(caseFieldReviews.id, resubmittedFieldIds))
-      }
-
-      const removedFieldIds = removeActions
-        .map(([fieldName]) => reviewByField.get(fieldName)?.id)
-        .filter((id): id is string => Boolean(id))
-
-      if (removedFieldIds.length > 0) {
-        await tx
-          .update(caseFieldReviews)
-          .set({
-            status: 'approved',
-            remarks: null,
-            resubmittedAt: now,
-          })
-          .where(inArray(caseFieldReviews.id, removedFieldIds))
-      }
+      await recordMerchantResubmission(tx, {
+        replacedDocuments: Array.from(uploadedByField.values()).map((info) => ({
+          documentId: info.docId,
+          file: info.uploaded,
+        })),
+        removedDocumentIds: removeActions.map(([fieldName]) =>
+          getDocumentIdFromFieldName(fieldName)!,
+        ),
+        resubmittedReviewIds: resubmittedFieldIds,
+        removedReviewIds: removeActions
+          .map(([fieldName]) => reviewByField.get(fieldName)?.id)
+          .filter((id): id is string => Boolean(id)),
+        now,
+      })
 
       // Only a case waiting on the merchant moves back to working. A case
       // that was unassigned meanwhile (back to new) keeps its status, so it

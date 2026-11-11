@@ -18,6 +18,7 @@ import {
   SUB_MERCHANT_FINAL_FORM_KIND,
 } from './case-constants'
 import { assertCanWorkCase } from './case-access.service'
+import { notSentEmailFields, sentEmailFields } from './case-email-send-state'
 
 import { ensureInheritedSubMerchantFormDetails } from './case-detail-lookups'
 import {
@@ -104,10 +105,7 @@ export async function selectSubMerchantForm(
         subMerchantKey: subMerchant.id,
         subMerchantName: subMerchant.name,
         draftUrl: subMerchant.googleDriveWebViewLink,
-        emailStatus: 'not_sent',
-        emailLogId: null,
-        emailSentAt: null,
-        emailRecipient: null,
+        ...notSentEmailFields(),
         updatedAt: now,
       })
       .onConflictDoUpdate({
@@ -116,10 +114,7 @@ export async function selectSubMerchantForm(
           subMerchantKey: subMerchant.id,
           subMerchantName: subMerchant.name,
           draftUrl: subMerchant.googleDriveWebViewLink,
-          emailStatus: 'not_sent',
-          emailLogId: null,
-          emailSentAt: null,
-          emailRecipient: null,
+          ...notSentEmailFields(),
           updatedAt: now,
         },
       })
@@ -208,10 +203,7 @@ export async function uploadSubMerchantFinalForm(
         subMerchantKey: details.subMerchantKey,
         subMerchantName: details.subMerchantName,
         draftUrl: details.draftUrl,
-        emailStatus: 'not_sent',
-        emailLogId: null,
-        emailSentAt: null,
-        emailRecipient: null,
+        ...notSentEmailFields(),
         updatedAt: now,
       })
       .onConflictDoUpdate({
@@ -220,10 +212,7 @@ export async function uploadSubMerchantFinalForm(
           subMerchantKey: details.subMerchantKey,
           subMerchantName: details.subMerchantName,
           draftUrl: details.draftUrl,
-          emailStatus: 'not_sent',
-          emailLogId: null,
-          emailSentAt: null,
-          emailRecipient: null,
+          ...notSentEmailFields(),
           updatedAt: now,
         },
       })
@@ -267,10 +256,7 @@ export async function uploadSubMerchantFinalForm(
       .update(subMerchantFormDetails)
       .set({
         finalFormFileId: caseFile.id,
-        emailStatus: 'not_sent',
-        emailLogId: null,
-        emailSentAt: null,
-        emailRecipient: null,
+        ...notSentEmailFields(),
         updatedAt: now,
       })
       .where(eq(subMerchantFormDetails.caseId, caseId))
@@ -385,9 +371,12 @@ export async function uploadSubMerchantEmailProof(
     await tx
       .update(subMerchantFormDetails)
       .set({
-        emailStatus: 'sent',
-        emailSentAt: now,
-        emailRecipient: 'Manual Gmail',
+        // A manual copy: no email_log row tracks it.
+        ...sentEmailFields({
+          recipient: 'Manual Gmail',
+          emailLogId: null,
+          sentAt: now,
+        }),
         updatedAt: now,
       })
       .where(eq(subMerchantFormDetails.caseId, caseId))

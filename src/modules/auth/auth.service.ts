@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, eq, gt, lt, or, sql } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb, type DbTransaction } from '../../db/client'
@@ -18,6 +18,12 @@ import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
 import type { RoleType } from '../../types/auth'
 import { LINK_DEADLINE_HOURS } from '../configuration/configuration.service'
+import {
+  closedPasswordLinkError,
+  consumePasswordTokens,
+  getClosedPasswordLinkReason,
+} from './password-token-state'
+import { revokeRefreshTokens, rotateRefreshToken } from './refresh-token-state'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
   super_admin: ['admin', 'agent'],
@@ -284,27 +290,17 @@ export async function refreshSession(input: {
       ipAddress: input.ipAddress,
     })
 
-    // Still guarded on status='active': of two concurrent refreshes with the
-    // same token, only one can rotate it.
-    const [rotatedToken] = await tx
-      .update(refreshTokens)
-      .set({
-        status: 'rotated',
-        revokedAt: new Date(),
-        replacedByTokenId: nextSessionId,
-      })
-      .where(
-        and(
-          eq(refreshTokens.id, payload.sessionId),
-          eq(refreshTokens.userId, payload.userId),
-          eq(refreshTokens.tokenHash, hashedToken),
-          eq(refreshTokens.status, 'active'),
-          gt(refreshTokens.expiresAt, new Date()),
-        ),
-      )
-      .returning({
-        id: refreshTokens.id,
-      })
+    // Only an active token rotates: of two concurrent refreshes with the
+    // same token, only one wins.
+    const [rotatedToken] = await rotateRefreshToken(tx, {
+      where: and(
+        eq(refreshTokens.id, payload.sessionId),
+        eq(refreshTokens.userId, payload.userId),
+        eq(refreshTokens.tokenHash, hashedToken),
+        gt(refreshTokens.expiresAt, new Date()),
+      )!,
+      replacedByTokenId: nextSessionId,
+    })
 
     if (!rotatedToken) {
       throw new AppError(401, 'Refresh token is expired or revoked.')
@@ -334,18 +330,13 @@ export async function logout(refreshToken: string) {
 
   const hashedToken = await hashToken(refreshToken)
 
-  await getDb()
-    .update(refreshTokens)
-    .set({
-      status: 'revoked',
-      revokedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(refreshTokens.id, payload.sessionId),
-        eq(refreshTokens.tokenHash, hashedToken),
-      ),
-    )
+  await revokeRefreshTokens(
+    getDb(),
+    and(
+      eq(refreshTokens.id, payload.sessionId),
+      eq(refreshTokens.tokenHash, hashedToken),
+    )!,
+  )
 }
 
 export function canCreateRole(actorRole: RoleType, targetRole: RoleType) {
@@ -387,20 +378,18 @@ export async function activatePasswordToken(input: {
   userId: string
   purpose: 'invite' | 'reset'
 }) {
-  await getDb()
-    .update(userPasswordTokens)
-    .set({ consumedAt: new Date() })
-    .where(
-      and(
-        eq(userPasswordTokens.userId, input.userId),
-        eq(userPasswordTokens.purpose, input.purpose),
-        isNull(userPasswordTokens.consumedAt),
-        lt(
-          userPasswordTokens.createdAt,
-          sql`(select ${userPasswordTokens.createdAt} from ${userPasswordTokens} where ${userPasswordTokens.id} = ${input.tokenId})`,
-        ),
+  await consumePasswordTokens(
+    getDb(),
+    and(
+      eq(userPasswordTokens.userId, input.userId),
+      eq(userPasswordTokens.purpose, input.purpose),
+      lt(
+        userPasswordTokens.createdAt,
+        sql`(select ${userPasswordTokens.createdAt} from ${userPasswordTokens} where ${userPasswordTokens.id} = ${input.tokenId})`,
       ),
-    )
+    )!,
+    'superseded',
+  )
 }
 
 export async function discardPasswordToken(tokenId: string) {
@@ -409,13 +398,14 @@ export async function discardPasswordToken(tokenId: string) {
     .where(eq(userPasswordTokens.id, tokenId))
 }
 
-async function loadValidPasswordToken(token: string) {
-  const tokenHash = await hashToken(token)
+async function findPasswordLink(tokenHash: string) {
   const [row] = await getDb()
     .select({
       tokenId: userPasswordTokens.id,
       purpose: userPasswordTokens.purpose,
       expiresAt: userPasswordTokens.expiresAt,
+      consumedAt: userPasswordTokens.consumedAt,
+      consumedReason: userPasswordTokens.consumedReason,
       userId: users.id,
       name: users.name,
       email: users.email,
@@ -423,20 +413,19 @@ async function loadValidPasswordToken(token: string) {
     })
     .from(userPasswordTokens)
     .innerJoin(users, eq(userPasswordTokens.userId, users.id))
-    .where(
-      and(
-        eq(userPasswordTokens.tokenHash, tokenHash),
-        isNull(userPasswordTokens.consumedAt),
-        gt(userPasswordTokens.expiresAt, new Date()),
-      ),
-    )
+    .where(eq(userPasswordTokens.tokenHash, tokenHash))
     .limit(1)
+  return row ?? null
+}
 
-  if (!row || row.status !== 'active') {
-    throw new AppError(410, 'This password link is expired or invalid.')
-  }
+async function loadValidPasswordToken(token: string) {
+  const row = await findPasswordLink(await hashToken(token))
+  const closedReason = getClosedPasswordLinkReason(row)
 
-  return row
+  if (closedReason) throw closedPasswordLinkError(closedReason)
+  if (row!.status !== 'active') throw closedPasswordLinkError('invalid')
+
+  return row!
 }
 
 export async function getPasswordTokenContext(token: string) {
@@ -458,20 +447,21 @@ export async function setPasswordWithToken(input: {
   const passwordHash = await Bun.password.hash(input.password)
 
   const [updatedUser] = await getDb().transaction(async (tx) => {
-    const [claimedToken] = await tx
-      .update(userPasswordTokens)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(userPasswordTokens.tokenHash, tokenHash),
-          isNull(userPasswordTokens.consumedAt),
-          gt(userPasswordTokens.expiresAt, new Date()),
-        ),
-      )
-      .returning({ userId: userPasswordTokens.userId })
+    const [claimedToken] = await consumePasswordTokens(
+      tx,
+      and(
+        eq(userPasswordTokens.tokenHash, tokenHash),
+        gt(userPasswordTokens.expiresAt, new Date()),
+      )!,
+      'used',
+    )
 
     if (!claimedToken) {
-      throw new AppError(410, 'This password link is expired or invalid.')
+      // Expired, or consumed meanwhile (possibly by a concurrent submit).
+      throw closedPasswordLinkError(
+        getClosedPasswordLinkReason(await findPasswordLink(tokenHash)) ??
+          'invalid',
+      )
     }
 
     const user = await tx.query.users.findFirst({
@@ -480,7 +470,7 @@ export async function setPasswordWithToken(input: {
     })
 
     if (!user) {
-      throw new AppError(410, 'This password link is expired or invalid.')
+      throw closedPasswordLinkError('invalid')
     }
 
     const [updated] = await tx
@@ -493,21 +483,14 @@ export async function setPasswordWithToken(input: {
       .where(eq(users.id, user.id))
       .returning()
 
-    await tx
-      .update(refreshTokens)
-      .set({ status: 'revoked', revokedAt: new Date() })
-      .where(eq(refreshTokens.userId, user.id))
+    await revokeRefreshTokens(tx, eq(refreshTokens.userId, user.id))
 
     // Any other invite/reset link still open for this user is now stale.
-    await tx
-      .update(userPasswordTokens)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(userPasswordTokens.userId, user.id),
-          isNull(userPasswordTokens.consumedAt),
-        ),
-      )
+    await consumePasswordTokens(
+      tx,
+      eq(userPasswordTokens.userId, user.id),
+      'invalidated',
+    )
 
     return [updated]
   })
@@ -521,13 +504,7 @@ export async function setPasswordWithToken(input: {
 
 export async function revokeAllUserSessions(userId: string) {
   await getDb().transaction(async (tx) => {
-    await tx
-      .update(refreshTokens)
-      .set({
-        status: 'revoked',
-        revokedAt: new Date(),
-      })
-      .where(eq(refreshTokens.userId, userId))
+    await revokeRefreshTokens(tx, eq(refreshTokens.userId, userId))
 
     await tx
       .update(users)

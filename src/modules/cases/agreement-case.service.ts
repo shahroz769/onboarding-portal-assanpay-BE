@@ -29,6 +29,7 @@ import {
 import { assertCanWorkCase } from './case-access.service'
 import { writeCaseState } from './case-state-machine'
 import { getAgreementEmailStatus } from './agreement-email-status'
+import { notSentEmailFields } from './case-email-send-state'
 import {
   openMerchantRequest,
   resolveMerchantRequest,
@@ -225,10 +226,8 @@ export async function uploadAgreementFinalAgreement(
       .set({
         finalAgreementFileId: caseFile.id,
         receivedAgreementFileId: null,
-        emailStatus: 'not_sent',
-        emailLogId: null,
-        emailSentAt: null,
-        emailRecipient: null,
+        // A new Final Agreement has not been sent yet.
+        ...notSentEmailFields(),
         updatedAt: now,
       })
       .where(eq(agreementCaseDetails.caseId, caseId))

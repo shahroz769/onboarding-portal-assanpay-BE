@@ -78,6 +78,7 @@ import { agreementEmailSubject } from '../email/templates/agreement'
 import { DOCUMENT_RESUBMISSION_EMAIL_SUBJECT } from '../email/templates/document-resubmission'
 import { liveActivationEmailSubject } from '../email/templates/live-activation'
 import { midCreationEmailSubject } from '../email/templates/mid-creation'
+import { sentEmailFields } from './case-email-send-state'
 
 /** Who else a manual (Gmail) email should go to. */
 export type ManualEmailRecipients = {
@@ -658,11 +659,12 @@ export async function confirmAgreementEmailManual(
       await tx
         .update(agreementCaseDetails)
         .set({
-          emailStatus: 'sent',
           // A manual copy: not the automatic email any earlier log row tracks.
-          emailLogId: null,
-          emailSentAt: now,
-          emailRecipient: recipient.email,
+          ...sentEmailFields({
+            recipient: recipient.email,
+            emailLogId: null,
+            sentAt: now,
+          }),
           lastRejectionRemarks: remarks,
           updatedAt: now,
         })

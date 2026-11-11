@@ -12,6 +12,7 @@ import {
 import { AppError } from '../../lib/errors'
 import { UNDELIVERED_EMAIL_STATUSES } from '../email/email-delivery-status'
 import { consumeResubmissionTokens } from './case-resubmission-tokens.service'
+import { failedEmailFields, sentEmailFields } from './case-email-send-state'
 import { writeCaseState } from './case-state-machine'
 
 /**
@@ -228,10 +229,16 @@ export async function resolveMerchantRequest(
         await tx
           .update(agreementCaseDetails)
           .set({
-            emailStatus: outcome.status,
-            emailLogId: request.emailLogId,
-            emailSentAt: outcome.status === 'sent' ? now : null,
-            emailRecipient: details.recipient,
+            ...(outcome.status === 'sent'
+              ? sentEmailFields({
+                  recipient: details.recipient,
+                  emailLogId: request.emailLogId,
+                  sentAt: now,
+                })
+              : failedEmailFields({
+                  recipient: details.recipient,
+                  emailLogId: request.emailLogId,
+                })),
             lastRejectionRemarks: details.remarks,
             updatedAt: now,
           })

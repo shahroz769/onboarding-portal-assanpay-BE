@@ -444,6 +444,20 @@ export const userQueueAccess = pgTable(
   }),
 )
 
+// Why a password link stopped working (migration 0110). Null on links
+// consumed before the column existed.
+export const passwordTokenConsumedReasonEnum = pgEnum(
+  'password_token_consumed_reason',
+  [
+    // The user set their password with it.
+    'used',
+    // A newer link of the same purpose was sent.
+    'superseded',
+    // The password was set with another link.
+    'invalidated',
+  ],
+)
+
 export const userPasswordTokens = pgTable(
   'user_password_tokens',
   {
@@ -455,6 +469,7 @@ export const userPasswordTokens = pgTable(
     purpose: passwordTokenPurposeEnum('purpose').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    consumedReason: passwordTokenConsumedReasonEnum('consumed_reason'),
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -466,6 +481,10 @@ export const userPasswordTokens = pgTable(
     userPasswordTokensCreatedByIdx: index(
       'user_password_tokens_created_by_idx',
     ).on(table.createdBy),
+    userPasswordTokensReasonNeedsConsumed: check(
+      'user_password_tokens_reason_needs_consumed',
+      sql`${table.consumedReason} IS NULL OR ${table.consumedAt} IS NOT NULL`,
+    ),
   }),
 )
 
@@ -491,6 +510,10 @@ export const refreshTokens = pgTable(
       .notNull(),
   },
   (table) => ({
+    refreshTokensRevokedAtMatchesStatus: check(
+      'refresh_tokens_revoked_at_matches_status',
+      sql`(${table.status} = 'active') = (${table.revokedAt} IS NULL)`,
+    ),
     refreshTokensUserIdIdx: index('refresh_tokens_user_id_idx').on(
       table.userId,
     ),
@@ -1162,6 +1185,17 @@ export const caseLinks = pgTable(
   }),
 )
 
+// Read from the timestamps below (migration 0109); see case-flow-job-state.ts.
+export const CASE_FLOW_CLOSE_JOB_STATUSES = [
+  'pending',
+  'retrying',
+  'failed',
+  'blocked',
+  'completed',
+] as const
+export type CaseFlowCloseJobStatus =
+  (typeof CASE_FLOW_CLOSE_JOB_STATUSES)[number]
+
 export const caseFlowCloseJobs = pgTable(
   'case_flow_close_jobs',
   {
@@ -1195,11 +1229,30 @@ export const caseFlowCloseJobs = pgTable(
     blockedAt: timestamp('blocked_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     failedAt: timestamp('failed_at', { withTimezone: true }),
+    status: varchar('status', { length: 16 })
+      .$type<CaseFlowCloseJobStatus>()
+      .generatedAlwaysAs(
+        sql`CASE
+      WHEN "completed_at" IS NOT NULL THEN 'completed'
+      WHEN "blocked_at" IS NOT NULL THEN 'blocked'
+      WHEN "failed_at" IS NOT NULL THEN 'failed'
+      WHEN "last_error" IS NOT NULL THEN 'retrying'
+      ELSE 'pending'
+    END`,
+      )
+      .notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => ({
+    caseFlowCloseJobsStateCheck: check(
+      'case_flow_close_jobs_state_check',
+      sql`NOT (${table.blockedAt} IS NOT NULL AND ${table.failedAt} IS NOT NULL)
+        AND ((${table.blockedAt} IS NULL AND ${table.failedAt} IS NULL) OR ${table.lastError} IS NOT NULL)
+        AND (${table.completedAt} IS NULL
+          OR (${table.lastError} IS NULL AND ${table.blockedAt} IS NULL AND ${table.failedAt} IS NULL))`,
+    ),
     flowVersionIdx: index('case_flow_close_jobs_flow_version_idx').on(
       table.flowVersionId,
     ),
@@ -1316,6 +1369,12 @@ export const merchantPortalPasswordCodes = pgTable(
     supersededAt: timestamp('superseded_at', { withTimezone: true }),
   },
   (table) => ({
+    // Migration 0111: active codes hold their ciphertext.
+    merchantPortalPasswordCodesStateCheck: check(
+      'merchant_portal_password_codes_state_check',
+      sql`NOT (${table.consumedAt} IS NOT NULL AND ${table.supersededAt} IS NOT NULL)
+        AND ((${table.consumedAt} IS NULL AND ${table.supersededAt} IS NULL) = (${table.codeCiphertext} IS NOT NULL))`,
+    ),
     merchantPortalPasswordCodesMerchantIdx: index(
       'merchant_portal_password_codes_merchant_idx',
     ).on(table.merchantId, table.createdAt),
@@ -1582,6 +1641,13 @@ export const subMerchantFormDetails = pgTable(
       .notNull(),
   },
   (table) => ({
+    // Migration 0111; see case-email-send-state.ts.
+    subMerchantFormDetailsEmailStateCheck: check(
+      'sub_merchant_form_details_email_state_check',
+      sql`(${table.emailStatus} = 'not_sent' AND ${table.emailSentAt} IS NULL AND ${table.emailLogId} IS NULL)
+        OR (${table.emailStatus} = 'sent' AND ${table.emailSentAt} IS NOT NULL)
+        OR (${table.emailStatus} = 'failed' AND ${table.emailSentAt} IS NULL)`,
+    ),
     subMerchantFormDetailsFinalFormIdx: index(
       'sub_merchant_form_details_final_form_idx',
     ).on(table.finalFormFileId),
@@ -1759,6 +1825,13 @@ export const agreementCaseDetails = pgTable(
       .notNull(),
   },
   (table) => ({
+    // Migration 0111; see case-email-send-state.ts.
+    agreementCaseDetailsEmailStateCheck: check(
+      'agreement_case_details_email_state_check',
+      sql`(${table.emailStatus} = 'not_sent' AND ${table.emailSentAt} IS NULL AND ${table.emailLogId} IS NULL)
+        OR (${table.emailStatus} = 'sent' AND ${table.emailSentAt} IS NOT NULL)
+        OR (${table.emailStatus} = 'failed' AND ${table.emailSentAt} IS NULL)`,
+    ),
     agreementCaseDetailsFinalFileIdx: index(
       'agreement_case_details_final_file_idx',
     ).on(table.finalAgreementFileId),

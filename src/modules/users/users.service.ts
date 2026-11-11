@@ -31,6 +31,7 @@ import {
   issuePasswordToken,
   revokeAllUserSessions,
 } from '../auth/auth.service'
+import { revokeRefreshTokens } from '../auth/refresh-token-state'
 import {
   buildKeysetCondition,
   decodeKeysetCursor,
@@ -624,10 +625,7 @@ export async function updateUser(
       input.viewQueueIds ||
       input.workQueueIds
     ) {
-      await tx
-        .update(refreshTokens)
-        .set({ status: 'revoked', revokedAt: new Date() })
-        .where(eq(refreshTokens.userId, userId))
+      await revokeRefreshTokens(tx, eq(refreshTokens.userId, userId))
 
       await tx
         .update(users)
@@ -680,10 +678,7 @@ export async function bulkUpdateUserStatus(
       .where(inArray(users.id, uniqueIds))
       .returning({ id: users.id })
 
-    await tx
-      .update(refreshTokens)
-      .set({ status: 'revoked', revokedAt: new Date() })
-      .where(inArray(refreshTokens.userId, uniqueIds))
+    await revokeRefreshTokens(tx, inArray(refreshTokens.userId, uniqueIds))
 
     return updated
   })

@@ -77,9 +77,16 @@ import {
   getLatestWordpressWebsiteDetailsForMerchant,
   getLiveLimitsAppliedEntry,
   getMidCreationCredentials,
+  getMidCreationCredentialsSentEntry,
   getTestingLimitsAppliedEntryForCredentials,
   getWordpressWebsiteDetails,
 } from './case-detail-lookups'
+import {
+  type CloseChecklistFacts,
+  getCloseChecklistBlockers,
+  hasCompleteMerchantIds,
+  wordpressChecklistFacts,
+} from './case-close-checklist'
 import { getPortalPasswordCodeStatus } from './portal-password-code.service'
 import { getPortalApiCredentialsStatus } from './portal-api-credentials.service'
 
@@ -643,6 +650,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     limitsAndMdr,
     paymentMethods,
     payoutMethods,
+    testingCredentialsSentEntry,
   ] = await Promise.all([
     db
       .select()
@@ -761,6 +769,9 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     workflowType === 'mid' ? getLimitsAndMdrSettings() : Promise.resolve(null),
     workflowType === 'mid' ? getPaymentMethodSettings() : Promise.resolve([]),
     workflowType === 'mid' ? getPayoutMethodSettings() : Promise.resolve([]),
+    workflowType === 'testing'
+      ? getMidCreationCredentialsSentEntry(caseId)
+      : Promise.resolve(null),
   ])
 
   if (!merchantRow) {
@@ -875,7 +886,66 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         })
       : subMerchantForm
 
+  // The same facts advanceStage loads, built from the rows above.
+  const closeChecklistFacts = ((): CloseChecklistFacts | null => {
+    switch (workflowType) {
+      case 'document_review':
+        return {
+          workflowType,
+          subMerchantCount: caseDocumentReviewDetail?.subMerchants.length ?? 0,
+          hasRejectedReview: fieldReviews.some(
+            (review) => review.status === 'rejected',
+          ),
+        }
+      case 'sub_merchant_form':
+        return {
+          workflowType,
+          hasSubMerchant: Boolean(subMerchantFormRecord),
+          hasFinalForm: Boolean(subMerchantFormRecord?.finalFormId),
+          hasSentEmailProof: Boolean(
+            subMerchantFormRecord?.emailStatus === 'sent' &&
+            subMerchantFormRecord.emailProofId,
+          ),
+        }
+      case 'agreement':
+        return {
+          workflowType,
+          hasFinalAgreement: Boolean(agreementRecord?.finalAgreementId),
+          hasReceivedAgreement: Boolean(
+            agreementRecord?.receivedAgreementFileId,
+          ),
+        }
+      case 'mid':
+        return {
+          workflowType,
+          hasMerchantIds: hasCompleteMerchantIds(midCreationCredentials),
+          hasApiCredentials: Boolean(portalApiCredentials),
+        }
+      case 'testing':
+        return {
+          workflowType,
+          credentialsSent: Boolean(testingCredentialsSentEntry),
+        }
+      case 'live':
+        return { workflowType, limitsApplied: Boolean(liveLimitsAppliedEntry) }
+      case 'wordpress':
+        return wordpressWebsiteDetails
+          ? wordpressChecklistFacts(
+              wordpressWebsiteDetails,
+              merchantDocumentReviewDetail?.subMerchants,
+            )
+          : null
+      default:
+        return null
+    }
+  })()
+
   return {
+    // What still stands between a working case and a successful close; null
+    // for workflows that just advance to their next stage.
+    closeReadiness: closeChecklistFacts
+      ? { blockers: getCloseChecklistBlockers(closeChecklistFacts) }
+      : null,
     case: {
       id: caseData.id,
       caseNumber: caseData.caseNumber,
@@ -995,12 +1065,8 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
         : null,
       credentialsReady:
         queue.workflowType === 'mid'
-          ? Boolean(
-              midCreationCredentials?.branchCode.trim() &&
-              midCreationCredentials.internalEmail.trim() &&
-              midCreationCredentials.internalBranchCode.trim() &&
-              portalApiCredentials,
-            )
+          ? hasCompleteMerchantIds(midCreationCredentials) &&
+            Boolean(portalApiCredentials)
           : Boolean(midCreationCredentials),
       portalPasswordCode,
       portalApiCredentials,

@@ -15,6 +15,7 @@ import {
   queues,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { releaseBlockedCloseJobs } from '../cases/case-flow-job-state'
 import { requestCaseFlowCloseJobDrain } from '../cases/case-flow-worker'
 import type {
   MoveCaseFlowMerchantsInput,
@@ -442,21 +443,10 @@ export async function moveMerchantsToActiveVersionTx(
 
   // Jobs that were waiting on the old version's creation requirements are
   // re-checked straight away against the new ones.
-  await tx
-    .update(caseFlowCloseJobs)
-    .set({
-      availableAt: sql`now()`,
-      blockedAt: null,
-      lastError: null,
-      failedAt: null,
-    })
-    .where(
-      and(
-        inArray(caseFlowCloseJobs.merchantId, merchantIds),
-        sql`${caseFlowCloseJobs.completedAt} is null`,
-        sql`${caseFlowCloseJobs.blockedAt} is not null`,
-      ),
-    )
+  await releaseBlockedCloseJobs(
+    tx,
+    inArray(caseFlowCloseJobs.merchantId, merchantIds),
+  )
 
   await tx
     .update(caseFlowMerchantMoves)
