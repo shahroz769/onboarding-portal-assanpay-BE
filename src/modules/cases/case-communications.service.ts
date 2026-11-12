@@ -22,7 +22,11 @@ import {
   getMerchantPortalSettings,
 } from '../configuration/configuration.service'
 import { getDocumentIdFromFieldName, isDocumentFieldName } from './field-labels'
-import { issueToken } from './case-resubmission-tokens.service'
+import {
+  issueTokenInTransaction,
+  markResubmissionTokenDelivered,
+  STALE_RESUBMISSION_PREVIEW_MESSAGE,
+} from './case-resubmission-tokens.service'
 import {
   markManualMerchantRequestSent,
   openMerchantRequest,
@@ -189,7 +193,24 @@ export async function getResubmissionEmailPreview(
     remarks: review.remarks,
   }))
 
-  const issued = await issueToken(caseId, userId)
+  // The preview carries a live link for the owner to paste into Gmail or
+  // WhatsApp, so it is recorded. It stays pending (and revocable by staff
+  // changes) until the owner confirms sending it; the link the merchant
+  // already has keeps working until then.
+  const issued = await getDb().transaction(async (tx) => {
+    const token = await issueTokenInTransaction(tx, caseId, userId, 'pending')
+    await tx.insert(caseHistory).values({
+      caseId,
+      actorId: userId,
+      action: 'resubmission_link_prepared',
+      details: {
+        tokenId: token.tokenId,
+        rejectedFields: rejectedReviews.map((review) => review.fieldName),
+        rejectedFieldLabels: rejections.map((rejection) => rejection.label),
+      },
+    })
+    return token
+  })
 
   const resubmissionUrl = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
   const subject = DOCUMENT_RESUBMISSION_EMAIL_SUBJECT
@@ -289,7 +310,7 @@ export async function confirmResubmissionEmailManual(
       isNull(caseResubmissionTokens.consumedAt),
     ),
   })
-  if (!tokenRow) throw new AppError(400, 'Invalid preview token.')
+  if (!tokenRow) throw new AppError(409, STALE_RESUBMISSION_PREVIEW_MESSAGE)
 
   const rejectedReviews = await db
     .select({
@@ -383,6 +404,13 @@ export async function confirmResubmissionEmailManual(
   // Undone like the upload if it fails; the request is resolved inside it.
   await withMerchantRequestUndo(requestId, () =>
     db.transaction(async (tx) => {
+      // The previewed link now reaches the merchant and replaces any link
+      // sent earlier. Fails if a staff change revoked the preview meanwhile.
+      await markResubmissionTokenDelivered(
+        tx,
+        { caseId, tokenId: input.tokenId, userId },
+        now,
+      )
       if (requestId) await markManualMerchantRequestSent(tx, requestId)
       if (row.status === 'working') {
         await tx.insert(caseHistory).values({

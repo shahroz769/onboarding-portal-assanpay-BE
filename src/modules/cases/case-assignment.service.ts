@@ -1,11 +1,19 @@
 import { and, asc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
 
 import { getDb } from '../../db/client'
-import { caseHistory, cases, queues, queueStages, users } from '../../db/schema'
+import {
+  caseHistory,
+  caseResubmissionTokens,
+  cases,
+  queues,
+  queueStages,
+  users,
+} from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { notifyAssignment } from '../notifications/notifications.service'
 import type { CaseStatusValue } from './cases.schemas'
 import { assertOwnerCanWorkCases } from './case-access.service'
+import { revokePendingResubmissionTokens } from './case-resubmission-tokens.service'
 import { writeCaseState } from './case-state-machine'
 import {
   loadQueueStageForCase,
@@ -196,6 +204,15 @@ export async function bulkAssignCases(
         })
       }
     }
+
+    await revokePendingResubmissionTokens(
+      tx,
+      inArray(
+        caseResubmissionTokens.caseId,
+        changedCases.map((caseRecord) => caseRecord.id),
+      ),
+      { actorId, reason: 'case_reassigned' },
+    )
 
     await tx.insert(caseHistory).values(
       changedCases.map((caseRecord) => {
@@ -430,6 +447,14 @@ export async function assignCase(
       ownerId: existingCase.ownerId,
     },
     conflictMessage: 'Case assignment was already updated.',
+    // The previous owner's unsent email preview must not outlive the
+    // handover. A link the merchant already has keeps working.
+    afterUpdate: (tx) =>
+      revokePendingResubmissionTokens(
+        tx,
+        eq(caseResubmissionTokens.caseId, caseId),
+        { actorId, reason: 'case_reassigned' },
+      ),
   })
 
   if (existingCase.ownerId !== ownerId) {

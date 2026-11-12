@@ -9,8 +9,8 @@ export const userIdParamSchema = z.object({
 const queueAccessSchema = z
   .object({
     queueViewScope: z.enum(['all', 'selected']).default('all'),
-    viewQueueIds: z.array(z.uuid()).default([]),
-    workQueueIds: z.array(z.uuid()).default([]),
+    viewQueueIds: z.array(z.uuid()).max(500).default([]),
+    workQueueIds: z.array(z.uuid()).max(500).default([]),
   })
   .superRefine((value, ctx) => {
     if (
@@ -52,8 +52,8 @@ export const updateUserSchema = z
     gender: z.enum(['male', 'female']).optional(),
     status: z.enum(['active', 'inactive']).optional(),
     queueViewScope: z.enum(['all', 'selected']).optional(),
-    viewQueueIds: z.array(z.uuid()).optional(),
-    workQueueIds: z.array(z.uuid()).optional(),
+    viewQueueIds: z.array(z.uuid()).max(500).optional(),
+    workQueueIds: z.array(z.uuid()).max(500).optional(),
   })
   .superRefine((value, ctx) => {
     const parsed = queueAccessSchema.safeParse({
@@ -77,7 +77,7 @@ export const updateUserSchema = z
   })
 
 export const bulkUserStatusSchema = z.object({
-  ids: z.array(z.uuid()).min(1),
+  ids: z.array(z.uuid()).min(1).max(100),
   status: z.enum(['active', 'inactive']),
 })
 

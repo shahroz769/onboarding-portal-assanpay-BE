@@ -178,9 +178,11 @@ export async function login(input: {
   // Looked up regardless of status so the email and username of one account
   // share a budget; an inactive account is still refused like an unknown one.
   const account = await getDb().query.users.findFirst({
+    // Usernames are stored lowercase; lower() also matches the expression
+    // index users_username_lower_unique.
     where: or(
       eq(users.email, input.identifier),
-      eq(users.username, input.identifier),
+      eq(sql`lower(${users.username})`, input.identifier),
     ),
   })
   const user = account?.status === 'active' ? account : undefined
@@ -480,6 +482,14 @@ export async function setPasswordWithToken(input: {
   password: string
 }) {
   const tokenHash = await hashToken(input.token)
+  // Cheap lookup first: the password hash below is deliberately slow and
+  // memory-heavy, so a made-up or closed link must never reach it. The claim
+  // in the transaction still decides atomically.
+  const link = await findPasswordLink(tokenHash)
+  const closedReason = getClosedPasswordLinkReason(link)
+  if (closedReason) throw closedPasswordLinkError(closedReason)
+  if (link!.status !== 'active') throw closedPasswordLinkError('invalid')
+
   const passwordHash = await Bun.password.hash(input.password)
 
   const [updatedUser] = await getDb().transaction(async (tx) => {

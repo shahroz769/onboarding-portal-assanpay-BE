@@ -641,7 +641,12 @@ export async function sendForResubmission(
       )
     }
 
-    const issued = await issueTokenInTransaction(tx, caseId, userId)
+    const issued = await issueTokenInTransaction(
+      tx,
+      caseId,
+      userId,
+      'delivered',
+    )
     const email = buildEmail(issued)
     const prepared = await prepareEmail(tx, email)
     const requestId = await openMerchantRequest(tx, {
@@ -790,7 +795,7 @@ export async function regenerateResubmissionLink(
     rejectionReason: review.remarks,
   }))
 
-  const issued = await issueToken(caseId, userId)
+  const issued = await issueToken(caseId, userId, 'delivered')
   const url = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/onboarding-form/resubmit/${issued.token}`
 
   await db.insert(caseHistory).values({

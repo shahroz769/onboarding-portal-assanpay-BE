@@ -55,7 +55,7 @@ export const dashboardQuerySchema = z
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>
 
 export const applyPortalMidLimitsSchema = z.strictObject({
-  portalMids: z.array(z.coerce.number().int().positive()).min(1),
+  portalMids: z.array(z.coerce.number().int().positive()).min(1).max(500),
   category: z.enum(['custom_wordpress', 'shopify', 'internal']),
 })
 

@@ -1,5 +1,6 @@
 import * as z from 'zod'
 
+import { webUrlSchema } from '../../lib/validators'
 import {
   paymentMethodSettingsSchema,
   payoutMethodSettingsSchema,
@@ -100,7 +101,7 @@ export const assignCaseSchema = z.strictObject({
 })
 
 export const bulkAssignCaseSchema = z.strictObject({
-  ids: z.array(z.uuid()).min(1),
+  ids: z.array(z.uuid()).min(1).max(500),
   ownerId: z.uuid().nullable(),
 })
 
@@ -330,7 +331,7 @@ export const markLiveLimitsAppliedSchema = z.strictObject({
 })
 
 export const saveWordpressWebsiteSchema = z.strictObject({
-  clonedWebsiteLink: z.string().trim().max(2048).pipe(z.url()),
+  clonedWebsiteLink: z.string().trim().max(2048).pipe(webUrlSchema()),
 })
 
 export type SaveWordpressWebsiteInput = z.infer<

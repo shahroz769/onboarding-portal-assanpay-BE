@@ -9,6 +9,12 @@ import {
   queues,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
+import { createTrackedUpload } from '../../lib/storage/tracked-upload'
+import {
+  DRIVE_UPLOAD_CONCURRENCY,
+  mapWithConcurrency,
+} from '../../lib/concurrency'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import type { SaveWordpressWebsiteInput } from './cases.schemas'
 import { assertCanWorkCase } from './case-access.service'
@@ -196,66 +202,80 @@ export async function saveWordpressWebsiteCase(
     storage,
   })
 
-  const uploadedScreenshots = await Promise.all(
-    input.screenshots.map((file, index) =>
-      storage
-        .uploadFile(folder.folderId, {
-          fileName: `wordpress-page-${String(index + 1).padStart(2, '0')}-${file.name}`,
-          mimeType: file.type,
-          file,
-        })
-        .then((uploaded) => ({ file, uploaded, index })),
+  // One attempt for every file below: if any upload or the save fails,
+  // all files this attempt put in Drive are removed again. Uploads go
+  // through mapWithConcurrency, which waits for in-flight uploads before
+  // failing, so cleanup never misses a file that lands late.
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'private',
+    merchantId: caseRow.merchantId,
+    caseId,
+  })
+  const uploadedScreenshots = await attempt.run(() =>
+    mapWithConcurrency(
+      input.screenshots,
+      DRIVE_UPLOAD_CONCURRENCY,
+      (file, index) =>
+        attempt
+          .upload(folder.folderId, {
+            fileName: cleanUploadFileName(
+              `wordpress-page-${String(index + 1).padStart(2, '0')}-${file.name}`,
+            ),
+            mimeType: file.type,
+            file,
+          })
+          .then((uploaded) => ({ file, uploaded, index })),
     ),
   )
-  const uploadedLogoScreenshots = await Promise.all(
-    input.subMerchantLogoScreenshots.map(({ file, subMerchantId }) =>
-      storage
-        .uploadFile(folder.folderId, {
-          fileName: `sub-merchant-logo-${subMerchantId}-${file.name}`,
-          mimeType: file.type,
-          file,
-        })
-        .then((uploaded) => ({ file, uploaded, subMerchantId })),
+  // Up to 30 logos: a few at a time instead of all at once.
+  const uploadedLogoScreenshots = await attempt.run(() =>
+    mapWithConcurrency(
+      input.subMerchantLogoScreenshots,
+      DRIVE_UPLOAD_CONCURRENCY,
+      ({ file, subMerchantId }) =>
+        attempt
+          .upload(folder.folderId, {
+            fileName: cleanUploadFileName(
+              `sub-merchant-logo-${subMerchantId}-${file.name}`,
+            ),
+            mimeType: file.type,
+            file,
+          })
+          .then((uploaded) => ({ file, uploaded, subMerchantId })),
     ),
   )
-  const uploadedCheckoutScreenshots = await Promise.all(
-    input.assanpayCheckoutScreenshots.map((file, index) =>
-      storage
-        .uploadFile(folder.folderId, {
-          fileName: `assanpay-checkout-${String(index + 1).padStart(2, '0')}-${file.name}`,
-          mimeType: file.type,
-          file,
-        })
-        .then((uploaded) => ({ file, uploaded, index })),
+  const uploadedCheckoutScreenshots = await attempt.run(() =>
+    mapWithConcurrency(
+      input.assanpayCheckoutScreenshots,
+      DRIVE_UPLOAD_CONCURRENCY,
+      (file, index) =>
+        attempt
+          .upload(folder.folderId, {
+            fileName: cleanUploadFileName(
+              `assanpay-checkout-${String(index + 1).padStart(2, '0')}-${file.name}`,
+            ),
+            mimeType: file.type,
+            file,
+          })
+          .then((uploaded) => ({ file, uploaded, index })),
     ),
   )
 
   const now = new Date()
-  const saved = await db.transaction(async (tx) => {
-    const savedFiles: Array<typeof caseFiles.$inferSelect> = []
-    const savedLogoFiles: Array<typeof caseFiles.$inferSelect> = []
-    const savedCheckoutFiles: Array<typeof caseFiles.$inferSelect> = []
+  const saved = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      const savedFiles: Array<typeof caseFiles.$inferSelect> = []
+      const savedLogoFiles: Array<typeof caseFiles.$inferSelect> = []
+      const savedCheckoutFiles: Array<typeof caseFiles.$inferSelect> = []
 
-    for (const { file, uploaded, index } of uploadedScreenshots) {
-      const [savedFile] = await tx
-        .insert(caseFiles)
-        .values({
-          caseId,
-          fileKind: `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
-          originalName: file.name,
-          mimeType: uploaded.mimeType,
-          sizeBytes: uploaded.sizeBytes,
-          googleDriveFileId: uploaded.fileId,
-          googleDriveWebViewLink: uploaded.webViewLink,
-          googleDriveDownloadLink: uploaded.downloadLink,
-          googleDriveFolderId: uploaded.folderId,
-          uploadedBy: userId,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [caseFiles.caseId, caseFiles.fileKind],
-          set: {
-            originalName: file.name,
+      for (const { file, uploaded, index } of uploadedScreenshots) {
+        const [savedFile] = await tx
+          .insert(caseFiles)
+          .values({
+            caseId,
+            fileKind: `${WORDPRESS_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+            originalName: cleanUploadFileName(file.name),
             mimeType: uploaded.mimeType,
             sizeBytes: uploaded.sizeBytes,
             googleDriveFileId: uploaded.fileId,
@@ -264,37 +284,37 @@ export async function saveWordpressWebsiteCase(
             googleDriveFolderId: uploaded.folderId,
             uploadedBy: userId,
             updatedAt: now,
-          },
-        })
-        .returning()
+          })
+          .onConflictDoUpdate({
+            target: [caseFiles.caseId, caseFiles.fileKind],
+            set: {
+              originalName: cleanUploadFileName(file.name),
+              mimeType: uploaded.mimeType,
+              sizeBytes: uploaded.sizeBytes,
+              googleDriveFileId: uploaded.fileId,
+              googleDriveWebViewLink: uploaded.webViewLink,
+              googleDriveDownloadLink: uploaded.downloadLink,
+              googleDriveFolderId: uploaded.folderId,
+              uploadedBy: userId,
+              updatedAt: now,
+            },
+          })
+          .returning()
 
-      if (!savedFile) {
-        throw new AppError(500, 'Failed to save screenshot.')
+        if (!savedFile) {
+          throw new AppError(500, 'Failed to save screenshot.')
+        }
+
+        savedFiles.push(savedFile)
       }
 
-      savedFiles.push(savedFile)
-    }
-
-    for (const { file, uploaded, subMerchantId } of uploadedLogoScreenshots) {
-      const [savedFile] = await tx
-        .insert(caseFiles)
-        .values({
-          caseId,
-          fileKind: `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}${subMerchantId}`,
-          originalName: file.name,
-          mimeType: uploaded.mimeType,
-          sizeBytes: uploaded.sizeBytes,
-          googleDriveFileId: uploaded.fileId,
-          googleDriveWebViewLink: uploaded.webViewLink,
-          googleDriveDownloadLink: uploaded.downloadLink,
-          googleDriveFolderId: uploaded.folderId,
-          uploadedBy: userId,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [caseFiles.caseId, caseFiles.fileKind],
-          set: {
-            originalName: file.name,
+      for (const { file, uploaded, subMerchantId } of uploadedLogoScreenshots) {
+        const [savedFile] = await tx
+          .insert(caseFiles)
+          .values({
+            caseId,
+            fileKind: `${WORDPRESS_SUB_MERCHANT_LOGO_SCREENSHOT_FILE_KIND_PREFIX}${subMerchantId}`,
+            originalName: cleanUploadFileName(file.name),
             mimeType: uploaded.mimeType,
             sizeBytes: uploaded.sizeBytes,
             googleDriveFileId: uploaded.fileId,
@@ -303,37 +323,40 @@ export async function saveWordpressWebsiteCase(
             googleDriveFolderId: uploaded.folderId,
             uploadedBy: userId,
             updatedAt: now,
-          },
-        })
-        .returning()
+          })
+          .onConflictDoUpdate({
+            target: [caseFiles.caseId, caseFiles.fileKind],
+            set: {
+              originalName: cleanUploadFileName(file.name),
+              mimeType: uploaded.mimeType,
+              sizeBytes: uploaded.sizeBytes,
+              googleDriveFileId: uploaded.fileId,
+              googleDriveWebViewLink: uploaded.webViewLink,
+              googleDriveDownloadLink: uploaded.downloadLink,
+              googleDriveFolderId: uploaded.folderId,
+              uploadedBy: userId,
+              updatedAt: now,
+            },
+          })
+          .returning()
 
-      if (!savedFile) {
-        throw new AppError(500, 'Failed to save sub-merchant logo screenshot.')
+        if (!savedFile) {
+          throw new AppError(
+            500,
+            'Failed to save sub-merchant logo screenshot.',
+          )
+        }
+
+        savedLogoFiles.push(savedFile)
       }
 
-      savedLogoFiles.push(savedFile)
-    }
-
-    for (const { file, uploaded, index } of uploadedCheckoutScreenshots) {
-      const [savedFile] = await tx
-        .insert(caseFiles)
-        .values({
-          caseId,
-          fileKind: `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
-          originalName: file.name,
-          mimeType: uploaded.mimeType,
-          sizeBytes: uploaded.sizeBytes,
-          googleDriveFileId: uploaded.fileId,
-          googleDriveWebViewLink: uploaded.webViewLink,
-          googleDriveDownloadLink: uploaded.downloadLink,
-          googleDriveFolderId: uploaded.folderId,
-          uploadedBy: userId,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [caseFiles.caseId, caseFiles.fileKind],
-          set: {
-            originalName: file.name,
+      for (const { file, uploaded, index } of uploadedCheckoutScreenshots) {
+        const [savedFile] = await tx
+          .insert(caseFiles)
+          .values({
+            caseId,
+            fileKind: `${WORDPRESS_ASSANPAY_CHECKOUT_SCREENSHOT_FILE_KIND_PREFIX}${String(index + 1).padStart(2, '0')}`,
+            originalName: cleanUploadFileName(file.name),
             mimeType: uploaded.mimeType,
             sizeBytes: uploaded.sizeBytes,
             googleDriveFileId: uploaded.fileId,
@@ -342,78 +365,93 @@ export async function saveWordpressWebsiteCase(
             googleDriveFolderId: uploaded.folderId,
             uploadedBy: userId,
             updatedAt: now,
-          },
-        })
-        .returning()
+          })
+          .onConflictDoUpdate({
+            target: [caseFiles.caseId, caseFiles.fileKind],
+            set: {
+              originalName: cleanUploadFileName(file.name),
+              mimeType: uploaded.mimeType,
+              sizeBytes: uploaded.sizeBytes,
+              googleDriveFileId: uploaded.fileId,
+              googleDriveWebViewLink: uploaded.webViewLink,
+              googleDriveDownloadLink: uploaded.downloadLink,
+              googleDriveFolderId: uploaded.folderId,
+              uploadedBy: userId,
+              updatedAt: now,
+            },
+          })
+          .returning()
 
-      if (!savedFile) {
-        throw new AppError(500, 'Failed to save checkout page screenshot.')
+        if (!savedFile) {
+          throw new AppError(500, 'Failed to save checkout page screenshot.')
+        }
+
+        savedCheckoutFiles.push(savedFile)
       }
 
-      savedCheckoutFiles.push(savedFile)
-    }
+      const keptKinds = new Set(savedFiles.map((file) => file.fileKind))
+      const staleFiles = existingFiles.filter(
+        (file) => !keptKinds.has(file.fileKind),
+      )
+      if (staleFiles.length > 0) {
+        await tx.delete(caseFiles).where(
+          inArray(
+            caseFiles.id,
+            staleFiles.map((file) => file.id),
+          ),
+        )
+      }
+      const keptLogoKinds = new Set(savedLogoFiles.map((file) => file.fileKind))
+      const staleLogoFiles = existingLogoFiles.filter(
+        (file) => !keptLogoKinds.has(file.fileKind),
+      )
+      if (staleLogoFiles.length > 0) {
+        await tx.delete(caseFiles).where(
+          inArray(
+            caseFiles.id,
+            staleLogoFiles.map((file) => file.id),
+          ),
+        )
+      }
+      const keptCheckoutKinds = new Set(
+        savedCheckoutFiles.map((file) => file.fileKind),
+      )
+      const staleCheckoutFiles = existingCheckoutFiles.filter(
+        (file) => !keptCheckoutKinds.has(file.fileKind),
+      )
+      if (staleCheckoutFiles.length > 0) {
+        await tx.delete(caseFiles).where(
+          inArray(
+            caseFiles.id,
+            staleCheckoutFiles.map((file) => file.id),
+          ),
+        )
+      }
 
-    const keptKinds = new Set(savedFiles.map((file) => file.fileKind))
-    const staleFiles = existingFiles.filter(
-      (file) => !keptKinds.has(file.fileKind),
-    )
-    if (staleFiles.length > 0) {
-      await tx.delete(caseFiles).where(
-        inArray(
-          caseFiles.id,
-          staleFiles.map((file) => file.id),
-        ),
-      )
-    }
-    const keptLogoKinds = new Set(savedLogoFiles.map((file) => file.fileKind))
-    const staleLogoFiles = existingLogoFiles.filter(
-      (file) => !keptLogoKinds.has(file.fileKind),
-    )
-    if (staleLogoFiles.length > 0) {
-      await tx.delete(caseFiles).where(
-        inArray(
-          caseFiles.id,
-          staleLogoFiles.map((file) => file.id),
-        ),
-      )
-    }
-    const keptCheckoutKinds = new Set(
-      savedCheckoutFiles.map((file) => file.fileKind),
-    )
-    const staleCheckoutFiles = existingCheckoutFiles.filter(
-      (file) => !keptCheckoutKinds.has(file.fileKind),
-    )
-    if (staleCheckoutFiles.length > 0) {
-      await tx.delete(caseFiles).where(
-        inArray(
-          caseFiles.id,
-          staleCheckoutFiles.map((file) => file.id),
-        ),
-      )
-    }
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'wordpress_website_saved',
+        details: {
+          businessWebsite: caseRow.businessWebsite,
+          clonedWebsiteLink: input.clonedWebsiteLink,
+          screenshots: savedFiles.length,
+          subMerchantLogoScreenshots: savedLogoFiles.length,
+          assanpayCheckoutScreenshots: savedCheckoutFiles.length,
+        },
+        createdAt: now,
+      })
 
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'wordpress_website_saved',
-      details: {
-        businessWebsite: caseRow.businessWebsite,
+      await attempt.commit(tx)
+      return {
         clonedWebsiteLink: input.clonedWebsiteLink,
-        screenshots: savedFiles.length,
-        subMerchantLogoScreenshots: savedLogoFiles.length,
-        assanpayCheckoutScreenshots: savedCheckoutFiles.length,
-      },
-      createdAt: now,
-    })
-
-    return {
-      clonedWebsiteLink: input.clonedWebsiteLink,
-      savedAt: now.toISOString(),
-      screenshots: savedFiles,
-      subMerchantLogoScreenshots: savedLogoFiles,
-      assanpayCheckoutScreenshots: savedCheckoutFiles,
-    }
-  })
+        savedAt: now.toISOString(),
+        screenshots: savedFiles,
+        subMerchantLogoScreenshots: savedLogoFiles,
+        assanpayCheckoutScreenshots: savedCheckoutFiles,
+      }
+    }),
+  )
 
   const replacedFileIds = new Set(
     [

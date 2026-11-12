@@ -1,7 +1,12 @@
-import { and, eq, inArray, isNull, or, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, ne, type SQL } from 'drizzle-orm'
 
 import { getDb, type DbTransaction } from '../../db/client'
-import { caseResubmissionTokens, cases, merchants } from '../../db/schema'
+import {
+  caseHistory,
+  caseResubmissionTokens,
+  cases,
+  merchants,
+} from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { hashToken } from '../../lib/security'
 
@@ -36,7 +41,10 @@ export async function consumeResubmissionTokens(
     .update(caseResubmissionTokens)
     .set({ consumedAt: now, consumedReason: reason })
     .where(and(where, isNull(caseResubmissionTokens.consumedAt)))
-    .returning({ id: caseResubmissionTokens.id })
+    .returning({
+      id: caseResubmissionTokens.id,
+      caseId: caseResubmissionTokens.caseId,
+    })
 }
 
 function generateTokenString(): string {
@@ -45,14 +53,24 @@ function generateTokenString(): string {
   return Buffer.from(bytes).toString('base64url')
 }
 
+/**
+ * - delivered: the link goes to the merchant now (the automatic email, or a
+ *   regenerated link the owner shares) and replaces every active link.
+ * - pending: an email preview the owner sends by hand. It replaces only an
+ *   older preview, so the link the merchant already has keeps working until
+ *   the owner confirms sending this one.
+ */
+export type ResubmissionTokenKind = 'delivered' | 'pending'
+
 // Resubmission links never expire; a link stays valid until it is used or a
 // newer link is issued for the same case.
 export async function issueToken(
   caseId: string,
   createdByUserId: string,
+  kind: ResubmissionTokenKind,
 ): Promise<IssuedToken> {
   return getDb().transaction((tx) =>
-    issueTokenInTransaction(tx, caseId, createdByUserId),
+    issueTokenInTransaction(tx, caseId, createdByUserId, kind),
   )
 }
 
@@ -61,16 +79,22 @@ export async function issueTokenInTransaction(
   tx: DbTransaction,
   caseId: string,
   createdByUserId: string,
+  kind: ResubmissionTokenKind,
 ): Promise<IssuedToken> {
   const tokenString = generateTokenString()
   const tokenHash = await hashToken(tokenString)
 
-  // A case may have only one usable resubmission link. Superseding older
-  // previews also prevents a link from a previous rejection round from
-  // loading the current round's rejected fields.
+  // A case has at most one active link of each kind. Superseding older links
+  // also prevents a link from a previous rejection round from loading the
+  // current round's rejected fields.
   await consumeResubmissionTokens(
     tx,
-    eq(caseResubmissionTokens.caseId, caseId),
+    kind === 'delivered'
+      ? eq(caseResubmissionTokens.caseId, caseId)
+      : and(
+          eq(caseResubmissionTokens.caseId, caseId),
+          isNull(caseResubmissionTokens.deliveredAt),
+        )!,
     'superseded',
   )
 
@@ -78,9 +102,9 @@ export async function issueTokenInTransaction(
     .insert(caseResubmissionTokens)
     .values({
       caseId,
-      token: null,
       tokenHash,
       createdBy: createdByUserId,
+      deliveredAt: kind === 'delivered' ? new Date() : null,
     })
     .returning({ id: caseResubmissionTokens.id })
 
@@ -89,6 +113,81 @@ export async function issueTokenInTransaction(
   }
 
   return { token: tokenString, tokenId: row.id }
+}
+
+export const STALE_RESUBMISSION_PREVIEW_MESSAGE =
+  'This email preview is no longer valid. Load the preview again.'
+
+/**
+ * The owner confirmed sending a previewed link by hand: it becomes the case's
+ * delivered link and replaces the one the merchant had. Only the owner's own
+ * active preview qualifies, so a preview revoked by a staff change cannot be
+ * revived.
+ */
+export async function markResubmissionTokenDelivered(
+  tx: DbTransaction,
+  input: { caseId: string; tokenId: string; userId: string },
+  now = new Date(),
+) {
+  await consumeResubmissionTokens(
+    tx,
+    and(
+      eq(caseResubmissionTokens.caseId, input.caseId),
+      ne(caseResubmissionTokens.id, input.tokenId),
+      isNotNull(caseResubmissionTokens.deliveredAt),
+    )!,
+    'superseded',
+    now,
+  )
+
+  const [delivered] = await tx
+    .update(caseResubmissionTokens)
+    .set({ deliveredAt: now })
+    .where(
+      and(
+        eq(caseResubmissionTokens.id, input.tokenId),
+        eq(caseResubmissionTokens.caseId, input.caseId),
+        eq(caseResubmissionTokens.createdBy, input.userId),
+        isNull(caseResubmissionTokens.consumedAt),
+      ),
+    )
+    .returning({ id: caseResubmissionTokens.id })
+
+  if (!delivered) {
+    throw new AppError(409, STALE_RESUBMISSION_PREVIEW_MESSAGE)
+  }
+}
+
+export type PendingLinkRevocationReason =
+  | 'case_reassigned'
+  | 'user_deactivated'
+  | 'user_access_changed'
+
+/**
+ * Revokes previewed links that never reached the merchant after a staff
+ * change, and records it on each case. Delivered links are left alone: the
+ * merchant must not be disturbed by internal reassignments.
+ */
+export async function revokePendingResubmissionTokens(
+  tx: DbTransaction,
+  where: SQL,
+  input: { actorId: string; reason: PendingLinkRevocationReason },
+) {
+  const revoked = await consumeResubmissionTokens(
+    tx,
+    and(where, isNull(caseResubmissionTokens.deliveredAt))!,
+    'invalidated',
+  )
+  if (revoked.length === 0) return
+
+  await tx.insert(caseHistory).values(
+    revoked.map((token) => ({
+      caseId: token.caseId,
+      actorId: input.actorId,
+      action: 'resubmission_link_revoked',
+      details: { tokenId: token.id, reason: input.reason },
+    })),
+  )
 }
 
 export const INACTIVE_RESUBMISSION_LINK_MESSAGE =
@@ -147,12 +246,7 @@ export async function validateToken(token: string): Promise<ValidatedToken> {
     .from(caseResubmissionTokens)
     .innerJoin(cases, eq(caseResubmissionTokens.caseId, cases.id))
     .innerJoin(merchants, eq(cases.merchantId, merchants.id))
-    .where(
-      or(
-        eq(caseResubmissionTokens.tokenHash, tokenHash),
-        eq(caseResubmissionTokens.token, token),
-      ),
-    )
+    .where(eq(caseResubmissionTokens.tokenHash, tokenHash))
     .limit(1)
 
   if (!row) {

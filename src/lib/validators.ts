@@ -1,6 +1,6 @@
 import type { ValidationTargets } from 'hono'
 import { validator } from 'hono/validator'
-import type * as z from 'zod'
+import * as z from 'zod'
 
 import { AppError } from './errors'
 
@@ -20,4 +20,12 @@ export function zodValidator<
 
     return parsed.data
   })
+}
+
+/**
+ * An absolute http or https URL. Plain z.url() also accepts schemes such as
+ * javascript: or data:, which become live links where the value is shown.
+ */
+export function webUrlSchema(message = 'Enter a valid http or https URL.') {
+  return z.url({ protocol: /^https?$/, error: message })
 }

@@ -3,7 +3,11 @@ import { streamSSE } from 'hono/streaming'
 import * as z from 'zod'
 
 import { zodValidator } from '../../lib/validators'
-import { requireAuth } from '../../middleware/auth'
+import {
+  getBearerToken,
+  requireAuth,
+  resolveCurrentSession,
+} from '../../middleware/auth'
 import type { AppEnv } from '../../types/auth'
 import {
   getUnreadCount,
@@ -11,11 +15,12 @@ import {
   markAllRead,
   markRead,
 } from './notifications.service'
-import { subscribe } from './notifications.events'
+import { countSubscribers, subscribe } from './notifications.events'
 import { listNotificationsQuerySchema } from './notifications.schemas'
 
 export const notificationRoutes = new Hono<AppEnv>()
 const NOTIFICATION_STREAM_HEARTBEAT_MS = 25_000
+const NOTIFICATION_STREAM_MAX_PER_USER = 10
 
 type NotificationStreamMessage = {
   event: 'notification' | 'case-email-status' | 'ping' | 'ready'
@@ -69,6 +74,16 @@ notificationRoutes.patch(
 // GET /api/notifications/stream — SSE
 notificationRoutes.get('/stream', (c) => {
   const auth = c.get('auth')
+  // requireAuth already validated it; kept to re-check the session later.
+  const accessToken = getBearerToken(c.req.header('authorization'))
+
+  // One per open tab is normal; a pile-up means a client stuck reconnecting.
+  if (countSubscribers(auth.userId) >= NOTIFICATION_STREAM_MAX_PER_USER) {
+    return c.json(
+      { error: 'Too many open notification streams. Close some tabs.' },
+      429,
+    )
+  }
 
   // Bun closes connections idle for idleTimeout (default 10s), which is shorter
   // than the heartbeat and would drop the stream into a reconnect loop. Disable
@@ -88,6 +103,8 @@ notificationRoutes.get('/stream', (c) => {
       const queue: NotificationStreamMessage[] = []
       let wakeWaiter: (() => void) | null = null
       let cleanedUp = false
+      // requireAuth checked the session just before the stream opened.
+      let sessionCheckedAt = Date.now()
 
       const wake = () => {
         if (!wakeWaiter) return
@@ -165,6 +182,21 @@ notificationRoutes.get('/stream', (c) => {
         while (!stream.aborted && !stream.closed) {
           const next = await waitForNextMessage()
           if (!next) break
+          // The session is re-checked at least once per heartbeat interval
+          // (busy or idle), so an expired token, a deactivation or a revoked
+          // session (password set, role/access change) ends the stream within
+          // one heartbeat. The client then reconnects with a refreshed token,
+          // or stops if it can't get one.
+          if (
+            Date.now() - sessionCheckedAt >=
+            NOTIFICATION_STREAM_HEARTBEAT_MS
+          ) {
+            const session = accessToken
+              ? await resolveCurrentSession(accessToken).catch(() => null)
+              : null
+            if (!session || session.userId !== auth.userId) break
+            sessionCheckedAt = Date.now()
+          }
           if (!(await writeSse(next))) break
         }
       } finally {

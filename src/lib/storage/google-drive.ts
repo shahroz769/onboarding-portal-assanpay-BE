@@ -3,6 +3,7 @@ import { importPKCS8, SignJWT } from 'jose'
 import { env } from '../../config/env'
 import { AppError } from '../errors'
 import { assertFileSizeLimit } from './file-limits'
+import { cleanUploadFileName } from './file-names'
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
@@ -173,7 +174,8 @@ export class GoogleDriveStorageProvider implements FileStorageProvider {
     assertFileSizeLimit(input.file)
     const accessToken = await getGoogleAccessToken()
     const metadata = {
-      name: input.fileName,
+      // Callers pass clean names already; this keeps any new caller safe.
+      name: cleanUploadFileName(input.fileName),
       mimeType: input.mimeType,
       parents: [folderId],
     }

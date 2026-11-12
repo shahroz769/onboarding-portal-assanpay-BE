@@ -4,6 +4,7 @@ import { roleTypes } from '../../types/auth'
 
 const ASSANPAY_EMAIL_DOMAIN = '@assanpay.com'
 const ASSANPAY_EMAIL_MESSAGE = 'Email must use the @assanpay.com domain.'
+const USERNAME_PATTERN = /^[a-z0-9._-]+$/
 
 function assanPayEmail() {
   return z
@@ -77,13 +78,24 @@ export const createUserSchema = z
   .object({
     name: z.string().trim().min(2).max(120),
     email: assanPayEmail(),
-    username: z.string().trim().min(2).max(64),
+    // Stored lowercase, since login lowercases what is typed. No "@", so a
+    // username can never equal someone's email in the login lookup.
+    username: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(2)
+      .max(64)
+      .regex(USERNAME_PATTERN, {
+        error:
+          'Username may only use letters, numbers, dots, dashes and underscores.',
+      }),
     roleType: z.enum(roleTypes),
     gender: z.enum(['male', 'female']),
     status: z.enum(['active', 'inactive']).default('active'),
     queueViewScope: z.enum(['all', 'selected']).default('all'),
-    viewQueueIds: z.array(z.uuid()).default([]),
-    workQueueIds: z.array(z.uuid()).default([]),
+    viewQueueIds: z.array(z.uuid()).max(500).default([]),
+    workQueueIds: z.array(z.uuid()).max(500).default([]),
   })
   .superRefine(validateQueueAccess)
 

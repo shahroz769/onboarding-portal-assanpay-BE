@@ -7,6 +7,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   notExists,
   sql,
 } from 'drizzle-orm'
@@ -138,6 +139,10 @@ async function listMissingCloseTriggerCandidates(
       and(
         eq(cases.queueId, trigger.sourceQueueId),
         eq(merchants.flowVersionId, trigger.flowVersionId),
+        // Same rule as canMerchantOpenCases: a terminated or deleted
+        // merchant can never get the case, so it is not a candidate.
+        ne(merchants.status, 'terminated'),
+        isNull(merchants.deletedAt),
         eq(cases.status, 'closed'),
         eq(cases.closeOutcome, 'successful'),
         notExists(

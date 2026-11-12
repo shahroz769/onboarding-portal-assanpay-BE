@@ -6,6 +6,7 @@ import {
   cases,
   notifications,
   queues,
+  userQueueAccess,
   users,
 } from '../../db/schema'
 import type { NewNotification } from '../../db/schema'
@@ -327,6 +328,7 @@ export async function notifyOnComment(input: CommentNotifyInput) {
     .select({
       id: cases.id,
       caseNumber: cases.caseNumber,
+      queueId: cases.queueId,
       queueName: queues.name,
     })
     .from(cases)
@@ -384,6 +386,36 @@ export async function notifyOnComment(input: CommentNotifyInput) {
     if (row.authorId === input.authorId) continue
     if (recipientType.has(row.authorId)) continue
     recipientType.set(row.authorId, 'comment_thread')
+  }
+
+  if (recipientType.size === 0) return
+
+  // Mentions are client-supplied ids. Keep only users who exist, are active
+  // and can still view this case's queue: an unknown id would break the
+  // foreign key and drop every notification for the comment, and someone
+  // without access must not receive the comment snippet.
+  const allowedRecipients = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        inArray(users.id, Array.from(recipientType.keys())),
+        eq(users.status, 'active'),
+        or(
+          sql`${users.roleType} <> 'agent'`,
+          eq(users.queueViewScope, 'all'),
+          sql`exists (
+            select 1 from ${userQueueAccess}
+            where ${userQueueAccess.userId} = ${users.id}
+              and ${userQueueAccess.queueId} = ${caseRow.queueId}
+              and ${userQueueAccess.accessType} = 'view'
+          )`,
+        ),
+      ),
+    )
+  const allowedIds = new Set(allowedRecipients.map((row) => row.id))
+  for (const userId of recipientType.keys()) {
+    if (!allowedIds.has(userId)) recipientType.delete(userId)
   }
 
   if (recipientType.size === 0) return

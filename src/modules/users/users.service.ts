@@ -16,6 +16,7 @@ import type { SQL } from 'drizzle-orm'
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
 import {
+  caseResubmissionTokens,
   cases,
   queues,
   refreshTokens,
@@ -38,6 +39,7 @@ import {
   encodeKeysetCursor,
   keysetCursorExpression,
 } from '../cases/case-cursor'
+import { revokePendingResubmissionTokens } from '../cases/case-resubmission-tokens.service'
 import { sendEmail } from '../email/email.service'
 import {
   UserPasswordEmail,
@@ -176,13 +178,15 @@ async function assertUniqueUser(input: {
   username: string
   userId?: string
 }) {
+  // Case-insensitive, like the users_username_lower_unique index.
+  const sameIdentity = or(
+    eq(users.email, input.email),
+    eq(sql`lower(${users.username})`, input.username.toLowerCase()),
+  )
   const existingUser = await getDb().query.users.findFirst({
     where: input.userId
-      ? and(
-          or(eq(users.email, input.email), eq(users.username, input.username)),
-          ne(users.id, input.userId),
-        )
-      : or(eq(users.email, input.email), eq(users.username, input.username)),
+      ? and(sameIdentity, ne(users.id, input.userId))
+      : sameIdentity,
   })
 
   if (!existingUser) return
@@ -626,6 +630,18 @@ export async function updateUser(
       input.workQueueIds
     ) {
       await revokeRefreshTokens(tx, eq(refreshTokens.userId, userId))
+      // Unsent email previews this user prepared; delivered links stay.
+      await revokePendingResubmissionTokens(
+        tx,
+        eq(caseResubmissionTokens.createdBy, userId),
+        {
+          actorId: actor.userId,
+          reason:
+            input.status === 'inactive'
+              ? 'user_deactivated'
+              : 'user_access_changed',
+        },
+      )
 
       await tx
         .update(users)
@@ -679,6 +695,14 @@ export async function bulkUpdateUserStatus(
       .returning({ id: users.id })
 
     await revokeRefreshTokens(tx, inArray(refreshTokens.userId, uniqueIds))
+    if (status === 'inactive') {
+      // Unsent email previews they prepared; delivered links stay.
+      await revokePendingResubmissionTokens(
+        tx,
+        inArray(caseResubmissionTokens.createdBy, uniqueIds),
+        { actorId: actor.userId, reason: 'user_deactivated' },
+      )
+    }
 
     return updated
   })

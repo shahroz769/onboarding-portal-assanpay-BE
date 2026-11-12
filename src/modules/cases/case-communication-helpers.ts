@@ -1,9 +1,12 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 import { env } from '../../config/env'
 import { getDb } from '../../db/client'
 import { caseFiles, users } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
+import { supersedeStorageObjects } from '../../lib/storage/ownership'
+import { createTrackedUpload } from '../../lib/storage/tracked-upload'
 import {
   getEmailRecipientSettings,
   getEmailSendingModeSettings,
@@ -175,46 +178,71 @@ export async function uploadEmailProofFile(
     section: 'Email Proofs',
     storage,
   })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
+  // A newer proof replaces the row; its old Drive file is then superseded.
+  const existing = await db.query.caseFiles.findFirst({
+    where: and(eq(caseFiles.caseId, caseId), eq(caseFiles.fileKind, fileKind)),
+    columns: { googleDriveFileId: true },
   })
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'private',
+    merchantId,
+    caseId,
+  })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    {
+      fileName: cleanUploadFileName(file.name),
+      mimeType: file.type,
+      file,
+    },
+    { role: fileKind },
+  )
 
   const now = new Date()
-  const [savedFile] = await db
-    .insert(caseFiles)
-    .values({
-      caseId,
-      fileKind,
-      originalName: file.name,
-      mimeType: uploaded.mimeType,
-      sizeBytes: uploaded.sizeBytes,
-      googleDriveFileId: uploaded.fileId,
-      googleDriveWebViewLink: uploaded.webViewLink,
-      googleDriveDownloadLink: uploaded.downloadLink,
-      googleDriveFolderId: uploaded.folderId,
-      uploadedBy: userId,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [caseFiles.caseId, caseFiles.fileKind],
-      set: {
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: userId,
-        updatedAt: now,
-      },
-    })
-    .returning()
+  const savedFile = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      const [saved] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind,
+          originalName: cleanUploadFileName(file.name),
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          uploadedBy: userId,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: cleanUploadFileName(file.name),
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
 
-  if (!savedFile) {
-    throw new AppError(500, 'Failed to save email proof screenshot.')
+      if (!saved) {
+        throw new AppError(500, 'Failed to save email proof screenshot.')
+      }
+      await attempt.commit(tx)
+      return saved
+    }),
+  )
+
+  if (existing && existing.googleDriveFileId !== uploaded.fileId) {
+    await supersedeStorageObjects([existing.googleDriveFileId])
   }
 
   return { savedFile, uploaded }

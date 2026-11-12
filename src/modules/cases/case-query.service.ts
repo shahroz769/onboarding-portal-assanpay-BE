@@ -50,7 +50,11 @@ import type {
   CreateCaseInput,
   ListCasesQuery,
 } from './cases.schemas'
-import { assertCanViewCase, getAgentQueueAccess } from './case-access.service'
+import {
+  assertCanViewCase,
+  assertCanWorkCase,
+  getAgentQueueAccess,
+} from './case-access.service'
 
 import { DOCUMENT_REVIEW_RESUBMISSION_SENT_ACTIONS } from './case-constants'
 import {
@@ -571,9 +575,20 @@ export async function listCaseOwners() {
 export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const db = getDb()
   await assertCanViewCase(caseId, actor)
+  // Opening a case as someone who can only view it changes nothing: the
+  // repairs below and the Resend status check run only for staff who can
+  // work the case.
+  const canWork =
+    !actor ||
+    (await assertCanWorkCase(caseId, actor.userId).then(
+      () => true,
+      () => false,
+    ))
   // Asks Resend about an email stuck waiting for its webhook; runs alongside
   // the queries below and is awaited before emailDelivery is read.
-  const staleDeliveryCheck = refreshStaleCaseEmailDelivery(caseId)
+  const staleDeliveryCheck = canWork
+    ? refreshStaleCaseEmailDelivery(caseId)
+    : Promise.resolve()
 
   // Get case with joins
   const caseRow = await db
@@ -787,7 +802,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   })
 
   const seededStages =
-    stagesResult.length > 0
+    stagesResult.length > 0 || !canWork
       ? stagesResult
       : await ensureQueueStages(db, {
           id: queue.id,
@@ -805,7 +820,7 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
       status: caseData.status as CaseStatusValue,
     }) ?? null
 
-  if (currentStage && currentStage.id !== caseData.currentStageId) {
+  if (canWork && currentStage && currentStage.id !== caseData.currentStageId) {
     await writeCaseState(db, {
       event: 'repair_stage',
       where: eq(cases.id, caseId),
@@ -813,47 +828,24 @@ export async function getCaseDetail(caseId: string, actor?: SessionUser) {
     })
   }
 
+  // A case without agreement details yet shows the configured draft. The
+  // row itself is created by the first write that needs it (uploading the
+  // Final Agreement), so viewing the case writes nothing.
   let agreementRecord = agreement
   if (!agreementRecord && queue.workflowType === 'agreement') {
     const draft = await getConfiguredAgreementDraftForMerchantType(
       merchant.merchantType,
     )
-    const [createdAgreement] = await db
-      .insert(agreementCaseDetails)
-      .values({
-        caseId,
-        businessType: merchant.merchantType,
-        draftKey: draft.key,
-        draftLabel: draft.label,
-        draftUrl: draft.draftUrl,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: agreementCaseDetails.caseId,
-        set: {
-          businessType: merchant.merchantType,
-          draftKey: draft.key,
-          draftLabel: draft.label,
-          draftUrl: draft.draftUrl,
-          updatedAt: new Date(),
-        },
-      })
-      .returning()
-
-    if (!createdAgreement) {
-      throw new AppError(500, 'Failed to initialize agreement case details.')
-    }
-
     agreementRecord = {
-      businessType: createdAgreement.businessType,
-      draftKey: createdAgreement.draftKey,
-      draftLabel: createdAgreement.draftLabel,
-      draftUrl: createdAgreement.draftUrl,
-      emailStatus: createdAgreement.emailStatus,
-      emailLogId: createdAgreement.emailLogId,
-      emailSentAt: createdAgreement.emailSentAt,
-      emailRecipient: createdAgreement.emailRecipient,
-      lastRejectionRemarks: createdAgreement.lastRejectionRemarks,
+      businessType: merchant.merchantType,
+      draftKey: draft.key,
+      draftLabel: draft.label,
+      draftUrl: draft.draftUrl,
+      emailStatus: 'not_sent',
+      emailLogId: null,
+      emailSentAt: null,
+      emailRecipient: null,
+      lastRejectionRemarks: null,
       receivedAgreementFileId: null,
       finalAgreementId: null,
       finalAgreementOriginalName: null,

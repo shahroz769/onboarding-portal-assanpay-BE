@@ -16,6 +16,10 @@ import {
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
 import { assertFileSizeLimit } from '../../lib/storage/file-limits'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
+import { supersedeStorageObjects } from '../../lib/storage/ownership'
+import { createTrackedUpload } from '../../lib/storage/tracked-upload'
+import { assertFileContentSignature } from '../../lib/storage/file-signatures'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import { getAgreementDraftForMerchantType as getFallbackAgreementDraftForMerchantType } from '../cases/agreement.config'
 import { requestCaseFlowCloseJobDrain } from '../cases/case-flow-worker'
@@ -56,12 +60,12 @@ const EMAIL_RECIPIENTS_KEY = 'email-recipients'
 const MERCHANT_PORTAL_KEY = 'merchant-portal'
 const PAYMENT_METHODS_KEY = 'payment-methods'
 const PAYOUT_METHODS_KEY = 'payout-methods'
-const DRAFT_MIME_TYPES = new Set([
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-])
-const DRAFT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx'])
+const DRAFT_MIME_TYPE_BY_EXTENSION: Record<string, string | undefined> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx':
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
 
 type QueueRef = {
   id: string
@@ -438,39 +442,53 @@ export async function uploadAgreementDraft(input: {
 }) {
   const businessType = businessTypeSchema.parse(input.businessType)
   const label = getBusinessTypeLabel(businessType)
-  const uploaded = await uploadConfigurationDraft({
+  const previous = await getDb().query.agreementDraftTemplates.findFirst({
+    where: eq(agreementDraftTemplates.businessType, businessType),
+    columns: { googleDriveFileId: true },
+  })
+  const { uploaded, attempt } = await uploadConfigurationDraft({
     folderPath: ['Configuration', 'Agreements', label],
     file: input.file,
   })
 
-  await getDb()
-    .insert(agreementDraftTemplates)
-    .values({
-      businessType,
-      label,
-      originalName: uploaded.fileName,
-      mimeType: uploaded.mimeType,
-      sizeBytes: uploaded.sizeBytes,
-      googleDriveFileId: uploaded.fileId,
-      googleDriveWebViewLink: uploaded.webViewLink,
-      googleDriveDownloadLink: uploaded.downloadLink,
-      googleDriveFolderId: uploaded.folderId,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: agreementDraftTemplates.businessType,
-      set: {
-        label,
-        originalName: uploaded.fileName,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        updatedAt: new Date(),
-      },
-    })
+  await attempt.run(() =>
+    getDb().transaction(async (tx) => {
+      await tx
+        .insert(agreementDraftTemplates)
+        .values({
+          businessType,
+          label,
+          originalName: uploaded.fileName,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          googleDriveFileId: uploaded.fileId,
+          googleDriveWebViewLink: uploaded.webViewLink,
+          googleDriveDownloadLink: uploaded.downloadLink,
+          googleDriveFolderId: uploaded.folderId,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: agreementDraftTemplates.businessType,
+          set: {
+            label,
+            originalName: uploaded.fileName,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            updatedAt: new Date(),
+          },
+        })
+      await attempt.commit(tx)
+    }),
+  )
+  // The old draft stays in Drive (links to it may have been sent); the
+  // ledger records that it was replaced.
+  if (previous && previous.googleDriveFileId !== uploaded.fileId) {
+    await supersedeStorageObjects([previous.googleDriveFileId])
+  }
 
   return listAgreementDrafts()
 }
@@ -544,33 +562,30 @@ export async function createSubMerchantDraft(input: {
     throw new AppError(409, 'A sub-merchant with this name already exists.')
   }
 
-  const uploaded = await uploadConfigurationDraft({
+  const { uploaded, attempt } = await uploadConfigurationDraft({
     folderPath: ['Configuration', 'Sub-Merchants', name],
     file: input.file,
   })
 
-  try {
-    await getDb().insert(subMerchantDraftTemplates).values({
-      name,
-      sellerCode,
-      originalName: uploaded.fileName,
-      mimeType: uploaded.mimeType,
-      sizeBytes: uploaded.sizeBytes,
-      googleDriveFileId: uploaded.fileId,
-      googleDriveWebViewLink: uploaded.webViewLink,
-      googleDriveDownloadLink: uploaded.downloadLink,
-      googleDriveFolderId: uploaded.folderId,
-      updatedAt: new Date(),
-    })
-  } catch (error) {
-    // A concurrent create won the unique index; drop this attempt's upload.
-    await new GoogleDriveStorageProvider()
-      .deleteFile(uploaded.fileId)
-      .catch((cleanupError) =>
-        console.error('[configuration] Draft cleanup failed:', cleanupError),
-      )
-    throw error
-  }
+  // A concurrent create that wins the unique index fails this save, and the
+  // attempt then removes its upload.
+  await attempt.run(() =>
+    getDb().transaction(async (tx) => {
+      await tx.insert(subMerchantDraftTemplates).values({
+        name,
+        sellerCode,
+        originalName: uploaded.fileName,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.sizeBytes,
+        googleDriveFileId: uploaded.fileId,
+        googleDriveWebViewLink: uploaded.webViewLink,
+        googleDriveDownloadLink: uploaded.downloadLink,
+        googleDriveFolderId: uploaded.folderId,
+        updatedAt: new Date(),
+      })
+      await attempt.commit(tx)
+    }),
+  )
 
   return listSubMerchantDrafts()
 }
@@ -613,42 +628,40 @@ export async function updateSubMerchantDraft(input: {
 
   // The previous draft file is kept in Drive: links to it may already have
   // been sent to merchants.
-  const uploaded = input.file
+  const draft = input.file
     ? await uploadConfigurationDraft({
         folderPath: ['Configuration', 'Sub-Merchants', name],
         file: input.file,
       })
     : null
+  const uploaded = draft?.uploaded ?? null
 
-  try {
-    await getDb()
-      .update(subMerchantDraftTemplates)
-      .set({
-        name,
-        sellerCode,
-        ...(uploaded
-          ? {
-              originalName: uploaded.fileName,
-              mimeType: uploaded.mimeType,
-              sizeBytes: uploaded.sizeBytes,
-              googleDriveFileId: uploaded.fileId,
-              googleDriveWebViewLink: uploaded.webViewLink,
-              googleDriveDownloadLink: uploaded.downloadLink,
-              googleDriveFolderId: uploaded.folderId,
-            }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(subMerchantDraftTemplates.id, input.id))
-  } catch (error) {
-    if (uploaded) {
-      await new GoogleDriveStorageProvider()
-        .deleteFile(uploaded.fileId)
-        .catch((cleanupError) =>
-          console.error('[configuration] Draft cleanup failed:', cleanupError),
-        )
-    }
-    throw error
+  const save = () =>
+    getDb().transaction(async (tx) => {
+      await tx
+        .update(subMerchantDraftTemplates)
+        .set({
+          name,
+          sellerCode,
+          ...(uploaded
+            ? {
+                originalName: uploaded.fileName,
+                mimeType: uploaded.mimeType,
+                sizeBytes: uploaded.sizeBytes,
+                googleDriveFileId: uploaded.fileId,
+                googleDriveWebViewLink: uploaded.webViewLink,
+                googleDriveDownloadLink: uploaded.downloadLink,
+                googleDriveFolderId: uploaded.folderId,
+              }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(subMerchantDraftTemplates.id, input.id))
+      if (draft) await draft.attempt.commit(tx)
+    })
+  await (draft ? draft.attempt.run(save) : save())
+  if (uploaded && existing.googleDriveFileId !== uploaded.fileId) {
+    await supersedeStorageObjects([existing.googleDriveFileId])
   }
 
   return listSubMerchantDrafts()
@@ -1163,7 +1176,7 @@ async function uploadConfigurationDraft(input: {
   folderPath: string[]
   file: File
 }) {
-  validateDraftFile(input.file)
+  const { mimeType, fileName } = await validateDraftFile(input.file)
   const storage = new GoogleDriveStorageProvider()
   let folder = await storage.createMerchantFolder(
     input.folderPath[0] ?? 'Configuration',
@@ -1173,20 +1186,49 @@ async function uploadConfigurationDraft(input: {
     folder = await storage.createFolder(folder.folderId, folderName)
   }
 
-  return storage.uploadFile(folder.folderId, {
-    file: input.file,
-    fileName: input.file.name,
-    mimeType: input.file.type || 'application/octet-stream',
-  })
+  // Tracked so a failed save removes the file instead of leaving it in Drive.
+  const attempt = createTrackedUpload({ storage, visibility: 'private' })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    { file: input.file, fileName, mimeType },
+    { role: 'configuration_draft', folderPath: input.folderPath },
+  )
+  return { uploaded, attempt }
 }
 
-function validateDraftFile(file: File) {
+/**
+ * A draft is shared with merchants, so it must really be a PDF/DOC/DOCX:
+ * the extension and the declared type must both be allowed and agree, and
+ * the content must match. Returns the type and the name it is stored under
+ * (cleaned, ending in the validated extension).
+ */
+async function validateDraftFile(file: File) {
   assertFileSizeLimit(file, 'Draft file')
 
-  const mimeType = file.type || 'application/octet-stream'
   const extension = getFileExtension(file.name)
-  if (!DRAFT_MIME_TYPES.has(mimeType) && !DRAFT_EXTENSIONS.has(extension)) {
+  const extensionMimeType = DRAFT_MIME_TYPE_BY_EXTENSION[extension]
+  const declaredType = file.type.toLowerCase()
+  // Some browsers send no type (or a generic one) for Word files; the
+  // extension then decides, and the content check below still applies.
+  const declaredTypeIsGeneric =
+    declaredType === '' || declaredType === 'application/octet-stream'
+  if (
+    !extensionMimeType ||
+    (!declaredTypeIsGeneric && declaredType !== extensionMimeType)
+  ) {
     throw new AppError(400, 'Draft file must be a PDF, DOC, or DOCX file.')
+  }
+
+  await assertFileContentSignature({
+    file,
+    expectedMimeType: extensionMimeType,
+    label: 'Draft file',
+  })
+
+  const baseName = cleanUploadFileName(file.name.slice(0, -extension.length))
+  return {
+    mimeType: extensionMimeType,
+    fileName: cleanUploadFileName(`${baseName}${extension}`),
   }
 }
 

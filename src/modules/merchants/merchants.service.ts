@@ -30,6 +30,11 @@ import {
   storageObjects,
   users,
 } from '../../db/schema'
+import {
+  DRIVE_UPLOAD_CONCURRENCY,
+  mapWithConcurrency,
+} from '../../lib/concurrency'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
 import { GoogleDriveStorageProvider } from '../../lib/storage/google-drive'
 import type { FileStorageProvider } from '../../lib/storage/google-drive'
 import { AppError } from '../../lib/errors'
@@ -357,8 +362,10 @@ export async function createMerchantSubmission(
     }
     const uploadFolderId = parentFolderId
 
-    const uploadedDocuments = await Promise.all(
-      input.documents.map(async (document) => {
+    const uploadedDocuments = await mapWithConcurrency(
+      input.documents,
+      DRIVE_UPLOAD_CONCURRENCY,
+      async (document) => {
         const upload = await storage.uploadFile(uploadFolderId, {
           fileName: buildDocumentFileName(
             document.documentType,
@@ -384,7 +391,7 @@ export async function createMerchantSubmission(
 
         return {
           documentType: document.documentType,
-          originalName: document.file.name,
+          originalName: cleanUploadFileName(document.file.name),
           mimeType: upload.mimeType,
           sizeBytes: upload.sizeBytes,
           googleDriveFileId: upload.fileId,
@@ -392,7 +399,7 @@ export async function createMerchantSubmission(
           googleDriveDownloadLink: upload.downloadLink,
           googleDriveFolderId: upload.folderId,
         } satisfies UploadedDocumentRecord
-      }),
+      },
     )
 
     const result = await getDb().transaction(async (tx) => {

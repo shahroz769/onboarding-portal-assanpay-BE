@@ -16,6 +16,8 @@ const uniqueViolationMessages: Record<string, string> = {
     'A stage with this slug already exists in the queue.',
   users_email_unique: 'A user with this email already exists.',
   users_username_unique: 'A user with this username already exists.',
+  users_username_lower_unique: 'A user with this username already exists.',
+  users_single_super_admin: 'There can be only one Super Admin.',
   sub_merchant_draft_templates_name_unique:
     'A sub-merchant with this name already exists.',
 }

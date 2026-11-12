@@ -59,6 +59,11 @@ export function subscribe(userId: string, fn: Subscriber): () => void {
   }
 }
 
+/** Open streams for the user in this process. */
+export function countSubscribers(userId: string): number {
+  return subscribers.get(userId)?.size ?? 0
+}
+
 function send(userId: string, message: StreamMessage): void {
   const set = subscribers.get(userId)
   if (!set || set.size === 0) return

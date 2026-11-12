@@ -1,6 +1,17 @@
 # deps
 node_modules/
+
+# Environment files: never commit real values. The example stays tracked.
 .env
-.env.local
+.env.*
+!.env.example
+
+# Keys, certificates and cloud credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+*credentials*.json
 
 /security-audit-skill

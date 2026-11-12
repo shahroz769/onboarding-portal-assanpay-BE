@@ -11,6 +11,8 @@ import {
   queueStages,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
+import { createTrackedUpload } from '../../lib/storage/tracked-upload'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import { deliverEmail, prepareEmail } from '../email/email.service'
 import {
@@ -176,35 +178,33 @@ export async function uploadAgreementFinalAgreement(
     caseNumber: caseRow.caseNumber,
     storage,
   })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'public',
+    merchantId: caseRow.merchantId,
+    caseId,
   })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    {
+      fileName: cleanUploadFileName(file.name),
+      mimeType: file.type,
+      file,
+    },
+    { role: AGREEMENT_FINAL_FILE_KIND },
+  )
 
   const now = new Date()
-  const [savedFile] = await db.transaction(async (tx) => {
-    await ensureAgreementDetails(tx, caseId, caseRow.merchantType)
+  const [savedFile] = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      await ensureAgreementDetails(tx, caseId, caseRow.merchantType)
 
-    const [caseFile] = await tx
-      .insert(caseFiles)
-      .values({
-        caseId,
-        fileKind: AGREEMENT_FINAL_FILE_KIND,
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [caseFiles.caseId, caseFiles.fileKind],
-        set: {
-          originalName: file.name,
+      const [caseFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: AGREEMENT_FINAL_FILE_KIND,
+          originalName: cleanUploadFileName(file.name),
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
           googleDriveFileId: uploaded.fileId,
@@ -213,34 +213,52 @@ export async function uploadAgreementFinalAgreement(
           googleDriveFolderId: uploaded.folderId,
           uploadedBy: userId,
           updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: cleanUploadFileName(file.name),
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!caseFile) {
+        throw new AppError(500, 'Failed to save Final Agreement.')
+      }
+
+      await tx
+        .update(agreementCaseDetails)
+        .set({
+          finalAgreementFileId: caseFile.id,
+          receivedAgreementFileId: null,
+          // A new Final Agreement has not been sent yet.
+          ...notSentEmailFields(),
+          updatedAt: now,
+        })
+        .where(eq(agreementCaseDetails.caseId, caseId))
+
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'agreement_final_uploaded',
+        details: {
+          fileName: cleanUploadFileName(file.name),
+          sizeBytes: uploaded.sizeBytes,
         },
       })
-      .returning()
 
-    if (!caseFile) {
-      throw new AppError(500, 'Failed to save Final Agreement.')
-    }
-
-    await tx
-      .update(agreementCaseDetails)
-      .set({
-        finalAgreementFileId: caseFile.id,
-        receivedAgreementFileId: null,
-        // A new Final Agreement has not been sent yet.
-        ...notSentEmailFields(),
-        updatedAt: now,
-      })
-      .where(eq(agreementCaseDetails.caseId, caseId))
-
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'agreement_final_uploaded',
-      details: { fileName: file.name, sizeBytes: uploaded.sizeBytes },
-    })
-
-    return [caseFile]
-  })
+      await attempt.commit(tx)
+      return [caseFile]
+    }),
+  )
 
   if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
     await supersedeStorageObjects([existingFile.googleDriveFileId])
@@ -447,12 +465,7 @@ export async function uploadReceivedAgreement(
     section: 'Received Agreement',
     storage,
   })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
-  })
-
+  // Resolved before the upload, so a missing stage never strands a file.
   const workingStage = await db.query.queueStages.findFirst({
     where: and(
       eq(queueStages.queueId, caseRow.queueId),
@@ -463,27 +476,31 @@ export async function uploadReceivedAgreement(
     throw new AppError(500, 'No working stage configured for this queue.')
   }
 
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'private',
+    merchantId: caseRow.merchantId,
+    caseId,
+  })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    {
+      fileName: cleanUploadFileName(file.name),
+      mimeType: file.type,
+      file,
+    },
+    { role: AGREEMENT_RECEIVED_FILE_KIND },
+  )
+
   const now = new Date()
-  const [savedFile] = await db.transaction(async (tx) => {
-    const [caseFile] = await tx
-      .insert(caseFiles)
-      .values({
-        caseId,
-        fileKind: AGREEMENT_RECEIVED_FILE_KIND,
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [caseFiles.caseId, caseFiles.fileKind],
-        set: {
-          originalName: file.name,
+  const [savedFile] = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      const [caseFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: AGREEMENT_RECEIVED_FILE_KIND,
+          originalName: cleanUploadFileName(file.name),
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
           googleDriveFileId: uploaded.fileId,
@@ -492,38 +509,53 @@ export async function uploadReceivedAgreement(
           googleDriveFolderId: uploaded.folderId,
           uploadedBy: userId,
           updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: cleanUploadFileName(file.name),
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!caseFile) {
+        throw new AppError(500, 'Failed to save the received Agreement.')
+      }
+
+      await tx
+        .update(agreementCaseDetails)
+        .set({ receivedAgreementFileId: caseFile.id, updatedAt: now })
+        .where(eq(agreementCaseDetails.caseId, caseId))
+
+      await writeCaseState(tx, {
+        event: 'merchant_responded',
+        where: eq(cases.id, caseId),
+        set: { currentStageId: workingStage.id, updatedAt: now },
+      })
+
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'agreement_received_uploaded',
+        details: {
+          fileName: cleanUploadFileName(file.name),
+          fileUrl: uploaded.webViewLink,
+          sizeBytes: uploaded.sizeBytes,
         },
       })
-      .returning()
 
-    if (!caseFile) {
-      throw new AppError(500, 'Failed to save the received Agreement.')
-    }
-
-    await tx
-      .update(agreementCaseDetails)
-      .set({ receivedAgreementFileId: caseFile.id, updatedAt: now })
-      .where(eq(agreementCaseDetails.caseId, caseId))
-
-    await writeCaseState(tx, {
-      event: 'merchant_responded',
-      where: eq(cases.id, caseId),
-      set: { currentStageId: workingStage.id, updatedAt: now },
-    })
-
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'agreement_received_uploaded',
-      details: {
-        fileName: file.name,
-        fileUrl: uploaded.webViewLink,
-        sizeBytes: uploaded.sizeBytes,
-      },
-    })
-
-    return [caseFile]
-  })
+      await attempt.commit(tx)
+      return [caseFile]
+    }),
+  )
 
   if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
     await supersedeStorageObjects([existingFile.googleDriveFileId])

@@ -1,5 +1,7 @@
 import * as z from 'zod'
 
+import { webUrlSchema } from '../../lib/validators'
+
 const emailAddressSchema = z.email()
 
 export const emailSendingModeSettingsSchema = z
@@ -53,14 +55,17 @@ export const emailRecipientSettingsInputSchema =
   })
 
 export const merchantPortalSettingsSchema = z.strictObject({
-  loginUrl: z.string().trim().max(2048).pipe(z.url()),
+  loginUrl: z.string().trim().max(2048).pipe(webUrlSchema()),
   serverBaseUrl: z
     .string()
     .trim()
     .max(2048)
-    .refine((value) => value === '' || z.url().safeParse(value).success, {
-      error: 'Enter a valid server base URL.',
-    })
+    .refine(
+      (value) => value === '' || webUrlSchema().safeParse(value).success,
+      {
+        error: 'Enter a valid server base URL.',
+      },
+    )
     .default(''),
   serverCallbackIp: z
     .string()
@@ -285,11 +290,12 @@ export const updateCaseFlowConfigurationSchema = z
     changeNote: z.string().trim().max(1000).optional(),
     // Also move in-progress merchants onto the version being published.
     moveExistingMerchants: z.boolean().default(false),
-    startRules: z.array(caseFlowStartRuleInputSchema),
-    closeTriggers: z.array(caseFlowCloseTriggerInputSchema),
-    closeBlockers: z.array(caseFlowCloseBlockerInputSchema),
+    startRules: z.array(caseFlowStartRuleInputSchema).max(500),
+    closeTriggers: z.array(caseFlowCloseTriggerInputSchema).max(500),
+    closeBlockers: z.array(caseFlowCloseBlockerInputSchema).max(500),
     creationRequirements: z
       .array(caseFlowCreationRequirementInputSchema)
+      .max(500)
       .default([]),
   })
   .superRefine((value, ctx) => {

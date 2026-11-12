@@ -11,6 +11,8 @@ import {
   subMerchantDraftTemplates,
 } from '../../db/schema'
 import { AppError } from '../../lib/errors'
+import { cleanUploadFileName } from '../../lib/storage/file-names'
+import { createTrackedUpload } from '../../lib/storage/tracked-upload'
 import { supersedeStorageObjects } from '../../lib/storage/ownership'
 import type { SelectSubMerchantFormInput } from './cases.schemas'
 import {
@@ -188,54 +190,52 @@ export async function uploadSubMerchantFinalForm(
     section: 'Sub-Merchant Final Form',
     storage,
   })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'private',
+    merchantId: caseRow.merchantId,
+    caseId,
   })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    {
+      fileName: cleanUploadFileName(file.name),
+      mimeType: file.type,
+      file,
+    },
+    { role: SUB_MERCHANT_FINAL_FORM_KIND },
+  )
 
   const now = new Date()
-  const [savedFile] = await db.transaction(async (tx) => {
-    await tx
-      .insert(subMerchantFormDetails)
-      .values({
-        caseId,
-        subMerchantKey: details.subMerchantKey,
-        subMerchantName: details.subMerchantName,
-        draftUrl: details.draftUrl,
-        ...notSentEmailFields(),
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: subMerchantFormDetails.caseId,
-        set: {
+  const [savedFile] = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      await tx
+        .insert(subMerchantFormDetails)
+        .values({
+          caseId,
           subMerchantKey: details.subMerchantKey,
           subMerchantName: details.subMerchantName,
           draftUrl: details.draftUrl,
           ...notSentEmailFields(),
           updatedAt: now,
-        },
-      })
+        })
+        .onConflictDoUpdate({
+          target: subMerchantFormDetails.caseId,
+          set: {
+            subMerchantKey: details.subMerchantKey,
+            subMerchantName: details.subMerchantName,
+            draftUrl: details.draftUrl,
+            ...notSentEmailFields(),
+            updatedAt: now,
+          },
+        })
 
-    const [caseFile] = await tx
-      .insert(caseFiles)
-      .values({
-        caseId,
-        fileKind: SUB_MERCHANT_FINAL_FORM_KIND,
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [caseFiles.caseId, caseFiles.fileKind],
-        set: {
-          originalName: file.name,
+      const [caseFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: SUB_MERCHANT_FINAL_FORM_KIND,
+          originalName: cleanUploadFileName(file.name),
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
           googleDriveFileId: uploaded.fileId,
@@ -244,36 +244,51 @@ export async function uploadSubMerchantFinalForm(
           googleDriveFolderId: uploaded.folderId,
           uploadedBy: userId,
           updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: cleanUploadFileName(file.name),
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!caseFile) {
+        throw new AppError(500, 'Failed to save Final Form.')
+      }
+
+      await tx
+        .update(subMerchantFormDetails)
+        .set({
+          finalFormFileId: caseFile.id,
+          ...notSentEmailFields(),
+          updatedAt: now,
+        })
+        .where(eq(subMerchantFormDetails.caseId, caseId))
+
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'sub_merchant_final_form_uploaded',
+        details: {
+          fileName: cleanUploadFileName(file.name),
+          sizeBytes: uploaded.sizeBytes,
+          subMerchantName: details.subMerchantName,
         },
       })
-      .returning()
 
-    if (!caseFile) {
-      throw new AppError(500, 'Failed to save Final Form.')
-    }
-
-    await tx
-      .update(subMerchantFormDetails)
-      .set({
-        finalFormFileId: caseFile.id,
-        ...notSentEmailFields(),
-        updatedAt: now,
-      })
-      .where(eq(subMerchantFormDetails.caseId, caseId))
-
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'sub_merchant_final_form_uploaded',
-      details: {
-        fileName: file.name,
-        sizeBytes: uploaded.sizeBytes,
-        subMerchantName: details.subMerchantName,
-      },
-    })
-
-    return [caseFile]
-  })
+      await attempt.commit(tx)
+      return [caseFile]
+    }),
+  )
 
   if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
     await supersedeStorageObjects([existingFile.googleDriveFileId])
@@ -325,33 +340,31 @@ export async function uploadSubMerchantEmailProof(
     section: 'Email Proofs',
     storage,
   })
-  const uploaded = await storage.uploadFile(folder.folderId, {
-    fileName: file.name,
-    mimeType: file.type,
-    file,
+  const attempt = createTrackedUpload({
+    storage,
+    visibility: 'private',
+    merchantId: caseRow.merchantId,
+    caseId,
   })
+  const uploaded = await attempt.upload(
+    folder.folderId,
+    {
+      fileName: cleanUploadFileName(file.name),
+      mimeType: file.type,
+      file,
+    },
+    { role: SUB_MERCHANT_EMAIL_PROOF_KIND },
+  )
 
   const now = new Date()
-  const [savedFile] = await db.transaction(async (tx) => {
-    const [caseFile] = await tx
-      .insert(caseFiles)
-      .values({
-        caseId,
-        fileKind: SUB_MERCHANT_EMAIL_PROOF_KIND,
-        originalName: file.name,
-        mimeType: uploaded.mimeType,
-        sizeBytes: uploaded.sizeBytes,
-        googleDriveFileId: uploaded.fileId,
-        googleDriveWebViewLink: uploaded.webViewLink,
-        googleDriveDownloadLink: uploaded.downloadLink,
-        googleDriveFolderId: uploaded.folderId,
-        uploadedBy: userId,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [caseFiles.caseId, caseFiles.fileKind],
-        set: {
-          originalName: file.name,
+  const [savedFile] = await attempt.run(() =>
+    db.transaction(async (tx) => {
+      const [caseFile] = await tx
+        .insert(caseFiles)
+        .values({
+          caseId,
+          fileKind: SUB_MERCHANT_EMAIL_PROOF_KIND,
+          originalName: cleanUploadFileName(file.name),
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
           googleDriveFileId: uploaded.fileId,
@@ -360,41 +373,56 @@ export async function uploadSubMerchantEmailProof(
           googleDriveFolderId: uploaded.folderId,
           uploadedBy: userId,
           updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [caseFiles.caseId, caseFiles.fileKind],
+          set: {
+            originalName: cleanUploadFileName(file.name),
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            googleDriveFileId: uploaded.fileId,
+            googleDriveWebViewLink: uploaded.webViewLink,
+            googleDriveDownloadLink: uploaded.downloadLink,
+            googleDriveFolderId: uploaded.folderId,
+            uploadedBy: userId,
+            updatedAt: now,
+          },
+        })
+        .returning()
+
+      if (!caseFile) {
+        throw new AppError(500, 'Failed to save email proof.')
+      }
+
+      await tx
+        .update(subMerchantFormDetails)
+        .set({
+          // A manual copy: no email_log row tracks it.
+          ...sentEmailFields({
+            recipient: 'Manual Gmail',
+            emailLogId: null,
+            sentAt: now,
+          }),
+          updatedAt: now,
+        })
+        .where(eq(subMerchantFormDetails.caseId, caseId))
+
+      await tx.insert(caseHistory).values({
+        caseId,
+        actorId: userId,
+        action: 'sub_merchant_manual_email_proof_uploaded',
+        details: {
+          fileName: cleanUploadFileName(file.name),
+          sizeBytes: uploaded.sizeBytes,
+          subMerchantName: details.subMerchantName,
         },
+        createdAt: now,
       })
-      .returning()
 
-    if (!caseFile) {
-      throw new AppError(500, 'Failed to save email proof.')
-    }
-
-    await tx
-      .update(subMerchantFormDetails)
-      .set({
-        // A manual copy: no email_log row tracks it.
-        ...sentEmailFields({
-          recipient: 'Manual Gmail',
-          emailLogId: null,
-          sentAt: now,
-        }),
-        updatedAt: now,
-      })
-      .where(eq(subMerchantFormDetails.caseId, caseId))
-
-    await tx.insert(caseHistory).values({
-      caseId,
-      actorId: userId,
-      action: 'sub_merchant_manual_email_proof_uploaded',
-      details: {
-        fileName: file.name,
-        sizeBytes: uploaded.sizeBytes,
-        subMerchantName: details.subMerchantName,
-      },
-      createdAt: now,
-    })
-
-    return [caseFile]
-  })
+      await attempt.commit(tx)
+      return [caseFile]
+    }),
+  )
 
   if (existingFile && existingFile.googleDriveFileId !== uploaded.fileId) {
     await supersedeStorageObjects([existingFile.googleDriveFileId])

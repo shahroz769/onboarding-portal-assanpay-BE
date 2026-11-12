@@ -1,5 +1,6 @@
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { csrf } from 'hono/csrf'
 import { rateLimiter } from 'hono-rate-limiter'
 
@@ -70,7 +71,22 @@ authRoutes.use('/login', csrf({ origin: env.CORS_ORIGIN }))
 authRoutes.use('/refresh', csrf({ origin: env.CORS_ORIGIN }))
 authRoutes.use('/logout', csrf({ origin: env.CORS_ORIGIN }))
 
+// Auth bodies are a few short fields. Cap them so an oversized JSON body is
+// refused before it is buffered and parsed (Bun's global cap is sized for
+// public uploads).
+authRoutes.use(
+  '*',
+  bodyLimit({
+    maxSize: 16 * 1024,
+    onError: (c) => c.json({ error: 'Request body is too large.' }, 413),
+  }),
+)
+
 authRoutes.use('/login', authRateLimiter)
+// Failed link lookups and password sets share the failed-attempt budget, so
+// guessing links or flooding the (deliberately slow) hash is capped per IP.
+authRoutes.use('/password-token/*', authRateLimiter)
+authRoutes.use('/set-password', authRateLimiter)
 
 authRoutes.post('/login', zodValidator('json', loginSchema), async (c) => {
   const input = c.req.valid('json')

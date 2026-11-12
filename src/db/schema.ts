@@ -154,6 +154,15 @@ export const users = pgTable(
   },
   (table) => ({
     usersCreatedByIdx: index('users_created_by_idx').on(table.createdByUserId),
+    // Usernames are stored lowercase (login lowercases the identifier); this
+    // also makes "Ali" and "ali" the same name.
+    usersUsernameLowerUnique: uniqueIndex('users_username_lower_unique').on(
+      sql`lower(${table.username})`,
+    ),
+    // Exactly one super admin, whatever writes the row.
+    usersSingleSuperAdmin: uniqueIndex('users_single_super_admin')
+      .on(table.roleType)
+      .where(sql`${table.roleType} = 'super_admin'`),
     usersSessionVersionNonnegative: check(
       'users_session_version_nonnegative',
       sql`${table.sessionVersion} >= 0`,
@@ -1344,10 +1353,13 @@ export const caseResubmissionTokens = pgTable(
     caseId: uuid('case_id')
       .notNull()
       .references(() => cases.id, { onDelete: 'cascade' }),
-    token: varchar('token', { length: 86 }).unique(),
     tokenHash: varchar('token_hash', { length: 64 }).unique(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     consumedReason: resubmissionTokenConsumedReasonEnum('consumed_reason'),
+    // Null while the link is only an email preview; set once it reaches the
+    // merchant (sent, confirmed manually, or regenerated for sharing). Staff
+    // changes revoke only links that were never delivered.
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -1359,10 +1371,11 @@ export const caseResubmissionTokens = pgTable(
     caseResubmissionTokensCreatedByIdx: index(
       'case_resubmission_tokens_created_by_idx',
     ).on(table.createdBy),
-    caseResubmissionTokensOneActivePerCaseIdx: uniqueIndex(
-      'case_resubmission_tokens_one_active_per_case_idx',
+    // At most one active delivered link and one active pending link per case.
+    caseResubmissionTokensOneActivePerCaseKindIdx: uniqueIndex(
+      'case_resubmission_tokens_one_active_per_case_kind_idx',
     )
-      .on(table.caseId)
+      .on(table.caseId, sql`(${table.deliveredAt} is not null)`)
       .where(sql`${table.consumedAt} is null`),
   }),
 )
