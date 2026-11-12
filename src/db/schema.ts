@@ -161,6 +161,29 @@ export const users = pgTable(
   }),
 )
 
+// Sign-in attempt counters in fixed one-hour windows, per trusted device, per
+// account+IP and per account (modules/auth/login-guard.ts). Keys are hashed so
+// identifiers typed at the login form are not stored in clear text.
+export const loginAttemptCounters = pgTable(
+  'login_attempt_counters',
+  {
+    keyHash: text('key_hash').primaryKey(),
+    attempts: integer('attempts').notNull(),
+    windowStartedAt: timestamp('window_started_at', {
+      withTimezone: true,
+    }).notNull(),
+  },
+  (table) => ({
+    loginAttemptCountersWindowIdx: index(
+      'login_attempt_counters_window_idx',
+    ).on(table.windowStartedAt),
+    loginAttemptCountersAttemptsPositive: check(
+      'login_attempt_counters_attempts_positive',
+      sql`${table.attempts} > 0`,
+    ),
+  }),
+)
+
 export const caseStatusEnum = pgEnum('case_status', [
   'new',
   'working',

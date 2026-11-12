@@ -19,6 +19,14 @@ import { hashToken } from '../../lib/security'
 import type { RoleType } from '../../types/auth'
 import { LINK_DEADLINE_HOURS } from '../configuration/configuration.service'
 import {
+  clearAttempts,
+  getAccountAttemptKey,
+  getAttemptBudgets,
+  getTrustedDeviceId,
+  issueDeviceCookie,
+  reserveAttempts,
+} from './login-guard'
+import {
   closedPasswordLinkError,
   consumePasswordTokens,
   getClosedPasswordLinkReason,
@@ -155,34 +163,45 @@ async function issueSession(params: {
 }
 
 /**
- * Rate-limit key for login attempts on one account. Matches the same user
- * lookup as `login`, so the email and the username of an account share one
- * budget; unknown identifiers fall back to the normalized identifier.
+ * Signs in and, when `trustDevice` is set, returns a fresh device cookie for
+ * the browser (null otherwise, which the route uses to drop any old one).
+ * Throttling lives in login-guard.ts.
  */
-export async function getLoginAccountKey(identifier: string) {
-  const user = await getDb().query.users.findFirst({
-    columns: { id: true },
-    where: or(eq(users.email, identifier), eq(users.username, identifier)),
-  })
-
-  return user ? `user:${user.id}` : `account:${identifier.toLowerCase()}`
-}
-
 export async function login(input: {
   identifier: string
   password: string
+  trustDevice: boolean
+  deviceCookie?: string
   userAgent?: string
-  ipAddress?: string
+  ipAddress: string
 }) {
-  const user = await getDb().query.users.findFirst({
-    where: and(
-      or(
-        eq(users.email, input.identifier),
-        eq(users.username, input.identifier),
-      ),
-      eq(users.status, 'active'),
+  // Looked up regardless of status so the email and username of one account
+  // share a budget; an inactive account is still refused like an unknown one.
+  const account = await getDb().query.users.findFirst({
+    where: or(
+      eq(users.email, input.identifier),
+      eq(users.username, input.identifier),
     ),
   })
+  const user = account?.status === 'active' ? account : undefined
+  const accountKey = account?.id ?? input.identifier
+
+  const trustedDeviceId = user
+    ? await getTrustedDeviceId(input.deviceCookie, user)
+    : null
+  const budgets =
+    user && trustedDeviceId
+      ? getAttemptBudgets({
+          trusted: true,
+          userId: user.id,
+          deviceId: trustedDeviceId,
+        })
+      : getAttemptBudgets({
+          trusted: false,
+          account: accountKey,
+          ip: input.ipAddress,
+        })
+  await reserveAttempts(budgets)
 
   // Unknown accounts and accounts without a password get the same error and
   // the same hashing cost as a wrong password, so neither leaks existence.
@@ -195,6 +214,12 @@ export async function login(input: {
     throw new AppError(401, 'Invalid email or password.')
   }
 
+  // The account holder getting in also lifts a pause others caused on it.
+  await clearAttempts([
+    ...budgets.map((budget) => budget.key),
+    getAccountAttemptKey(accountKey),
+  ])
+
   await getDb()
     .update(users)
     .set({
@@ -203,11 +228,22 @@ export async function login(input: {
     })
     .where(eq(users.id, user.id))
 
-  return issueSession({
+  // Re-signed on every trusted sign-in, so the trust window rolls forward.
+  const deviceCookie = input.trustDevice
+    ? await issueDeviceCookie({
+        userId: user.id,
+        sessionVersion: user.sessionVersion,
+        deviceId: trustedDeviceId ?? undefined,
+      })
+    : null
+
+  const session = await issueSession({
     user,
     userAgent: input.userAgent,
     ipAddress: input.ipAddress,
   })
+
+  return { ...session, deviceCookie }
 }
 
 export async function refreshSession(input: {

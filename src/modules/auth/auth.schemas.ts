@@ -50,6 +50,8 @@ export const loginSchema = z
     identifier: z.string().trim().min(2).max(255).optional(),
     email: z.string().trim().min(2).max(255).optional(),
     password: z.string().min(1).max(128),
+    // "Trust this device" on the login form (modules/auth/login-guard.ts).
+    trustDevice: z.boolean().optional(),
   })
   .transform((value, ctx) => {
     const identifier = value.identifier ?? value.email
@@ -67,6 +69,7 @@ export const loginSchema = z
     return {
       identifier: identifier.trim().toLowerCase(),
       password: value.password,
+      trustDevice: value.trustDevice ?? false,
     }
   })
 

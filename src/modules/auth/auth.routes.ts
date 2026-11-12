@@ -13,13 +13,13 @@ import {
   setPasswordSchema,
 } from './auth.schemas'
 import {
-  getLoginAccountKey,
   getPasswordTokenContext,
   login,
   logout,
   refreshSession,
   setPasswordWithToken,
 } from './auth.service'
+import { DEVICE_COOKIE_NAME, getDeviceCookieMaxAgeSeconds } from './login-guard'
 
 const REFRESH_COOKIE_NAME = 'refresh_token'
 const cookieSameSite = {
@@ -51,30 +51,18 @@ const authRateLimiter = rateLimiter({
     c.json({ error: 'Too many attempts. Please try again later.' }, 429),
 })
 
-// Per-account guard against password guessing spread across many IPs. Only
-// failed attempts count, so a user who signs in normally is never limited.
-const loginAccountRateLimiter = rateLimiter({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: false,
-  skipSuccessfulRequests: true,
-  keyGenerator: async (c) => {
-    const body: unknown = await c.req.json().catch(() => null)
-    const account =
-      body && typeof body === 'object'
-        ? ('identifier' in body && body.identifier) ||
-          ('email' in body && body.email)
-        : null
-    return typeof account === 'string' && account.trim()
-      ? getLoginAccountKey(account.trim())
-      : `ip:${getClientIp(c)}`
-  },
-  handler: (c) =>
-    c.json(
-      { error: 'Too many failed sign-in attempts. Please try again later.' },
-      429,
-    ),
-})
+// Per-account and per-device limits need the resolved user and must hold
+// across restarts and instances, so they live in login-guard.ts.
+
+// The device cookie is only ever sent back to the login endpoint. Sign-out
+// keeps it: it marks the browser as trusted, it is not a session.
+function getDeviceCookieOptions() {
+  return {
+    ...getCookieOptions(),
+    path: '/api/auth/login',
+    maxAge: getDeviceCookieMaxAgeSeconds(),
+  }
+}
 
 export const authRoutes = new Hono<AppEnv>()
 
@@ -83,18 +71,29 @@ authRoutes.use('/refresh', csrf({ origin: env.CORS_ORIGIN }))
 authRoutes.use('/logout', csrf({ origin: env.CORS_ORIGIN }))
 
 authRoutes.use('/login', authRateLimiter)
-authRoutes.use('/login', loginAccountRateLimiter)
 
 authRoutes.post('/login', zodValidator('json', loginSchema), async (c) => {
   const input = c.req.valid('json')
   const session = await login({
     ...input,
+    deviceCookie: getCookie(c, DEVICE_COOKIE_NAME),
     userAgent: c.req.header('user-agent'),
     ipAddress: getClientIp(c),
   })
 
   const cookieOptions = getCookieOptions()
   setCookie(c, REFRESH_COOKIE_NAME, session.refreshToken, cookieOptions)
+  if (session.deviceCookie) {
+    setCookie(
+      c,
+      DEVICE_COOKIE_NAME,
+      session.deviceCookie,
+      getDeviceCookieOptions(),
+    )
+  } else {
+    // Unticked "Trust this device": stop trusting this browser.
+    deleteCookie(c, DEVICE_COOKIE_NAME, getDeviceCookieOptions())
+  }
 
   return c.json({
     accessToken: session.accessToken,
