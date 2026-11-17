@@ -838,39 +838,37 @@ export async function getResubmissionContext(
 ): Promise<ResubmissionContext> {
   const db = getDb()
 
-  const [caseRow] = await db
-    .select({
-      caseNumber: cases.caseNumber,
-      merchantId: cases.merchantId,
-    })
-    .from(cases)
-    .where(eq(cases.id, caseId))
-    .limit(1)
+  // The case (with its merchant) and the rejected fields only need the case
+  // id, so they load together; the documents wait for the rejected fields.
+  const [[caseRow], rejectedReviews] = await Promise.all([
+    db
+      .select({ caseNumber: cases.caseNumber, merchant: merchants })
+      .from(cases)
+      .leftJoin(merchants, eq(cases.merchantId, merchants.id))
+      .where(eq(cases.id, caseId))
+      .limit(1),
+    db
+      .select({
+        fieldName: caseFieldReviews.fieldName,
+        remarks: caseFieldReviews.remarks,
+      })
+      .from(caseFieldReviews)
+      .where(
+        and(
+          eq(caseFieldReviews.caseId, caseId),
+          eq(caseFieldReviews.status, 'rejected'),
+        ),
+      ),
+  ])
 
   if (!caseRow) {
     throw new AppError(404, 'Case not found.')
   }
 
-  const merchant = await db.query.merchants.findFirst({
-    where: eq(merchants.id, caseRow.merchantId),
-  })
-
+  const { merchant } = caseRow
   if (!merchant) {
     throw new AppError(404, 'Merchant not found.')
   }
-
-  const rejectedReviews = await db
-    .select({
-      fieldName: caseFieldReviews.fieldName,
-      remarks: caseFieldReviews.remarks,
-    })
-    .from(caseFieldReviews)
-    .where(
-      and(
-        eq(caseFieldReviews.caseId, caseId),
-        eq(caseFieldReviews.status, 'rejected'),
-      ),
-    )
 
   const docIds = rejectedReviews
     .map((r) => getDocumentIdFromFieldName(r.fieldName))
