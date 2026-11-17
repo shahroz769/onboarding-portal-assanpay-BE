@@ -4,6 +4,7 @@ import {
   count,
   desc,
   eq,
+  getTableColumns,
   ilike,
   inArray,
   ne,
@@ -102,25 +103,26 @@ async function hydrateUsers(baseUsers: Array<typeof users.$inferSelect>) {
   if (baseUsers.length === 0) return []
 
   const userIds = baseUsers.map((user) => user.id)
-  const accessRows = await getDb()
-    .select({
-      userId: userQueueAccess.userId,
-      queueId: userQueueAccess.queueId,
-      accessType: userQueueAccess.accessType,
-      queueName: queues.name,
-    })
-    .from(userQueueAccess)
-    .innerJoin(queues, eq(userQueueAccess.queueId, queues.id))
-    .where(inArray(userQueueAccess.userId, userIds))
-
-  const caseCountRows = await getDb()
-    .select({
-      ownerId: cases.ownerId,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(cases)
-    .where(inArray(cases.ownerId, userIds))
-    .groupBy(cases.ownerId)
+  const [accessRows, caseCountRows] = await Promise.all([
+    getDb()
+      .select({
+        userId: userQueueAccess.userId,
+        queueId: userQueueAccess.queueId,
+        accessType: userQueueAccess.accessType,
+        queueName: queues.name,
+      })
+      .from(userQueueAccess)
+      .innerJoin(queues, eq(userQueueAccess.queueId, queues.id))
+      .where(inArray(userQueueAccess.userId, userIds)),
+    getDb()
+      .select({
+        ownerId: cases.ownerId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(cases)
+      .where(inArray(cases.ownerId, userIds))
+      .groupBy(cases.ownerId),
+  ])
 
   const accessByUser = new Map<
     string,
@@ -407,9 +409,10 @@ export async function listUsers(query: ListUsersQuery) {
     : null
 
   // Count the filtered set only on the first page; later pages reuse it.
-  const total = cursor
-    ? null
-    : await getDb()
+  // Runs alongside the page query.
+  const totalPromise = cursor
+    ? Promise.resolve(null)
+    : getDb()
         .select({ value: count() })
         .from(users)
         .where(and(...conditions))
@@ -428,18 +431,22 @@ export async function listUsers(query: ListUsersQuery) {
     )
   }
 
-  const pageKeys = await getDb()
-    .select({
-      id: users.id,
-      cursorValue: keysetCursorExpression(USER_LIST_SORT),
-    })
-    .from(users)
-    .where(and(...conditions))
-    .orderBy(desc(users.createdAt), desc(users.id))
-    .limit(query.limit + 1)
+  // The page's full rows come with their cursor values in one query.
+  const [total, pageResult] = await Promise.all([
+    totalPromise,
+    getDb()
+      .select({
+        user: getTableColumns(users),
+        cursorValue: keysetCursorExpression(USER_LIST_SORT),
+      })
+      .from(users)
+      .where(and(...conditions))
+      .orderBy(desc(users.createdAt), desc(users.id))
+      .limit(query.limit + 1),
+  ])
 
-  const hasMore = pageKeys.length > query.limit
-  const keys = hasMore ? pageKeys.slice(0, query.limit) : pageKeys
+  const hasMore = pageResult.length > query.limit
+  const keys = hasMore ? pageResult.slice(0, query.limit) : pageResult
   const last = keys.at(-1)
   const nextCursor =
     hasMore && last
@@ -447,21 +454,11 @@ export async function listUsers(query: ListUsersQuery) {
           sortBy: USER_LIST_SORT.sortBy,
           sortOrder: USER_LIST_SORT.sortOrder,
           value: last.cursorValue,
-          id: last.id,
+          id: last.user.id,
         })
       : null
 
-  const rows =
-    keys.length > 0
-      ? await getDb().query.users.findMany({
-          where: inArray(
-            users.id,
-            keys.map((key) => key.id),
-          ),
-        })
-      : []
-  const rowById = new Map(rows.map((row) => [row.id, row]))
-  const pageRows = keys.flatMap((key) => rowById.get(key.id) ?? [])
+  const pageRows = keys.map((key) => key.user)
 
   return {
     users: await hydrateUsers(pageRows),

@@ -113,51 +113,53 @@ export async function createCaseComment(
 
 export async function listCaseHistory(caseId: string, actor: SessionUser) {
   const db = getDb()
-  await assertCanViewCase(caseId, actor)
-
-  // Verify case exists
-  const existing = await db.query.cases.findFirst({
-    where: eq(cases.id, caseId),
-    columns: { id: true, merchantId: true },
-  })
-
-  if (!existing) {
-    throw new AppError(404, 'Case not found.')
-  }
-
-  const history = await db
-    .select({
-      id: caseHistory.id,
-      caseId: caseHistory.caseId,
-      actorId: caseHistory.actorId,
-      actorName: users.name,
-      action: caseHistory.action,
-      details: caseHistory.details,
-      createdAt: caseHistory.createdAt,
-    })
-    .from(caseHistory)
-    .leftJoin(users, eq(caseHistory.actorId, users.id))
-    .where(
-      and(
-        eq(caseHistory.caseId, caseId),
-        sql`${caseHistory.action} <> 'comment_added'`,
-      ),
-    )
-    .orderBy(
-      desc(caseHistory.createdAt),
-      sql`case
+  // The access check, the case (with its merchant's WhatsApp number) and the
+  // history are independent lookups, so they run together.
+  const [, existingRows, history] = await Promise.all([
+    assertCanViewCase(caseId, actor),
+    db
+      .select({
+        id: cases.id,
+        activeWhatsappNumber: merchants.activeWhatsappNumber,
+      })
+      .from(cases)
+      .leftJoin(merchants, eq(cases.merchantId, merchants.id))
+      .where(eq(cases.id, caseId))
+      .limit(1),
+    db
+      .select({
+        id: caseHistory.id,
+        caseId: caseHistory.caseId,
+        actorId: caseHistory.actorId,
+        actorName: users.name,
+        action: caseHistory.action,
+        details: caseHistory.details,
+        createdAt: caseHistory.createdAt,
+      })
+      .from(caseHistory)
+      .leftJoin(users, eq(caseHistory.actorId, users.id))
+      .where(
+        and(
+          eq(caseHistory.caseId, caseId),
+          sql`${caseHistory.action} <> 'comment_added'`,
+        ),
+      )
+      .orderBy(
+        desc(caseHistory.createdAt),
+        sql`case
         when ${caseHistory.action} = 'resubmission_email_sent' then 2
         when ${caseHistory.action} = 'rejections_prepared' then 1
         else 0
       end desc`,
-      desc(caseHistory.id),
-    )
+        desc(caseHistory.id),
+      ),
+  ])
 
-  const merchantContact = await db.query.merchants.findFirst({
-    where: eq(merchants.id, existing.merchantId),
-    columns: { activeWhatsappNumber: true },
-  })
-  const activeWhatsappNumber = merchantContact?.activeWhatsappNumber ?? null
+  const existing = existingRows[0]
+  if (!existing) {
+    throw new AppError(404, 'Case not found.')
+  }
+  const activeWhatsappNumber = existing.activeWhatsappNumber ?? null
 
   const sanitizedHistory = history.map((entry) => ({
     ...entry,
@@ -175,21 +177,26 @@ export async function listCaseHistory(caseId: string, actor: SessionUser) {
     return attachEmailDelivery(sanitizedHistory)
   }
 
-  const proofFiles = await db
-    .select({
-      id: caseFiles.id,
-      originalName: caseFiles.originalName,
-      mimeType: caseFiles.mimeType,
-      sizeBytes: caseFiles.sizeBytes,
-      googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
-      googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
-      createdAt: caseFiles.createdAt,
-    })
-    .from(caseFiles)
-    .where(inArray(caseFiles.id, screenshotFileIds))
+  // Email delivery reads only the entries' emailLogId, so it loads alongside
+  // the proof files instead of after them.
+  const [withEmailDelivery, proofFiles] = await Promise.all([
+    attachEmailDelivery(sanitizedHistory),
+    db
+      .select({
+        id: caseFiles.id,
+        originalName: caseFiles.originalName,
+        mimeType: caseFiles.mimeType,
+        sizeBytes: caseFiles.sizeBytes,
+        googleDriveWebViewLink: caseFiles.googleDriveWebViewLink,
+        googleDriveDownloadLink: caseFiles.googleDriveDownloadLink,
+        createdAt: caseFiles.createdAt,
+      })
+      .from(caseFiles)
+      .where(inArray(caseFiles.id, screenshotFileIds)),
+  ])
   const proofFileById = new Map(proofFiles.map((file) => [file.id, file]))
 
-  const withProofFiles = sanitizedHistory.map((entry) => {
+  return withEmailDelivery.map((entry) => {
     const screenshotFileId = getStringDetail(entry.details, 'screenshotFileId')
     const proofFile = screenshotFileId
       ? proofFileById.get(screenshotFileId)
@@ -208,7 +215,6 @@ export async function listCaseHistory(caseId: string, actor: SessionUser) {
       },
     }
   })
-  return attachEmailDelivery(withProofFiles)
 }
 
 /**

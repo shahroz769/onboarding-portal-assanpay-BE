@@ -654,6 +654,16 @@ export const listMerchantsQuerySchema = z.object({
 
 export type ListMerchantsQuery = z.infer<typeof listMerchantsQuerySchema>
 
+// Lean merchant picker results (filters, trigger-case dialog): just enough
+// to label and pick a merchant, without the list page's extra lookups.
+export const merchantOptionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  search: z.string().trim().max(200).optional(),
+  status: z.string().optional(),
+})
+
+export type MerchantOptionsQuery = z.infer<typeof merchantOptionsQuerySchema>
+
 export const updatePrioritySchema = z.object({
   priority: z.enum(priorityValues),
   note: z

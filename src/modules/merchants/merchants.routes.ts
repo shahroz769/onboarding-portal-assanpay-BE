@@ -11,6 +11,7 @@ import {
   bulkPrioritySchema,
   bulkTerminateMerchantsSchema,
   listMerchantsQuerySchema,
+  merchantOptionsQuerySchema,
   merchantLimitsMdrSchema,
   permanentlyDeleteMerchantSchema,
   terminateMerchantSchema,
@@ -26,6 +27,7 @@ import {
   getMerchantHistory,
   getMerchantLimits,
   getMerchantOverview,
+  listMerchantOptions,
   listMerchants,
   permanentlyDeleteMerchant,
   resetMerchantLimitsMdr,
@@ -69,6 +71,17 @@ merchantRoutes.get(
   async (c) => {
     const query = c.req.valid('query')
     const result = await listMerchants(query)
+    return c.json(result)
+  },
+)
+
+// GET /api/merchants/options — Lean merchant picker results (all roles)
+merchantRoutes.get(
+  '/options',
+  zodValidator('query', merchantOptionsQuerySchema),
+  async (c) => {
+    const query = c.req.valid('query')
+    const result = await listMerchantOptions(query)
     return c.json(result)
   },
 )

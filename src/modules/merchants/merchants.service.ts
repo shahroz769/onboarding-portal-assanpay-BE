@@ -66,6 +66,7 @@ import { AGREEMENT_RECEIVED_FILE_KIND } from '../cases/agreement.config'
 import type {
   BusinessScopeValue,
   ListMerchantsQuery,
+  MerchantOptionsQuery,
   MerchantLimitsMdr,
   MerchantDocumentType,
   MerchantFormSubmission,
@@ -579,22 +580,60 @@ const sortColumnMap = {
   },
 } as const
 
+function merchantSearchCondition(search: string) {
+  const term = `%${search}%`
+  const numericSearch = Number(search)
+  const searchConditions = [
+    ilike(merchants.businessName, term),
+    ilike(merchants.submitterEmail, term),
+    ilike(merchants.ownerFullName, term),
+  ]
+  if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
+    searchConditions.push(eq(merchants.merchantNumber, numericSearch))
+  }
+  return or(...searchConditions)
+}
+
+function merchantStatusCondition(status: string) {
+  const statuses = parseCsvValues<MerchantStatusValue>(
+    status,
+    merchantStatusValueSet,
+  )
+  return statuses.length > 0 ? inArray(merchants.status, statuses) : undefined
+}
+
+/** Newest merchants matching the search, for merchant pickers. One query. */
+export async function listMerchantOptions(query: MerchantOptionsQuery) {
+  const conditions = [isNull(merchants.deletedAt)]
+  const searchFilter = query.search
+    ? merchantSearchCondition(query.search)
+    : undefined
+  if (searchFilter) conditions.push(searchFilter)
+  const statusFilter = query.status
+    ? merchantStatusCondition(query.status)
+    : undefined
+  if (statusFilter) conditions.push(statusFilter)
+
+  const rows = await getDb()
+    .select({
+      id: merchants.id,
+      merchantNumber: merchants.merchantNumber,
+      businessName: merchants.businessName,
+    })
+    .from(merchants)
+    .where(and(...conditions))
+    .orderBy(desc(merchants.merchantNumber), desc(merchants.id))
+    .limit(query.limit)
+
+  return { merchants: rows }
+}
+
 export async function listMerchants(query: ListMerchantsQuery) {
   const db = getDb()
   const conditions = [isNull(merchants.deletedAt)]
 
   if (query.search) {
-    const term = `%${query.search}%`
-    const numericSearch = Number(query.search)
-    const searchConditions = [
-      ilike(merchants.businessName, term),
-      ilike(merchants.submitterEmail, term),
-      ilike(merchants.ownerFullName, term),
-    ]
-    if (!Number.isNaN(numericSearch) && Number.isInteger(numericSearch)) {
-      searchConditions.push(eq(merchants.merchantNumber, numericSearch))
-    }
-    const searchFilter = or(...searchConditions)
+    const searchFilter = merchantSearchCondition(query.search)
     if (searchFilter) conditions.push(searchFilter)
   }
 
@@ -609,13 +648,8 @@ export async function listMerchants(query: ListMerchantsQuery) {
   }
 
   if (query.status) {
-    const statuses = parseCsvValues<MerchantStatusValue>(
-      query.status,
-      merchantStatusValueSet,
-    )
-    if (statuses.length > 0) {
-      conditions.push(inArray(merchants.status, statuses))
-    }
+    const statusFilter = merchantStatusCondition(query.status)
+    if (statusFilter) conditions.push(statusFilter)
   }
 
   if (query.currency) {
@@ -651,10 +685,17 @@ export async function listMerchants(query: ListMerchantsQuery) {
     }
   }
 
-  const epQueueIds = await getEpQueueIds()
+  // Needed up front only by the EP status filter; otherwise it loads
+  // alongside the page queries below. (The no-op catch only keeps an early
+  // failure from being reported as unhandled; it is still awaited below.)
+  const epQueueIdsPromise = getEpQueueIds()
+  epQueueIdsPromise.catch(() => {})
 
   if (query.epStatus) {
-    const epStatusFilter = buildEpCaseStatusFilter(query.epStatus, epQueueIds)
+    const epStatusFilter = buildEpCaseStatusFilter(
+      query.epStatus,
+      await epQueueIdsPromise,
+    )
     if (epStatusFilter) conditions.push(epStatusFilter)
   }
 
@@ -669,9 +710,10 @@ export async function listMerchants(query: ListMerchantsQuery) {
     : null
 
   // Count the filtered set only on the first page; later pages reuse it.
-  const total = cursor
-    ? null
-    : await db
+  // Runs alongside the page query.
+  const totalPromise = cursor
+    ? Promise.resolve(null)
+    : db
         .select({ value: count() })
         .from(merchants)
         .where(and(...conditions))
@@ -691,7 +733,7 @@ export async function listMerchants(query: ListMerchantsQuery) {
   }
 
   const where = and(...conditions)
-  const rows = await db
+  const rowsPromise = db
     .select({
       id: merchants.id,
       merchantNumber: merchants.merchantNumber,
@@ -720,6 +762,11 @@ export async function listMerchants(query: ListMerchantsQuery) {
     .where(where)
     .orderBy(orderFn(sortSpec.expression), orderFn(merchants.id))
     .limit(query.limit + 1)
+  const [total, rows, epQueueIds] = await Promise.all([
+    totalPromise,
+    rowsPromise,
+    epQueueIdsPromise,
+  ])
 
   const hasMore = rows.length > query.limit
   const pageRows = hasMore ? rows.slice(0, query.limit) : rows
@@ -1627,10 +1674,8 @@ async function getReceivedAgreement(merchantId: string) {
   return row ?? null
 }
 
-async function getMerchantLimitsBundle(merchant: {
-  id: string
-  limitsMdrOverride: unknown
-}) {
+/** The settings a merchant's limits are built from; needs only its id. */
+async function loadMerchantLimitsInputs(merchantId: string) {
   const [
     globalLimitsAndMdr,
     globalPaymentMethods,
@@ -1640,8 +1685,25 @@ async function getMerchantLimitsBundle(merchant: {
     getLimitsAndMdrSettings(),
     getPaymentMethodSettings(),
     getPayoutMethodSettings(),
-    getLatestMidCreationMethods(merchant.id),
+    getLatestMidCreationMethods(merchantId),
   ])
+  return {
+    globalLimitsAndMdr,
+    globalPaymentMethods,
+    globalPayoutMethods,
+    savedMethods,
+  }
+}
+
+function buildMerchantLimitsBundle(
+  merchant: { limitsMdrOverride: unknown },
+  {
+    globalLimitsAndMdr,
+    globalPaymentMethods,
+    globalPayoutMethods,
+    savedMethods,
+  }: Awaited<ReturnType<typeof loadMerchantLimitsInputs>>,
+) {
   const override = resolveLimitsMdrOverride(merchant.limitsMdrOverride)
 
   return {
@@ -1730,13 +1792,17 @@ export async function getMerchantHeader(merchantId: string) {
   }
 }
 
+// The merchant tabs look the merchant up alongside the rest of their
+// queries (all keyed by id); a missing merchant still answers 404.
 export async function getMerchantOverview(merchantId: string) {
-  const merchant = await requireMerchant(merchantId)
-  const [merchantCases, testStartedAt, limitsBundle] = await Promise.all([
-    listMerchantCases(merchantId),
-    getTestStartedAt(merchantId),
-    getMerchantLimitsBundle(merchant),
-  ])
+  const [merchant, merchantCases, testStartedAt, limitsInputs] =
+    await Promise.all([
+      requireMerchant(merchantId),
+      listMerchantCases(merchantId),
+      getTestStartedAt(merchantId),
+      loadMerchantLimitsInputs(merchantId),
+    ])
+  const limitsBundle = buildMerchantLimitsBundle(merchant, limitsInputs)
   const casesWithSla = withCaseSla(merchantCases)
   const openCases = casesWithSla.filter((caseRow) =>
     isMerchantCaseOpen(caseRow.status, caseRow.stageCategory),
@@ -1772,20 +1838,21 @@ export async function getMerchantOverview(merchantId: string) {
 }
 
 export async function getMerchantForm(merchantId: string) {
-  const merchant = await requireMerchant(merchantId)
-  const [documents, receivedAgreement, caseOutcomes] = await Promise.all([
-    getMerchantDocuments(merchantId),
-    getReceivedAgreement(merchantId),
-    getDb()
-      .select({
-        queueName: queues.name,
-        status: cases.status,
-        closeOutcome: cases.closeOutcome,
-      })
-      .from(cases)
-      .innerJoin(queues, eq(cases.queueId, queues.id))
-      .where(eq(cases.merchantId, merchantId)),
-  ])
+  const [merchant, documents, receivedAgreement, caseOutcomes] =
+    await Promise.all([
+      requireMerchant(merchantId),
+      getMerchantDocuments(merchantId),
+      getReceivedAgreement(merchantId),
+      getDb()
+        .select({
+          queueName: queues.name,
+          status: cases.status,
+          closeOutcome: cases.closeOutcome,
+        })
+        .from(cases)
+        .innerJoin(queues, eq(cases.queueId, queues.id))
+        .where(eq(cases.merchantId, merchantId)),
+    ])
 
   return {
     merchant: toFormMerchant(merchant),
@@ -1798,8 +1865,11 @@ export async function getMerchantForm(merchantId: string) {
 }
 
 export async function getMerchantLimits(merchantId: string) {
-  const merchant = await requireMerchant(merchantId)
-  const limitsBundle = await getMerchantLimitsBundle(merchant)
+  const [merchant, limitsInputs] = await Promise.all([
+    requireMerchant(merchantId),
+    loadMerchantLimitsInputs(merchantId),
+  ])
+  const limitsBundle = buildMerchantLimitsBundle(merchant, limitsInputs)
 
   return {
     merchant: {
@@ -1814,8 +1884,8 @@ export async function getMerchantLimits(merchantId: string) {
 }
 
 export async function getMerchantHistory(merchantId: string) {
-  const merchant = await requireMerchant(merchantId)
-  const [merchantCases, timeline, testStartedAt] = await Promise.all([
+  const [merchant, merchantCases, timeline, testStartedAt] = await Promise.all([
+    requireMerchant(merchantId),
     listMerchantCases(merchantId),
     listMerchantTimeline(merchantId),
     getTestStartedAt(merchantId),

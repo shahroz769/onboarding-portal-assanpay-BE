@@ -452,10 +452,11 @@ export async function listEpMerchants(
   query: ListEpMerchantsQuery,
   actor: SessionUser,
 ) {
-  await assertCanManageEpCases(actor)
-
   const db = getDb()
-  const queueIds = await getWorkflowQueueIds()
+  const [, queueIds] = await Promise.all([
+    assertCanManageEpCases(actor),
+    getWorkflowQueueIds(),
+  ])
   const conditions: (SQL | undefined)[] = [
     isNull(merchants.deletedAt),
     ne(merchants.status, 'terminated'),
@@ -523,9 +524,10 @@ export async function listEpMerchants(
     : null
 
   // Count the filtered set only on the first page; later pages reuse it.
-  const total = cursor
-    ? null
-    : await db
+  // Runs alongside the page query.
+  const totalPromise = cursor
+    ? Promise.resolve(null)
+    : db
         .select({ value: count() })
         .from(merchants)
         .where(and(...conditions))
@@ -544,21 +546,24 @@ export async function listEpMerchants(
     )
   }
 
-  const rows = await db
-    .select({
-      id: merchants.id,
-      merchantNumber: merchants.merchantNumber,
-      businessName: merchants.businessName,
-      ownerFullName: merchants.ownerFullName,
-      status: merchants.status,
-      createdAt: merchants.createdAt,
-      updatedAt: merchants.updatedAt,
-      cursorValue: keysetCursorExpression(sortSpec),
-    })
-    .from(merchants)
-    .where(and(...conditions))
-    .orderBy(orderFn(sortSpec.expression), orderFn(merchants.id))
-    .limit(query.limit + 1)
+  const [total, rows] = await Promise.all([
+    totalPromise,
+    db
+      .select({
+        id: merchants.id,
+        merchantNumber: merchants.merchantNumber,
+        businessName: merchants.businessName,
+        ownerFullName: merchants.ownerFullName,
+        status: merchants.status,
+        createdAt: merchants.createdAt,
+        updatedAt: merchants.updatedAt,
+        cursorValue: keysetCursorExpression(sortSpec),
+      })
+      .from(merchants)
+      .where(and(...conditions))
+      .orderBy(orderFn(sortSpec.expression), orderFn(merchants.id))
+      .limit(query.limit + 1),
+  ])
 
   const hasMore = rows.length > query.limit
   const pageRows = hasMore ? rows.slice(0, query.limit) : rows

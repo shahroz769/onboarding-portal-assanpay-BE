@@ -170,35 +170,35 @@ function activeCloseTriggerKeys(rules: FlowRules) {
 async function buildPreview(
   tx: DbTransaction,
   input: {
-    targetRules: FlowRules
+    /** May still be loading: it is read alongside the queries below. */
+    targetRules: FlowRules | Promise<FlowRules>
     targetVersionId: number | null
     revision: number
   },
 ) {
-  const queueRows = await tx
-    .select({ id: queues.id, name: queues.name })
-    .from(queues)
+  const [targetRules, queueRows, eligible, [staying]] = await Promise.all([
+    input.targetRules,
+    tx.select({ id: queues.id, name: queues.name }).from(queues),
+    tx
+      .select({ id: merchants.id, flowVersionId: merchants.flowVersionId })
+      .from(merchants)
+      .where(eligibleMerchantsWhere(input.targetVersionId)),
+    tx
+      .select({ count: sql<number>`count(*)` })
+      .from(merchants)
+      .where(
+        and(
+          sql`${merchants.deletedAt} is null`,
+          input.targetVersionId === null
+            ? undefined
+            : ne(merchants.flowVersionId, input.targetVersionId),
+          sql`not (${eligibleMerchantsWhere(null)})`,
+        ),
+      ),
+  ])
   const queueName = new Map(queueRows.map((queue) => [queue.id, queue.name]))
   const nameOf = (id: string | null) =>
     id === null ? null : (queueName.get(id) ?? 'Unknown queue')
-
-  const eligible = await tx
-    .select({ id: merchants.id, flowVersionId: merchants.flowVersionId })
-    .from(merchants)
-    .where(eligibleMerchantsWhere(input.targetVersionId))
-
-  const [staying] = await tx
-    .select({ count: sql<number>`count(*)` })
-    .from(merchants)
-    .where(
-      and(
-        sql`${merchants.deletedAt} is null`,
-        input.targetVersionId === null
-          ? undefined
-          : ne(merchants.flowVersionId, input.targetVersionId),
-        sql`not (${eligibleMerchantsWhere(null)})`,
-      ),
-    )
 
   const countByVersion = new Map<number, number>()
   for (const merchant of eligible) {
@@ -208,9 +208,15 @@ async function buildPreview(
     )
   }
 
-  const targetRefs = activeRuleRefs(input.targetRules)
+  const targetRefs = activeRuleRefs(targetRules)
   const targetKeys = new Set(targetRefs.map(ruleKey))
-  const sourceVersions = await Promise.all(
+  const merchantIds = eligible.map((merchant) => merchant.id)
+  const reachable = reachableQueueIds(targetRules)
+  const triggerKeys = activeCloseTriggerKeys(targetRules)
+
+  // Each source version's rules, the open cases and the open jobs all depend
+  // only on the eligible merchants, so they are read in one step.
+  const sourceVersionsPromise = Promise.all(
     [...countByVersion.entries()]
       .sort(([a], [b]) => a - b)
       .map(async ([versionId, merchantCount]) => {
@@ -237,12 +243,8 @@ async function buildPreview(
       }),
   )
 
-  const merchantIds = eligible.map((merchant) => merchant.id)
-  const reachable = reachableQueueIds(input.targetRules)
-  const triggerKeys = activeCloseTriggerKeys(input.targetRules)
-
-  const openCases = merchantIds.length
-    ? await tx
+  const openCasesPromise = merchantIds.length
+    ? tx
         .select({
           queueId: cases.queueId,
           count: sql<number>`count(*)`,
@@ -255,10 +257,10 @@ async function buildPreview(
           ),
         )
         .groupBy(cases.queueId)
-    : []
+    : Promise.resolve([])
 
-  const openJobs = merchantIds.length
-    ? await tx
+  const openJobsPromise = merchantIds.length
+    ? tx
         .select({
           sourceQueueId: caseFlowCloseJobs.sourceQueueId,
           targetQueueId: caseFlowCloseJobs.targetQueueId,
@@ -275,7 +277,13 @@ async function buildPreview(
           caseFlowCloseJobs.sourceQueueId,
           caseFlowCloseJobs.targetQueueId,
         )
-    : []
+    : Promise.resolve([])
+
+  const [sourceVersions, openCases, openJobs] = await Promise.all([
+    sourceVersionsPromise,
+    openCasesPromise,
+    openJobsPromise,
+  ])
 
   return {
     targetVersionId: input.targetVersionId,
@@ -318,7 +326,7 @@ export async function previewMoveToActiveVersion() {
   return getDb().transaction(async (tx) => {
     const current = await readActiveRevision(tx)
     return buildPreview(tx, {
-      targetRules: await readVersionRules(tx, current.activeFlowVersionId),
+      targetRules: readVersionRules(tx, current.activeFlowVersionId),
       targetVersionId: current.activeFlowVersionId,
       revision: current.revision,
     })

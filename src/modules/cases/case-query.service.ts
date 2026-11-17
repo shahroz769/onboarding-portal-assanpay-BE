@@ -574,55 +574,62 @@ export async function listCaseOwners() {
 
 export async function getCaseDetail(caseId: string, actor?: SessionUser) {
   const db = getDb()
-  await assertCanViewCase(caseId, actor)
-  // Opening a case as someone who can only view it changes nothing: the
-  // repairs below and the Resend status check run only for staff who can
-  // work the case.
-  const canWork =
-    !actor ||
-    (await assertCanWorkCase(caseId, actor.userId).then(
-      () => true,
-      () => false,
-    ))
+  // The access checks, the case and its queue are independent lookups, so
+  // they run together. Opening a case as someone who can only view it
+  // changes nothing: the repairs below and the Resend status check run only
+  // for staff who can work the case.
+  const [, canWork, caseRow, caseQueue] = await Promise.all([
+    assertCanViewCase(caseId, actor),
+    !actor
+      ? Promise.resolve(true)
+      : assertCanWorkCase(caseId, actor.userId).then(
+          () => true,
+          () => false,
+        ),
+    db
+      .select({
+        id: cases.id,
+        caseNumber: cases.caseNumber,
+        queueId: cases.queueId,
+        merchantId: cases.merchantId,
+        ownerId: cases.ownerId,
+        ownerName: users.name,
+        currentStageId: cases.currentStageId,
+        status: cases.status,
+        priority: cases.priority,
+        closeOutcome: cases.closeOutcome,
+        slaBreached: cases.slaBreached,
+        closeReason: cases.closeReason,
+        closedAt: cases.closedAt,
+        createdAt: cases.createdAt,
+        updatedAt: cases.updatedAt,
+      })
+      .from(cases)
+      .leftJoin(users, eq(cases.ownerId, users.id))
+      .where(eq(cases.id, caseId))
+      .limit(1),
+    db.query.queues.findFirst({
+      where: inArray(
+        queues.id,
+        db
+          .select({ queueId: cases.queueId })
+          .from(cases)
+          .where(eq(cases.id, caseId)),
+      ),
+    }),
+  ])
   // Asks Resend about an email stuck waiting for its webhook; runs alongside
   // the queries below and is awaited before emailDelivery is read.
   const staleDeliveryCheck = canWork
     ? refreshStaleCaseEmailDelivery(caseId)
     : Promise.resolve()
 
-  // Get case with joins
-  const caseRow = await db
-    .select({
-      id: cases.id,
-      caseNumber: cases.caseNumber,
-      queueId: cases.queueId,
-      merchantId: cases.merchantId,
-      ownerId: cases.ownerId,
-      ownerName: users.name,
-      currentStageId: cases.currentStageId,
-      status: cases.status,
-      priority: cases.priority,
-      closeOutcome: cases.closeOutcome,
-      slaBreached: cases.slaBreached,
-      closeReason: cases.closeReason,
-      closedAt: cases.closedAt,
-      createdAt: cases.createdAt,
-      updatedAt: cases.updatedAt,
-    })
-    .from(cases)
-    .leftJoin(users, eq(cases.ownerId, users.id))
-    .where(eq(cases.id, caseId))
-    .limit(1)
-
   if (!caseRow[0]) {
     throw new AppError(404, 'Case not found.')
   }
 
   const caseData = caseRow[0]
-
-  const queue = await db.query.queues.findFirst({
-    where: eq(queues.id, caseData.queueId),
-  })
+  const queue = caseQueue
 
   if (!queue) {
     throw new AppError(500, 'Case data integrity error.')

@@ -173,15 +173,17 @@ async function readPaymentMethodSetting(
   key: string,
   legacyMode: 'collection' | 'disbursement',
 ) {
-  let isLegacyCombinedFallback = false
-  let row = await getDb().query.configurationSettings.findFirst({
-    where: eq(configurationSettings.key, key),
+  // Payouts fall back to the legacy combined payment-methods row, so both
+  // are read together rather than one after the other.
+  const keys = key === PAYOUT_METHODS_KEY ? [key, PAYMENT_METHODS_KEY] : [key]
+  const rows = await getDb().query.configurationSettings.findMany({
+    where: inArray(configurationSettings.key, keys),
   })
+  let row = rows.find((candidate) => candidate.key === key)
+  let isLegacyCombinedFallback = false
 
   if (!row && key === PAYOUT_METHODS_KEY) {
-    row = await getDb().query.configurationSettings.findFirst({
-      where: eq(configurationSettings.key, PAYMENT_METHODS_KEY),
-    })
+    row = rows.find((candidate) => candidate.key === PAYMENT_METHODS_KEY)
     isLegacyCombinedFallback = Boolean(row)
   }
 
@@ -683,31 +685,33 @@ async function readCaseFlowConfiguration(
   if (!current)
     throw new AppError(409, 'Case flow versioning is not initialized.')
   const selectedVersionId = versionId ?? current.activeFlowVersionId
-  const version = await tx.query.caseFlowVersions.findFirst({
-    where: and(
-      eq(caseFlowVersions.id, selectedVersionId),
-      isNotNull(caseFlowVersions.publishedAt),
-    ),
-  })
-  if (!version) throw new AppError(404, 'Published flow version not found.')
-  const versions = await tx
-    .select({
-      id: caseFlowVersions.id,
-      publishedAt: caseFlowVersions.publishedAt,
-      publishedBy: caseFlowVersions.publishedBy,
-      changeNote: caseFlowVersions.changeNote,
-    })
-    .from(caseFlowVersions)
-    .where(isNotNull(caseFlowVersions.publishedAt))
-    .orderBy(asc(caseFlowVersions.id))
-
+  // Everything else depends only on the selected version id, so it is read
+  // in one step; a version that isn't published still answers 404.
   const [
+    version,
+    versions,
     queueRows,
     startRules,
     closeTriggers,
     closeBlockers,
     creationRequirements,
   ] = await Promise.all([
+    tx.query.caseFlowVersions.findFirst({
+      where: and(
+        eq(caseFlowVersions.id, selectedVersionId),
+        isNotNull(caseFlowVersions.publishedAt),
+      ),
+    }),
+    tx
+      .select({
+        id: caseFlowVersions.id,
+        publishedAt: caseFlowVersions.publishedAt,
+        publishedBy: caseFlowVersions.publishedBy,
+        changeNote: caseFlowVersions.changeNote,
+      })
+      .from(caseFlowVersions)
+      .where(isNotNull(caseFlowVersions.publishedAt))
+      .orderBy(asc(caseFlowVersions.id)),
     tx
       .select({
         id: queues.id,
@@ -775,6 +779,7 @@ async function readCaseFlowConfiguration(
         asc(caseFlowCreationRequirements.createdAt),
       ),
   ])
+  if (!version) throw new AppError(404, 'Published flow version not found.')
 
   return {
     revision: current.revision,
