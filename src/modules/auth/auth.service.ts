@@ -31,7 +31,7 @@ import {
   consumePasswordTokens,
   getClosedPasswordLinkReason,
 } from './password-token-state'
-import { revokeRefreshTokens, rotateRefreshToken } from './refresh-token-state'
+import { revokeRefreshTokens } from './refresh-token-state'
 
 const roleCreationRules: Record<RoleType, RoleType[]> = {
   super_admin: ['admin', 'agent'],
@@ -97,18 +97,43 @@ async function getSessionWorkAccess(
       ),
     )
 
+  return toSessionWorkAccess(user.roleType, rows)
+}
+
+type SessionWorkAccess = {
+  workQueueIds: string[]
+  canManageEpCases: boolean
+}
+
+function toSessionWorkAccess(
+  roleType: RoleType,
+  rows: Array<{ queueId: string; workflowType: string }>,
+): SessionWorkAccess {
   return {
     workQueueIds: rows.map((row) => row.queueId),
     canManageEpCases:
-      user.roleType !== 'agent' ||
+      roleType !== 'agent' ||
       rows.some((row) => row.workflowType === 'sub_merchant_form'),
   }
 }
 
-function sanitizeUser(
-  user: typeof users.$inferSelect,
-  workAccess?: Awaited<ReturnType<typeof getSessionWorkAccess>>,
-) {
+type SanitizableUser = Pick<
+  typeof users.$inferSelect,
+  | 'id'
+  | 'name'
+  | 'email'
+  | 'username'
+  | 'gender'
+  | 'roleType'
+  | 'status'
+  | 'queueViewScope'
+  | 'createdByUserId'
+  | 'lastLoginAt'
+  | 'createdAt'
+  | 'updatedAt'
+>
+
+function sanitizeUser(user: SanitizableUser, workAccess?: SessionWorkAccess) {
   return {
     id: user.id,
     name: user.name,
@@ -259,8 +284,132 @@ export async function refreshSession(input: {
 
   const hashedToken = await hashToken(input.refreshToken)
 
-  // Looked up outside the rotation transaction: the reuse response below must
-  // commit even though the request itself fails with 401.
+  const nextSessionId = crypto.randomUUID()
+  const nextRefreshToken = await signRefreshToken({
+    sub: payload.userId,
+    sessionId: nextSessionId,
+  })
+  const nextRefreshTokenHash = await hashToken(nextRefreshToken)
+  // Raw SQL parameters are sent untyped, so timestamps travel as ISO strings
+  // and are cast in the statement.
+  const now = new Date().toISOString()
+  const nextExpiresAt = getRefreshTokenExpiresAt().toISOString()
+
+  // One statement, so one database round trip, and atomic on its own: retire
+  // the presented token, store its replacement, and read back the user with
+  // their work access. Only an active, unexpired token of an active user
+  // rotates, so of two concurrent refreshes with the same token only one wins.
+  // A replacement row inserted by the same statement satisfies the
+  // replaced_by_token_id reference, which Postgres checks at statement end.
+  const [rotated] = Array.from(
+    await getDb().execute(sql<RotatedSessionRawRow>`
+    with rotated as (
+      update refresh_tokens
+         set status = 'rotated',
+             revoked_at = ${now}::timestamptz,
+             replaced_by_token_id = ${nextSessionId}::uuid
+       where id = ${payload.sessionId}::uuid
+         and user_id = ${payload.userId}::uuid
+         and token_hash = ${hashedToken}
+         and status = 'active'
+         and expires_at > ${now}::timestamptz
+         and exists (
+           select 1 from users
+            where users.id = ${payload.userId}::uuid
+              and users.status = 'active'
+         )
+      returning user_id
+    ),
+    inserted as (
+      insert into refresh_tokens
+        (id, user_id, token_hash, expires_at, user_agent, ip_address)
+      select ${nextSessionId}::uuid, rotated.user_id, ${nextRefreshTokenHash},
+             ${nextExpiresAt}::timestamptz,
+             ${input.userAgent ?? null}::text, ${input.ipAddress ?? null}::text
+        from rotated
+    )
+    select u.id, u.name, u.email, u.username, u.gender,
+           u.role_type as "roleType",
+           u.status,
+           u.queue_view_scope as "queueViewScope",
+           u.session_version as "sessionVersion",
+           u.created_by_user_id as "createdByUserId",
+           u.last_login_at as "lastLoginAt",
+           u.created_at as "createdAt",
+           u.updated_at as "updatedAt",
+           coalesce(
+             (select json_agg(json_build_object(
+                       'queueId', a.queue_id,
+                       'workflowType', q.workflow_type))
+                from user_queue_access a
+                join queues q on q.id = a.queue_id
+               where a.user_id = u.id and a.access_type = 'work'),
+             '[]'::json
+           ) as "workAccess"
+      from users u
+      join rotated on rotated.user_id = u.id
+  `),
+  ) as RotatedSessionRawRow[]
+
+  if (!rotated) {
+    return explainFailedRefresh({ payload, hashedToken, input })
+  }
+
+  const user: RotatedSessionRow = {
+    ...rotated,
+    lastLoginAt: toDateOrNull(rotated.lastLoginAt),
+    createdAt: new Date(rotated.createdAt),
+    updatedAt: new Date(rotated.updatedAt),
+  }
+
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    email: user.email,
+    roleType: user.roleType,
+    sessionVersion: user.sessionVersion,
+  })
+
+  return {
+    accessToken,
+    refreshToken: nextRefreshToken,
+    user: sanitizeUser(
+      user,
+      toSessionWorkAccess(user.roleType, user.workAccess),
+    ),
+  }
+}
+
+type RotatedSessionRow = SanitizableUser & {
+  sessionVersion: number
+  workAccess: Array<{ queueId: string; workflowType: string }>
+}
+
+// Raw rows bypass Drizzle's column mapping, so timestamps are normalized here.
+type RotatedSessionRawRow = Omit<
+  RotatedSessionRow,
+  'lastLoginAt' | 'createdAt' | 'updatedAt'
+> & {
+  lastLoginAt: Date | string | null
+  createdAt: Date | string
+  updatedAt: Date | string
+}
+
+function toDateOrNull(value: Date | string | null) {
+  return value === null ? null : new Date(value)
+}
+
+/**
+ * Slow path, run only when the presented token did not rotate: works out why
+ * and answers the way the refresh always has. Outside any transaction, so the
+ * reuse response (revoking every session) commits even though the request
+ * fails with 401.
+ */
+async function explainFailedRefresh(params: {
+  payload: { userId: string; sessionId: string }
+  hashedToken: string
+  input: { userAgent?: string; ipAddress?: string }
+}): Promise<never> {
+  const { payload, hashedToken, input } = params
   const presentedToken = await getDb().query.refreshTokens.findFirst({
     columns: { status: true, revokedAt: true, expiresAt: true },
     where: and(
@@ -303,60 +452,18 @@ export async function refreshSession(input: {
     throw new AppError(401, 'Refresh token is expired or revoked.')
   }
 
-  const nextSessionId = crypto.randomUUID()
-  const nextRefreshToken = await signRefreshToken({
-    sub: payload.userId,
-    sessionId: nextSessionId,
+  // The token is still valid, so either the account is no longer active or a
+  // concurrent refresh rotated the token first.
+  const activeUser = await getDb().query.users.findFirst({
+    columns: { id: true },
+    where: and(eq(users.id, payload.userId), eq(users.status, 'active')),
   })
-  const nextRefreshTokenHash = await hashToken(nextRefreshToken)
 
-  return getDb().transaction(async (tx) => {
-    const user = await tx.query.users.findFirst({
-      where: and(eq(users.id, payload.userId), eq(users.status, 'active')),
-    })
+  if (!activeUser) {
+    throw new AppError(401, 'User is not available.')
+  }
 
-    if (!user) {
-      throw new AppError(401, 'User is not available.')
-    }
-
-    await tx.insert(refreshTokens).values({
-      id: nextSessionId,
-      userId: user.id,
-      tokenHash: nextRefreshTokenHash,
-      expiresAt: getRefreshTokenExpiresAt(),
-      userAgent: input.userAgent,
-      ipAddress: input.ipAddress,
-    })
-
-    // Only an active token rotates: of two concurrent refreshes with the
-    // same token, only one wins.
-    const [rotatedToken] = await rotateRefreshToken(tx, {
-      where: and(
-        eq(refreshTokens.id, payload.sessionId),
-        eq(refreshTokens.userId, payload.userId),
-        eq(refreshTokens.tokenHash, hashedToken),
-        gt(refreshTokens.expiresAt, new Date()),
-      )!,
-      replacedByTokenId: nextSessionId,
-    })
-
-    if (!rotatedToken) {
-      throw new AppError(401, 'Refresh token is expired or revoked.')
-    }
-
-    const accessToken = await signAccessToken({
-      sub: user.id,
-      email: user.email,
-      roleType: user.roleType,
-      sessionVersion: user.sessionVersion,
-    })
-
-    return {
-      accessToken,
-      refreshToken: nextRefreshToken,
-      user: sanitizeUser(user, await getSessionWorkAccess(user, tx)),
-    }
-  })
+  throw new AppError(401, 'Refresh token is expired or revoked.')
 }
 
 export async function logout(refreshToken: string) {
